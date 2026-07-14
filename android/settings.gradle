@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == 'com.facebook.react') {
+                useModule('com.facebook.react:react-native-gradle-plugin')
+            }
+        }
+    }
+}
+
+includeBuild('../node_modules/@react-native/gradle-plugin')
+
+rootProject.name = 'KycMobile'
+apply from: file("../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
+applyNativeModulesSettingsGradle(settings)
+include ':app'

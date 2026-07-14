@@ -1,0 +1,79 @@
+apply plugin: "com.android.application"
+apply plugin: "com.google.gms.google-services"
+apply plugin: "com.facebook.react"
+
+// Must be AFTER com.android.application
+apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
+applyNativeModulesAppBuildGradle(project)
+
+project.ext.hermesEnabled = true
+
+android {
+    compileSdkVersion rootProject.ext.compileSdkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+
+    namespace "com.kycmobile"
+
+    defaultConfig {
+        applicationId "com.kycmobile"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        multiDexEnabled true
+        versionCode 1
+        versionName "1.0.0"
+        
+        missingDimensionStrategy 'react-native-firebase', 'release'
+        missingDimensionStrategy 'react-native-camera', 'general'
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        release {
+            storeFile file('release.keystore')
+            storePassword 'kycmobile123'
+            keyAlias 'kyc-key'
+            keyPassword 'kycmobile123'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    packagingOptions {
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core:1.12.0'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.multidex:multidex:2.0.1'
+
+    // Firebase
+    implementation platform('com.google.firebase:firebase-bom:32.7.0')
+    implementation 'com.google.firebase:firebase-messaging'
+    implementation 'com.google.firebase:firebase-analytics'
+
+    // React Native runtime — DOIT etre en "implementation" (pas compileOnly,
+    // qui exclurait ces classes de l'APK final et casserait TOUT au runtime).
+    // Sans version explicite : resolu via le plugin "com.facebook.react"
+    // applique en haut de ce fichier (ligne 3), qui lit la version depuis
+    // node_modules/react-native/package.json.
+    implementation 'com.facebook.react:react-android'
+    implementation 'com.facebook.react:hermes-android'
+}

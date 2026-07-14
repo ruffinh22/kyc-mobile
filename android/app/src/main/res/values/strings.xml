@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KYC Congo</string>
+    <string name="call_notification_title">Appel vidéo KYC</string>
+    <string name="call_notification_incoming">Appel entrant</string>
+</resources>

@@ -1,0 +1,95 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+yarn.lock
+package-lock.json
+
+# Build outputs (large files)
+build/
+dist/
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/
+android/gradle/
+ios/Pods/
+ios/build/
+ios/Podfile.lock
+ios/DerivedData/
+
+# Compiled artifacts
+*.apk
+*.aab
+*.aar
+*.bundle
+*.dex
+*.o
+*.so
+
+# Java/JVM heap dumps and profiling (can be 500+ MB)
+*.hprof
+java_pid*.hprof
+*.trace
+*.prof
+
+# Metro and build cache
+.haste_cache/
+metro-cache/
+.metro-health-check-result.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+*.sublime-project
+*.sublime-workspace
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# Logs and temp files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+*.tmp
+*.swp
+*.swo
+*~
+*.hprof
+java_pid*.hprof
+*.trace
+*.zip
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+android/local.properties
+android/app/debug.keystore
+android/app/google-services.json
+ios/GoogleService-Info.plist
+
+# User uploads / sensitive data
+kyc-modern/backend/uploads/
+uploads/
+tmp/
+temp/
+
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+.metro-health-check-result.json

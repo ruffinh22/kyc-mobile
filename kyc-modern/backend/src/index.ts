@@ -1,0 +1,103 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import Fastify from 'fastify';
+import cors       from '@fastify/cors';
+
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+import helmet     from '@fastify/helmet';
+import cookie     from '@fastify/cookie';
+import multipart  from '@fastify/multipart';
+import rateLimit  from '@fastify/rate-limit';
+import staticPlugin from '@fastify/static';
+import websocket  from '@fastify/websocket';
+
+import { initDb, getDistributionMode, getOldestPendingDossier, getOldestAvailableAgent, updateDossier, audit } from './db';
+import { registerRoutes } from './routes';
+
+const PORT     = parseInt(process.env.PORT || '3001', 10);
+const HOST     = process.env.HOST || '0.0.0.0';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+const app = Fastify({
+  logger: {
+    level: NODE_ENV === 'production' ? 'info' : 'debug',
+    transport: NODE_ENV !== 'production'
+      ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } }
+      : undefined,
+  },
+  trustProxy: true,
+  bodyLimit: 10 * 1024 * 1024,
+});
+
+async function main(): Promise<void> {
+  await initDb();
+
+  await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
+  await app.register(cors, {
+    origin: NODE_ENV === 'production' ? (process.env.CORS_ORIGIN || false) : true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
+  await app.register(cookie, { secret: process.env.JWT_SECRET || 'kyc-cookie' });
+  await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 5 } });
+  await app.register(rateLimit, {
+    global: true, max: 300, timeWindow: '1 minute',
+    keyGenerator: req => req.headers['x-forwarded-for']?.toString() || req.ip || 'unknown',
+  });
+  await app.register(websocket);
+
+  // Fichiers statiques (photos CNI/GSM via /uploads/*)
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  try {
+    await app.register(staticPlugin, { root: uploadsDir, prefix: '/uploads/', decorateReply: false });
+  } catch { app.log.warn('[STATIC] uploads dir non trouvé, ignoré'); }
+
+  await registerRoutes(app);
+
+  app.setErrorHandler((error: import('fastify').FastifyError, _req, reply) => {
+    app.log.error(error);
+    const code = error.statusCode ?? 500;
+    reply.code(code).send({ error: code === 500 ? 'Erreur serveur interne' : error.message });
+  });
+
+  app.setNotFoundHandler((_req, reply) =>
+    reply.code(404).send({ error: 'Route introuvable' })
+  );
+
+  await app.listen({ port: PORT, host: HOST });
+  app.log.info(`✅ KYC V4 démarré — http://${HOST}:${PORT} [${NODE_ENV}]`);
+
+  // ── Distribution automatique ──────────────────────────────────────────────
+  const INTERVAL  = parseInt(process.env.DISTRIBUTION_INTERVAL_MS || '2000', 10);
+  const ABANDON   = parseInt(process.env.DISTRIBUTION_ABANDON_SEC || '120', 10);
+
+  setInterval(async () => {
+    try {
+      if (await getDistributionMode() !== 'auto') return;
+      const dossier = await getOldestPendingDossier();
+      if (!dossier) return;
+      const agent = await getOldestAvailableAgent(Math.floor(Date.now() / 1000) - ABANDON);
+      if (!agent) return;
+
+      const now = Math.floor(Date.now() / 1000);
+      await updateDossier(dossier.id, {
+        statut: 'en_cours', agent_saisie: agent.nom, assigne_a: agent.nom,
+        assigne_le: now, heure_prise: new Date().toTimeString().slice(0, 5),
+      });
+      audit(null, 'DISTRIB_AUTO', `dossier=${dossier.id} agent=${agent.nom}`);
+    } catch (err) {
+      app.log.warn('[DISTRIB-AUTO] %s', err instanceof Error ? err.message : String(err));
+    }
+  }, INTERVAL);
+}
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, async () => {
+    app.log.info(`[SHUTDOWN] ${signal}`);
+    await app.close();
+    process.exit(0);
+  });
+}
+
+main().catch(err => { console.error('[FATAL]', err); process.exit(1); });

@@ -9,7 +9,7 @@ import cookie     from '@fastify/cookie';
 import multipart  from '@fastify/multipart';
 import rateLimit  from '@fastify/rate-limit';
 import staticPlugin from '@fastify/static';
-import websocket  from '@fastify/websocket';
+import websocket from '@fastify/websocket';
 
 import { initDb, getDistributionMode, getOldestPendingDossier, getOldestAvailableAgent, updateDossier, audit } from './db';
 import { registerRoutes } from './routes';
@@ -41,11 +41,11 @@ async function main(): Promise<void> {
   });
   await app.register(cookie, { secret: process.env.JWT_SECRET || 'kyc-cookie' });
   await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 5 } });
+  await app.register(websocket as any);
   await app.register(rateLimit, {
     global: true, max: 300, timeWindow: '1 minute',
     keyGenerator: req => req.headers['x-forwarded-for']?.toString() || req.ip || 'unknown',
   });
-  await app.register(websocket);
 
   // Fichiers statiques (photos CNI/GSM via /uploads/*)
   const uploadsDir = path.join(process.cwd(), 'uploads');

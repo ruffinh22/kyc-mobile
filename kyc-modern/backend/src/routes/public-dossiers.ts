@@ -16,7 +16,7 @@ import crypto from 'crypto';
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import * as db from '../db';
 
-type SocketStream = any;
+type WsSocket = any;
 
 // ── Import de la fonction Rekognition depuis face-verify.ts ──────────────────
 // On réexpose la logique via une fonction partagée pour éviter la duplication.
@@ -32,7 +32,7 @@ const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // `face-verify.ts` to avoid duplicated route declarations.
 
 // Peers WebRTC par wa_agent (signaling)
-const signalingPeers = new Map<string, Set<SocketStream>>();
+const signalingPeers = new Map<string, Set<WsSocket>>();
 
 function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
@@ -76,6 +76,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     } catch { return reply.code(400).send({ error: 'Erreur lecture multipart' }); }
 
     const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country } = fields;
+    const normalizedWaAgent = String(wa_agent ?? '').replace(/\D/g, '');
     if (!numero_mtn?.trim()) return reply.code(400).send({ error: 'Numéro MTN requis' });
     if (!country?.trim())    return reply.code(400).send({ error: 'Pays requis' });
     if (!photos.photo_recto || !photos.photo_verso)
@@ -100,7 +101,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     await db.createDossier({
       id,
       numero_mtn:     numero_mtn.trim().replace(/\D/g, ''),
-      wa_agent:       wa_agent       || undefined,
+      wa_agent:       normalizedWaAgent || undefined,
       username_agent: username_agent || undefined,
       fonction_agent: fonction_agent || undefined,
       zone_agent:     zone_agent     || undefined,
@@ -266,10 +267,11 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     if (!wa || wa.length < 8)
       return reply.code(400).send({ error: 'wa_agent requis (8+ chiffres)' });
     const { rows } = await db.getDossiers({ limit: 200, offset: 0 });
-    const filtered = rows.filter(d => d.wa_agent === wa).map(d => ({
+    const filtered = rows.filter(d => String(d.wa_agent ?? '').replace(/\D/g, '') === wa).map(d => ({
       id: d.id, numero_mtn: d.numero_mtn, statut: d.statut, date: d.date,
       heure_reception: d.heure_reception, heure_cloture: d.heure_cloture,
-      raison_rejet: d.raison_rejet, score_visage: d.score_visage ?? null,
+      raison_rejet: d.raison_rejet,
+      score_visage: d.score_visage != null ? parseFloat(String(d.score_visage)) : null,
       visage_match: d.visage_match ?? null, visage_motif: d.visage_motif ?? null,
     }));
     const stats = { total: 0, en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
@@ -289,7 +291,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     if (!wa || wa.length < 8)
       return reply.code(400).send({ error: 'wa_agent requis (8+ chiffres)' });
     const { rows } = await db.getDossiers({ debut: q.debut ?? null, fin: q.fin ?? null, limit: 500 });
-    const filtered = rows.filter(d => d.wa_agent === wa);
+    const filtered = rows.filter(d => String(d.wa_agent ?? '').replace(/\D/g, '') === wa);
     const compteurs = { en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
     for (const d of filtered) {
       if (d.statut in compteurs) (compteurs as Record<string, number>)[d.statut]++;
@@ -299,7 +301,8 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       dossiers: filtered.map(d => ({
         id: d.id, numero_mtn: d.numero_mtn, statut: d.statut, date: d.date,
         heure_reception: d.heure_reception, heure_cloture: d.heure_cloture,
-        raison_rejet: d.raison_rejet, score_visage: d.score_visage ?? null,
+        raison_rejet: d.raison_rejet,
+        score_visage: d.score_visage != null ? parseFloat(String(d.score_visage)) : null,
         visage_match: d.visage_match ?? null, visage_motif: d.visage_motif ?? null,
       })),
     });
@@ -310,7 +313,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   // WS /api/signaling — WebRTC signaling terrain ↔ back-office
   // ==========================================================================
-  app.get('/api/signaling', { websocket: true }, (socket: SocketStream, _req: FastifyRequest) => {
+  app.get('/api/signaling', { websocket: true }, (socket: WsSocket, _req: FastifyRequest) => {
     let room: string | null = null;
 
     const send = (data: unknown) => {

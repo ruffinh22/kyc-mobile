@@ -12,7 +12,12 @@ export function LoginPage() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     clearError();
-    try { await login(mat, pwd); } catch { /* géré par le contexte */ }
+    try {
+      await login(mat, pwd);
+      // Replace URL and notify router so SPA shows authenticated shell
+      window.history.replaceState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch { /* géré par le contexte */ }
   };
 
   return (
@@ -38,10 +43,10 @@ export function LoginPage() {
           </div>
           <div>
             <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--mtn-blue)', letterSpacing: '-.2px' }}>
-              KYC Congo
+              KYC
             </div>
             <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 1 }}>
-              Plateforme Back Office — V4
+              Plateforme Back Office
             </div>
           </div>
         </div>
@@ -152,7 +157,7 @@ export function ChangePasswordPage() {
           <div style={{ background: 'var(--mtn-blue)', borderRadius: 'var(--r-lg)', padding: '6px 12px' }}>
             <span style={{ fontWeight: 900, fontSize: 16, color: 'var(--mtn-yellow)', fontFamily: 'var(--font)' }}>MTN</span>
           </div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--mtn-blue)' }}>KYC Congo</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--mtn-blue)' }}>KYC</div>
         </div>
 
         <h1 className="login-title">Changement obligatoire</h1>

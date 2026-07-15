@@ -50,7 +50,7 @@ export function AccueilPage() {
         />
       </div>
 
-      <p style={S.footer}>KYC Congo V4 · Palladium Africa © 2026 · 🔒 Sécurisé</p>
+      <p style={S.footer}>KYC · Palladium Africa © 2026 · 🔒 Sécurisé</p>
     </div>
   );
 }

@@ -5,13 +5,28 @@ import { Role } from '../types';
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const header = req.headers.authorization ?? '';
-  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  let token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) {
+    token = (req.cookies as Record<string, string> | undefined)?.kyc_token ?? null;
+  }
+  // Fallback for media requests or dev convenience: allow token in query string
+  if (!token) {
+    try {
+      const q = (req.query as Record<string, unknown>) || {};
+      const qt = q['token'] ?? q['t'];
+      if (typeof qt === 'string' && qt.trim()) token = qt.trim();
+    } catch {
+      /* ignore */
+    }
+  }
   if (!token) { reply.code(401).send({ error: 'Token manquant' }); return; }
 
   const decoded = authUtil.verifyToken(token);
+  console.debug('[AUTH] verifyToken result', decoded ? { matricule: decoded.matricule, jti: decoded.jti } : null);
   if (!decoded)  { reply.code(401).send({ error: 'Token invalide ou expiré' }); return; }
 
   const valid = await db.isSessionValid(decoded.jti);
+  console.debug('[AUTH] isSessionValid', decoded.jti, valid);
   if (!valid) { reply.code(401).send({ error: 'Session révoquée' }); return; }
 
   const compte = await db.getCompteByMatricule(decoded.matricule);

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dossier } from '../types';
 import { StatutBadge, Modal, EmptyState } from './ui';
-import { photoUrl } from '../services/api';
+import { photoUrlWithToken } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 // ── Dossiers Table ─────────────────────────────────────────────────────────────
@@ -45,7 +45,20 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
 }) {
   const { user } = useAuth();
   const [errPhoto, setErrPhoto] = useState<Record<string, boolean>>({});
-  const canSeePhoto = user?.role !== 'agent' || (dossier.agent_saisie === user?.matricule && dossier.statut !== 'en_attente');
+  const [preview, setPreview] = useState<{ imgs: string[]; idx: number } | null>(null);
+  useEffect(() => {
+    if (!preview) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+      if (e.key === 'ArrowLeft') setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p);
+      if (e.key === 'ArrowRight') setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [preview]);
+  const canSeePhoto = user?.role !== 'agent'
+    || dossier.statut === 'en_attente'
+    || (dossier.agent_saisie === user?.matricule && dossier.statut !== 'en_attente');
 
   return (
     <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions}>
@@ -78,21 +91,46 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
           <div>
             <div className="detail-label" style={{ marginBottom: '.5rem' }}>Pièces d'identité</div>
             <div className="photo-grid">
-              {(['recto', 'verso', 'live'] as const).map(type => {
-                const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                if (!dossier[field]) return null;
-                return (
-                  <div className="photo-thumb" key={type} title={`Photo ${type}`}>
-                    {!errPhoto[type] ? (
-                      <img src={photoUrl(dossier.id, type)} alt={type} onError={() => setErrPhoto(s => ({ ...s, [type]: true }))} />
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 12, color: 'var(--ink-4)' }}>Indisponible</div>
-                    )}
-                  </div>
-                );
-              })}
+              {(() => {
+                const types = ['recto','verso','live'] as const;
+                const imgs = types.map(t => dossier[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? photoUrlWithToken(dossier.id, t) : null).filter(Boolean) as string[];
+                return types.map(type => {
+                  const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                  if (!dossier[field]) return null;
+                  const url = photoUrlWithToken(dossier.id, type);
+                  const index = imgs.indexOf(url);
+                  return (
+                    <div className="photo-thumb" key={type} title={`Photo ${type}`}>
+                      {!errPhoto[type] ? (
+                        <img
+                          src={url}
+                          alt={type}
+                          onError={() => setErrPhoto(s => ({ ...s, [type]: true }))}
+                          onClick={() => setPreview({ imgs, idx: index >= 0 ? index : 0 })}
+                          style={{ cursor: 'zoom-in' }}
+                        />
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: 12, color: 'var(--ink-4)' }}>Indisponible</div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
+        )}
+        {preview && (
+          <Modal title={`Aperçu`} onClose={() => setPreview(null)}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <img src={preview.imgs[preview.idx]} alt={`Aperçu ${preview.idx+1}`} style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain' }} />
+              </div>
+              <div style={{ display: 'flex', gap: '.5rem' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)} disabled={preview.idx <= 0}>← Précédent</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p)} disabled={preview.idx >= preview.imgs.length - 1}>Suivant →</button>
+              </div>
+            </div>
+          </Modal>
         )}
       </div>
     </Modal>

@@ -3,7 +3,16 @@ import type { Dossier, DossierStats, GsmRecord, GsmStats, PlanningEntry, NoteQua
 const BASE = import.meta.env.VITE_API_BASE_URL || '';
 let _token: string | null = null;
 
-export function setToken(t: string | null) { _token = t; }
+export function setToken(t: string | null) {
+  _token = t;
+  if (typeof document !== 'undefined') {
+    if (t) {
+      document.cookie = `kyc_token=${encodeURIComponent(t)}; path=/;`;
+    } else {
+      document.cookie = 'kyc_token=; path=/; max-age=0';
+    }
+  }
+}
 export function getToken() { return _token; }
 
 export class ApiError extends Error {
@@ -16,7 +25,7 @@ async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?: unknow
   const { json, ...rest } = opts;
   const isForm = rest.body instanceof FormData;
   const headers: Record<string, string> = {};
-  if (!isForm) headers['Content-Type'] = 'application/json';
+  if (json !== undefined && !isForm) headers['Content-Type'] = 'application/json';
   if (_token) headers['Authorization'] = `Bearer ${_token}`;
   const res = await fetch(`${BASE}${endpoint}`, {
     credentials: 'include', headers, body: json !== undefined ? JSON.stringify(json) : rest.body, ...rest,
@@ -50,6 +59,18 @@ export async function rejeterDossier(id: string, raison: string) { return apiFet
 export async function transfererDossier(id: string, cible: string, message?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/transferer`, { method: 'POST', json: { cible, message } }); }
 export async function verifierVisage(id: string) { return apiFetch<{ score: number; match: boolean; motif: string }>(`/api/dossiers/${id}/verifier-visage`, { method: 'POST' }); }
 export function photoUrl(id: string, type: 'recto' | 'verso' | 'live') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
+export function photoUrlWithToken(id: string, type: 'recto' | 'verso' | 'live') {
+  const base = `${BASE}/api/dossiers/${id}/photo/${type}`;
+  // Prefer in-memory token, fallback to cookie or localStorage when available
+  const token = _token || (typeof document !== 'undefined' ? (
+    // try cookie
+    (document.cookie || '').split(';').map(s => s.trim()).reduce((acc, cur) => {
+      if (!acc && cur.startsWith('kyc_token=')) return decodeURIComponent(cur.split('=')[1] || '');
+      return acc;
+    }, '') || localStorage.getItem('kyc4-token') || ''
+  ) : '');
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+}
 export async function getDossiersHistorique(p: { debut?: string; fin?: string; statut?: string; agent?: string; search?: string; limit?: number; offset?: number } = {}) {
   const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '') qs.set(k, String(v)); });
   return apiFetch<{ success: boolean; total: number; count: number; dossiers: Dossier[] }>(`/api/dossiers/historique?${qs}`);

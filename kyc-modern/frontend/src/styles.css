@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap');
 
 /* ============================================================================
-   KYC Congo V4 — Charte graphique MTN
+   KYC — Charte graphique MTN
    Jaune  #FFCC00  Bleu marine  #003087  Bleu moyen  #0057A8
    Blanc  #FFFFFF  Gris froid   #F5F7FA
    Police : Inter (poids 400→900)
@@ -412,6 +412,8 @@ body {
 .stat-cours::after     { background: var(--mtn-blue-mid); }
 .stat-accepte::after   { background: var(--success); }
 .stat-rejete::after    { background: var(--danger); }
+.stat-info::before     { background: var(--mtn-blue-mid); }
+.stat-info::after      { background: var(--mtn-blue-mid); }
 
 .stat-label {
   font-size: 10.5px;

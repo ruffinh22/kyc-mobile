@@ -11,9 +11,19 @@ function nowSec()  { return Math.floor(Date.now()/1000); }
 function nowTime() { return new Date().toTimeString().slice(0,5); }
 function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 
+function normalizeDossier(d: Dossier): Dossier {
+  const score = d.score_visage != null ? Number(d.score_visage) : null;
+  const match = d.visage_match != null ? Number(d.visage_match) : null;
+  return {
+    ...d,
+    score_visage: Number.isFinite(score) ? score : null,
+    visage_match: Number.isFinite(match) ? match : null,
+  };
+}
+
 function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
   if (role === 'superviseur' || role === 'admin') return d;
-  const canSee = role === 'agent' && d.agent_saisie === matricule && d.statut !== 'en_attente';
+  const canSee = role === 'agent' && (d.agent_saisie === matricule || d.statut === 'en_attente');
   if (canSee) return d;
   return { ...d, numero_mtn: '***', wa_agent: '***', photo_recto: null, photo_verso: null, photo_live: null, masque: true };
 }
@@ -32,7 +42,7 @@ export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
       limit: Math.min(parseInt(q.limit||'100',10),500),
       offset: parseInt(q.offset||'0',10),
     });
-    return reply.send({ success: true, total, count: rows.length, dossiers: rows.map(d => maskDossier(d, matricule, role)) });
+    return reply.send({ success: true, total, count: rows.length, dossiers: rows.map(d => maskDossier(normalizeDossier(d), matricule, role)) });
   });
 
   // GET /api/dossiers/stats
@@ -46,7 +56,7 @@ export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/api/dossiers/:id', async (req, reply) => {
     const d = await db.getDossierById(req.params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
-    return reply.send({ success: true, dossier: maskDossier(d, req.user.matricule, req.user.role) });
+    return reply.send({ success: true, dossier: maskDossier(normalizeDossier(d), req.user.matricule, req.user.role) });
   });
 
   // GET /api/dossiers/:id/photo/:type
@@ -55,12 +65,18 @@ export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
     if (!['recto','verso','live'].includes(req.params.type)) return reply.code(400).send({ error: 'Type invalide' });
     const d = await db.getDossierById(req.params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
-    if (role === 'agent' && (d.agent_saisie !== matricule || d.statut === 'en_attente'))
+    req.log.info({ event: 'photo-access', dossierId: req.params.id, type: req.params.type, user: req.user, agent_saisie: d.agent_saisie, statut: d.statut }, 'photo access check');
+    if (role === 'agent' && d.statut !== 'en_attente' && d.agent_saisie !== matricule) {
+      req.log.info({ reason: 'access_rejected', expectedMatricule: matricule, actualAgentSaisie: d.agent_saisie, statut: d.statut }, 'photo access denied');
       return reply.code(403).send({ error: 'Accès refusé' });
+    }
     const field = `photo_${req.params.type}` as 'photo_recto'|'photo_verso'|'photo_live';
     if (!d[field]) return reply.code(404).send({ error: 'Photo non disponible' });
-    const fullPath = path.join(UPLOAD_CNI, d[field]!);
-    if (!fullPath.startsWith(UPLOAD_CNI)) return reply.code(403).send({ error: 'Chemin interdit' });
+    const safeRoot = path.resolve(UPLOAD_CNI);
+    const fullPath = path.resolve(safeRoot, d[field]!);
+    const relative = path.relative(safeRoot, fullPath);
+    req.log.info({ field, safeRoot, fullPath, relative }, 'photo path debug');
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return reply.code(403).send({ error: 'Chemin interdit' });
     if (!fs.existsSync(fullPath)) return reply.code(404).send({ error: 'Fichier introuvable' });
     const ext = path.extname(fullPath).toLowerCase();
     const mimes: Record<string,string> = { '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.png':'image/png', '.webp':'image/webp' };

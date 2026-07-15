@@ -1,4 +1,4 @@
-import { useMemo, useState, FormEvent } from 'react';
+import { useMemo, useState, FormEvent, useEffect } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -27,6 +27,13 @@ function faceSummary(d: Dossier) {
 function ageMinutes(createdAt: number | null | undefined) {
   if (!createdAt) return 0;
   return Math.max(0, Math.floor((Date.now() / 1000 - createdAt) / 60));
+}
+
+function formatFaceScore(value: number | string | null | undefined) {
+  if (value === null || value === undefined) return null;
+  const num = typeof value === 'number' ? value : parseFloat(String(value));
+  if (!Number.isFinite(num)) return null;
+  return `${num.toFixed(1)}%`;
 }
 
 const formatPhoneLike = (val: string, country: string, maxDigits: number) => {
@@ -197,6 +204,17 @@ export function AgentDashboard() {
 // ── File d'attente ─────────────────────────────────────────────────────────────
 export function AgentFileAttente() {
   const { user } = useAuth();
+  const [preview, setPreview] = useState<{ imgs: string[]; idx: number; title?: string } | null>(null);
+  useEffect(() => {
+    if (!preview) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+      if (e.key === 'ArrowLeft') setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p);
+      if (e.key === 'ArrowRight') setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [preview]);
   const [selected, setSelected] = useState<Dossier | null>(null);
   const [rejetTarget, setRejetTarget] = useState<Dossier | null>(null);
   const [raison, setRaison] = useState(''); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
@@ -264,16 +282,22 @@ export function AgentFileAttente() {
                         <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
                       )}
                     </div>
-                    {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                      <div className="photo-strip">
-                        {(['recto','verso','live'] as const).map(type => {
-                          const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                          const path = d[field];
-                          if (!path) return null;
-                          return <img key={type} src={api.photoUrl(d.id, type)} alt={type} className="mini-photo" />;
-                        })}
-                      </div>
-                    )}
+                            {(d.photo_recto || d.photo_verso || d.photo_live) && (
+                              <div className="photo-strip">
+                                {(() => {
+                                  const types = ['recto','verso','live'] as const;
+                                  const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
+                                  return types.map(type => {
+                                    const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                                    const path = d[field];
+                                    if (!path) return null;
+                                    const url = api.photoUrlWithToken(d.id, type);
+                                    const idx = imgs.indexOf(url);
+                                    return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                                  });
+                                })()}
+                              </div>
+                            )}
                   </div>
                 </div>
               );
@@ -312,12 +336,18 @@ export function AgentFileAttente() {
                     </div>
                     {(d.photo_recto || d.photo_verso || d.photo_live) && (
                       <div className="photo-strip">
-                        {(['recto','verso','live'] as const).map(type => {
-                          const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                          const path = d[field];
-                          if (!path) return null;
-                          return <img key={type} src={api.photoUrl(d.id, type)} alt={type} className="mini-photo" />;
-                        })}
+                        {(() => {
+                          const types = ['recto','verso','live'] as const;
+                          const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
+                          return types.map(type => {
+                            const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                            const path = d[field];
+                            if (!path) return null;
+                            const url = api.photoUrlWithToken(d.id, type);
+                            const idx = imgs.indexOf(url);
+                            return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                          });
+                        })()}
                       </div>
                     )}
                   </div>
@@ -351,6 +381,19 @@ export function AgentFileAttente() {
           </>
         }>
           <div className="field"><label>Raison du rejet<span className="req">*</span></label><textarea value={raison} onChange={e => setRaison(e.target.value)} placeholder="Motif obligatoire…" autoFocus /></div>
+        </Modal>
+      )}
+      {preview && (
+        <Modal title={preview.title || 'Aperçu'} onClose={() => setPreview(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <img src={preview.imgs[preview.idx]} alt={preview.title || `Aperçu ${preview.idx+1}`} style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '.5rem' }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)} disabled={preview.idx <= 0}>← Précédent</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p)} disabled={preview.idx >= preview.imgs.length - 1}>Suivant →</button>
+            </div>
+          </div>
         </Modal>
       )}
     </>

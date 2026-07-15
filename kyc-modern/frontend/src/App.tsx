@@ -134,7 +134,7 @@ function AppContent() {
     pathname === '/face-verify-interactive' ||
     pathname === '/face-verify-interactive.html';
 
-  if (isPublicPage) return <PublicRouter />;
+  if (!user && isPublicPage) return <PublicRouter />;
 
   if (loading) {
     return (

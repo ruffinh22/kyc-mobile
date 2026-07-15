@@ -95,7 +95,7 @@ export function FaceVerifyInteractivePage() {
   const [instrState, setInstrState] = useState<'waiting' | 'locked' | 'success'>('waiting');
   const [arrow, setArrow]           = useState<string | null>(null);
   const [errMsg, setErrMsg]         = useState('');
-  const [result, setResult]         = useState<{ score: number; msg: string } | null>(null);
+  const [result, setResult]         = useState<{ score: number | null; msg: string; motif?: string } | null>(null);
   const [phase, setPhase]           = useState<'init' | 'capture' | 'verif' | 'done' | 'error'>('init');
   const [creating, setCreating]     = useState(false);
 
@@ -278,7 +278,18 @@ export function FaceVerifyInteractivePage() {
       const data = await verifyFaceRealtime(capturesRef.current[0].blob, P.recto);
 
       if (data.success) {
-        setResult({ score: data.score, msg: data.message ?? '' });
+        const motif = (data as any).motif as string | undefined;
+        const awsConfigured = (data as any).aws_configured as boolean | undefined;
+        const scoreFromApi = typeof data.score === 'number' ? data.score : null;
+
+        // Treat as unavailable when backend explicitly says so, when score is null,
+        // or when an Rekognition error occurred.
+        const unavailable = awsConfigured === false || scoreFromApi === null || (motif && motif.startsWith('erreur_rekognition'));
+        if (unavailable) {
+          setResult({ score: null, msg: data.message ?? 'Score non disponible (AWS non configuré).', motif });
+        } else {
+          setResult({ score: scoreFromApi, msg: data.message ?? '', motif });
+        }
         setInstruction('✅ Vérification enregistrée', 'Vous pouvez créer le dossier. Un agent validera manuellement.', 'success');
         setPhase('done');
       } else {
@@ -522,10 +533,16 @@ export function FaceVerifyInteractivePage() {
           <div style={{ background: '#051a0e', borderRadius: 16, padding: 18, textAlign: 'center', border: '2px solid #22c55e', marginBottom: 18 }}>
             <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: 6, color: '#f1f5f9' }}>✅ Vérification enregistrée</h2>
             <p style={{ fontSize: '.78rem', color: '#94a3b8', marginBottom: 10 }}>{result.msg}</p>
-            <div style={{ background: '#334155', borderRadius: 99, height: 10, overflow: 'hidden', marginBottom: 6 }}>
-              <div style={{ height: '100%', background: '#22c55e', borderRadius: 99, width: `${Math.min(result.score, 100)}%`, transition: 'width .6s ease' }} />
-            </div>
-            <p style={{ fontSize: '.75rem', color: '#94a3b8' }}>Score de similarité : {result.score.toFixed(1)}%</p>
+            {result.score != null ? (
+              <>
+                <div style={{ background: '#334155', borderRadius: 99, height: 10, overflow: 'hidden', marginBottom: 6 }}>
+                  <div style={{ height: '100%', background: '#22c55e', borderRadius: 99, width: `${Math.min(result.score, 100)}%`, transition: 'width .6s ease' }} />
+                </div>
+                <p style={{ fontSize: '.75rem', color: '#94a3b8' }}>Score de similarité : {result.score.toFixed(1)}%</p>
+              </>
+            ) : (
+              <div style={{ fontSize: '.9rem', color: '#94a3b8' }}>Score non disponible (AWS non configuré). La validation sera effectuée manuellement par un agent.</div>
+            )}
           </div>
         )}
 

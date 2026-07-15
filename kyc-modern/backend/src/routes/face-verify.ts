@@ -19,6 +19,8 @@ import { requireAuth, requireRole } from '../middleware/auth';
 const UPLOAD_CNI  = process.env.UPLOAD_CNI  || path.join(process.cwd(), 'uploads', 'cni');
 const MAX_FRAME_B = 10 * 1024 * 1024; // 10 Mo
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const REKOG_SIMILARITY_THRESHOLD = parseInt(process.env.REKOG_SIMILARITY_THRESHOLD || '50', 10);
+const FACE_MATCH_THRESHOLD = parseFloat(process.env.FACE_MATCH_THRESHOLD || '70');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ async function compareWithRekognition(
   const result = await client.send(new CompareFacesCommand({
     SourceImage:         { Bytes: liveBuffer },
     TargetImage:         { Bytes: rectoBuffer },
-    SimilarityThreshold: 50,
+    SimilarityThreshold: REKOG_SIMILARITY_THRESHOLD,
   }));
   const matches = (result as { FaceMatches?: Array<{ Similarity: number }> }).FaceMatches ?? [];
   if (matches.length === 0) {
@@ -87,8 +89,8 @@ async function compareWithRekognition(
     };
   }
   const score = Math.round((matches[0].Similarity ?? 0) * 10) / 10;
-  const match = score >= 70 ? 1 : 0;
-  const motif = score >= 70 ? 'Visage correspondant' : score > 0 ? 'Score insuffisant' : 'Aucune correspondance';
+  const match = score >= FACE_MATCH_THRESHOLD ? 1 : 0;
+  const motif = score >= FACE_MATCH_THRESHOLD ? 'Visage correspondant' : score > 0 ? 'Score insuffisant' : 'Aucune correspondance';
   return { score, match, motif };
 }
 
@@ -203,7 +205,8 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
     if (!awsConfigured) {
       return reply.send({
         success: true,
-        score: 0,
+        aws_configured: false,
+        score: null,
         match: null,
         motif: 'aws_non_configure',
         message: 'Score non disponible (AWS non configuré). La validation sera effectuée manuellement par un agent.',
@@ -216,6 +219,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
 
       return reply.send({
         success: true,
+        aws_configured: true,
         score,
         match:   match === 1,
         motif,
@@ -229,7 +233,8 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
       app.log.error(err);
       return reply.send({
         success: true,
-        score: 0,
+        aws_configured: true,
+        score: null,
         match: null,
         motif: `erreur_rekognition: ${msg}`,
         message: 'Vérification faciale non disponible. La validation sera effectuée manuellement par un agent.',
@@ -389,7 +394,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
         if (!Number.isNaN(parsedMatch)) matchVal = parsedMatch;
       }
       if (matchVal === null && score !== null) {
-        matchVal = score >= 70 ? 1 : 0;
+        matchVal = score >= FACE_MATCH_THRESHOLD ? 1 : 0;
       }
 
       // Si AWS configuré et score pas encore calculé → recalcul
@@ -424,6 +429,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
         db.audit(null, 'DOSSIER_FACE_VERIFY_MISE_A_JOUR', `id=${dossierId} score=${score} match=${matchVal}`, req.ip);
         return reply.code(200).send({
           success: true,
+          aws_configured: Boolean(process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY),
           id: dossierId,
           numero: numDigits,
           ref: dossierId,
@@ -459,6 +465,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
 
       return reply.code(201).send({
         success:      true,
+        aws_configured: Boolean(process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY),
         id,
         numero:      numDigits,
         ref:          id,

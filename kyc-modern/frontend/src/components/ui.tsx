@@ -55,7 +55,7 @@ export function PresenceBadge({ statut }: { statut: string }) {
 }
 
 // ── StatCard ───────────────────────────────────────────────────────────────────
-export function StatCard({ label, value, sub, variant = 'default' }: { label: string; value: number | string; sub?: string; variant?: 'default' | 'attente' | 'cours' | 'accepte' | 'rejete' }) {
+export function StatCard({ label, value, sub, variant = 'default' }: { label: string; value: number | string; sub?: string; variant?: 'default' | 'attente' | 'cours' | 'accepte' | 'rejete' | 'info' }) {
   return (
     <div className={`stat-card ${variant !== 'default' ? `stat-${variant}` : ''}`}>
       <span className="stat-label">{label}</span>

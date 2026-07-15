@@ -165,6 +165,8 @@ export function AcquisitionPage() {
 
   const nbPhotos     = () => (photos.recto ? 1 : 0) + (photos.verso ? 1 : 0);
   const pct          = () => Math.round(nbPhotos() / 2 * 100);
+  const selectedCamLabel = cameras.find(c => c.deviceId === selectedCam)?.label ?? '';
+  const previewMirrored = facingMode === 'user' || /front|selfie|avant|user|face/i.test(selectedCamLabel);
   const peutSoumettre = () => {
     const wa  = form.wa_agent.replace(/\D/g, '');
     const num = form.numero_mtn.replace(/\D/g, '');
@@ -190,8 +192,9 @@ export function AcquisitionPage() {
       setCamOpen(false); return;
     }
     try {
-      const constraints: MediaStreamConstraints = deviceId
-        ? { video: { deviceId: { exact: deviceId } } }
+      const deviceToUse = deviceId || selectedCam || undefined;
+      const constraints: MediaStreamConstraints = deviceToUse
+        ? { video: { deviceId: { exact: deviceToUse } } }
         : { video: { facingMode: facing ?? 'environment' } };
       let stream: MediaStream;
       try { stream = await navigator.mediaDevices.getUserMedia(constraints); }
@@ -203,12 +206,13 @@ export function AcquisitionPage() {
         await new Promise<void>(res => { videoRef.current!.onloadedmetadata = () => res(); });
         videoRef.current.play();
       }
+
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const vids = devices.filter(d => d.kind === 'videoinput');
         setCameras(vids);
-        if (!deviceId && vids.length > 0) {
-          const back = vids.find(d => /back|rear|environ|arrière/i.test(d.label));
+        if (!deviceToUse && vids.length > 0) {
+          const back = vids.find(d => /back|rear|environ|arrière|usb|webcam/i.test(d.label));
           setSelectedCam((back ?? vids[0]).deviceId);
         }
       } catch { /* ignore */ }
@@ -221,8 +225,11 @@ export function AcquisitionPage() {
         cvs.width = 320; cvs.height = 240;
         const ctx = cvs.getContext('2d')!;
         const vw = vid.videoWidth, vh = vid.videoHeight;
-        const cw = vw * .7, ch = vh * .55;
-        ctx.drawImage(vid, (vw - cw) / 2, (vh - ch) / 2, cw, ch, 0, 0, 320, 240);
+        const cropW = Math.min(vw * 0.9, vh * (85 / 54));
+        const cropH = cropW * (54 / 85);
+        const sx = (vw - cropW) / 2;
+        const sy = (vh - cropH) / 2;
+        ctx.drawImage(vid, sx, sy, cropW, cropH, 0, 0, 320, 240);
         setCamQuality(analyzeQuality(cvs));
       }, 600);
 
@@ -234,7 +241,7 @@ export function AcquisitionPage() {
       else if (err.name === 'NotReadableError') setErreur('La caméra est utilisée par une autre application.');
       else setErreur('Impossible d\'accéder à la caméra : ' + (err.name ?? 'erreur inconnue'));
     }
-  }, [stopCamera]);
+  }, [selectedCam, stopCamera]);
 
   const ouvrirCamera = useCallback(async (type: 'recto' | 'verso') => {
     setCamType(type); setCamOpen(true); setErreur('');
@@ -260,9 +267,16 @@ export function AcquisitionPage() {
   const capturer = async () => {
     const vid = videoRef.current;
     if (!vid || !vid.videoWidth) return;
+    const cropAspect = 85 / 54;
+    const cropW = Math.min(vid.videoWidth * 0.85, vid.videoHeight * cropAspect);
+    const cropH = cropW / cropAspect;
+    const sx = Math.round((vid.videoWidth - cropW) / 2);
+    const sy = Math.round((vid.videoHeight - cropH) / 2);
     const fc = document.createElement('canvas');
-    fc.width = vid.videoWidth; fc.height = vid.videoHeight;
-    fc.getContext('2d')!.drawImage(vid, 0, 0);
+    fc.width = Math.round(cropW);
+    fc.height = Math.round(cropH);
+    const ctx = fc.getContext('2d')!;
+    ctx.drawImage(vid, sx, sy, cropW, cropH, 0, 0, fc.width, fc.height);
     const dataUrl = fc.toDataURL('image/jpeg', .92);
     const blob    = await new Promise<Blob>(res => fc.toBlob(res as BlobCallback, 'image/jpeg', .92));
     const quality = analyzeQuality(fc);
@@ -288,7 +302,7 @@ export function AcquisitionPage() {
   // ── Dashboard ─────────────────────────────────────────────────────────────
 
   const chargerDash = useCallback(async () => {
-    const wa = form.wa_agent.replace(/\D/g, '');
+    const wa = String(form.wa_agent).replace(/\D/g, '');
     if (wa.length !== (paysConf?.digitCount ?? 0)) { setDossiers([]); return; }
     setDashLoading(true);
     try {
@@ -458,9 +472,10 @@ export function AcquisitionPage() {
     return `${String(parsed.getDate()).padStart(2, '0')}/${String(parsed.getMonth() + 1).padStart(2, '0')}/${parsed.getFullYear()}`;
   };
 
-  const formatScoreDossier = (score: number | null | undefined) => {
-    if (score === null || score === undefined || Number.isNaN(score)) return '';
-    return `${score.toFixed(score >= 10 ? 0 : 1)}%`;
+  const formatScoreDossier = (score: number | string | null | undefined) => {
+    const value = typeof score === 'string' ? Number(score) : score;
+    if (value === null || value === undefined || Number.isNaN(value)) return '';
+    return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
   };
 
   const scoreBadgeStyle = (score: number | null | undefined) => {
@@ -711,7 +726,7 @@ export function AcquisitionPage() {
             <span style={{ fontSize: 14, fontWeight: 700 }}>📷 Photo {camType === 'recto' ? 'Recto' : 'Verso'} CNI</span>
             <button onClick={fermerCamera} style={{ background: '#F0F4FA', border: '1.5px solid rgba(0,48,135,.18)', color: '#475569', borderRadius: 8, padding: '7px 13px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>✕ Annuler</button>
           </div>
-          {cameras.length > 1 && (
+          {cameras.length > 0 && (
             <div style={{ padding: '7px 18px', background: '#F6F8FC', borderBottom: '1px solid rgba(0,48,135,.1)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>📹 CAMÉRA</label>
               <select value={selectedCam} onChange={e => { setSelectedCam(e.target.value); startCamera(e.target.value); }} style={{ ...inpSt, flex: 1, padding: '7px 10px', fontSize: 12 }}>
@@ -719,16 +734,21 @@ export function AcquisitionPage() {
               </select>
             </div>
           )}
-          <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#050508', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            {camQuality.label && (
-              <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 11, fontWeight: 700, borderRadius: 99, padding: '5px 14px', backdropFilter: 'blur(4px)', background: camQuality.cls === 'ok' ? 'rgba(22,163,74,.9)' : camQuality.cls === 'warn' ? 'rgba(255,204,0,.92)' : 'rgba(220,38,38,.9)', color: camQuality.cls === 'warn' ? '#000' : '#fff', whiteSpace: 'nowrap' }}>
-                {camQuality.label}
-              </div>
-            )}
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <div style={{ width: '88%', maxWidth: 340, aspectRatio: '85/54', border: `2px solid ${camQuality.ok ? '#16A34A' : '#FFCC00'}`, borderRadius: 10, boxShadow: '0 0 0 2000px rgba(0,0,0,.52)' }} />
-              <div style={{ position: 'absolute', bottom: '11%', fontSize: 11.5, fontWeight: 600, color: '#fff', background: 'rgba(0,0,0,.6)', padding: '5px 14px', borderRadius: 99 }}>{camType === 'recto' ? 'Recto — face visible' : 'Verso — face visible'}</div>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18, minHeight: 0 }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: 560, aspectRatio: '85 / 54', background: '#050508', borderRadius: 22, overflow: 'hidden', boxShadow: '0 18px 50px rgba(0,0,0,.35)' }}>
+              <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: previewMirrored ? 'scaleX(-1)' : undefined }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at center, rgba(0,0,0,0) 44%, rgba(0,0,0,.48) 55%)', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', inset: '10%', border: '2px solid rgba(255,255,255,.85)', borderRadius: 18, boxShadow: '0 0 0 9999px rgba(0,0,0,.2)', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', top: '8%', left: '8%', width: 46, height: 46, borderTop: '3px solid #FFCC00', borderLeft: '3px solid #FFCC00', borderRadius: '0 0 0 14px', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', top: '8%', right: '8%', width: 46, height: 46, borderTop: '3px solid #FFCC00', borderRight: '3px solid #FFCC00', borderRadius: '0 0 14px 0', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', bottom: '8%', left: '8%', width: 46, height: 46, borderBottom: '3px solid #FFCC00', borderLeft: '3px solid #FFCC00', borderRadius: '0 14px 0 0', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', bottom: '8%', right: '8%', width: 46, height: 46, borderBottom: '3px solid #FFCC00', borderRight: '3px solid #FFCC00', borderRadius: '14px 0 0 0', pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', bottom: '8%', left: '50%', transform: 'translateX(-50%)', fontSize: 12, fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,.64)', padding: '7px 14px', borderRadius: 999, pointerEvents: 'none' }}>Placez la CNI dans le cadre</div>
+              {camQuality.label && (
+                <div style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', fontSize: 12, fontWeight: 700, borderRadius: 99, padding: '7px 16px', backdropFilter: 'blur(4px)', background: camQuality.cls === 'ok' ? 'rgba(22,163,74,.95)' : camQuality.cls === 'warn' ? 'rgba(255,204,0,.94)' : 'rgba(220,38,38,.94)', color: camQuality.cls === 'warn' ? '#000' : '#fff', whiteSpace: 'nowrap' }}>
+                  {camQuality.label}
+                </div>
+              )}
             </div>
           </div>
           <div style={{ padding: '16px 24px', background: 'rgba(255,255,255,.97)', borderTop: '1px solid rgba(0,48,135,.1)', display: 'flex', gap: 10, justifyContent: 'center' }}>

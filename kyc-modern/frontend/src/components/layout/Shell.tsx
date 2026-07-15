@@ -24,8 +24,7 @@ export function Topbar() {
         </div>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '.375rem' }}>
-            <span className="topbar-title">KYC Congo</span>
-            <span className="topbar-tag">V4</span>
+            <span className="topbar-title">KYC</span>
           </div>
           <div className="topbar-subtitle">Back Office — Plateforme de vérification</div>
         </div>

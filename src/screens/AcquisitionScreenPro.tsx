@@ -16,6 +16,7 @@ import { launchCamera, CameraOptions } from 'react-native-image-picker';
 import { useAgentStore }  from '../store/callStore';
 import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
 import { C, R, T } from '../theme/tokens'; // Design tokens
+import { AppHeader } from '../components/AppHeader';
 
 interface Photo { uri: string; type: 'recto' | 'verso'; }
 
@@ -131,18 +132,38 @@ export function AcquisitionScreenPro({ navigation }: any) {
       });
       xhr.addEventListener('load', () => {
         if (xhr.status === 200 || xhr.status === 201) {
-          setSuccess(true);
-          setTimeout(() => {
-            setNumeroMtn('');
-            setPhotos({ recto: null, verso: null });
-            setSuccess(false); setActiveStep(1);
-            navigation.goBack();
-          }, 2200);
+          try {
+            const response = JSON.parse(xhr.responseText);
+            const dossierId = response.id || response.dossier_id;
+            const rectoPath = response.recto_path || '';
+            const versoPath = response.verso_path || '';
+            
+            if (!dossierId) throw new Error('ID du dossier non reçu');
+            
+            setSuccess(true);
+            setTimeout(() => {
+              navigation.navigate('FaceVerifyScreen', {
+                dossierId,
+                serverUrl: agent.serverUrl,
+                rectoPath,
+                versoPath,
+                numeroMtn,
+                waAgent: agent.numeroAgent,
+                country: agent.country,
+                fonctionAgent: agent.fonctionAgent,
+                zoneAgent: agent.zoneAgent,
+              });
+            }, 2200);
+          } catch (err: any) {
+            setError(err.message || 'Erreur: ID du dossier invalide');
+            shake();
+            setLoading(false);
+          }
         } else {
           try { setError(JSON.parse(xhr.responseText)?.error || `Erreur ${xhr.status}`); } catch { setError(`Erreur ${xhr.status}`); }
           shake();
+          setLoading(false);
         }
-        setLoading(false);
       });
       xhr.addEventListener('error', () => { setError('Erreur réseau'); shake(); setLoading(false); });
       const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
@@ -214,19 +235,7 @@ export function AcquisitionScreenPro({ navigation }: any) {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
 
-          {/* ── Header ─────────────────────────────────────────────────── */}
-          <View style={s.header}>
-            <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()}>
-              <Text style={s.backIcon}>‹</Text>
-            </TouchableOpacity>
-            <View style={s.headerMeta}>
-              <Text style={s.headerTitle}>Acquisition</Text>
-              <Text style={s.headerSub}>Soumettre un numéro MTN</Text>
-            </View>
-            <View style={s.mtnBadge}>
-              <Text style={s.mtnBadgeTxt}>MTN</Text>
-            </View>
-          </View>
+          <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="⬅️" onRightPress={() => navigation.goBack()} />
 
           {/* ── Agent (lecture seule) ──────────────────────────────────── */}
           <View style={s.agentCard}>

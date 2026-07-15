@@ -1,5 +1,6 @@
 package com.kycmobile;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,11 +8,16 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.ServiceCompat;
+import androidx.core.content.ContextCompat;
 
 /**
  * KycForegroundCallService
@@ -22,10 +28,16 @@ import androidx.core.app.NotificationCompat;
  * Démarré depuis JS via NativeModules.KycCallModule.startForeground()
  * Arrêté à la fin de chaque appel.
  *
- * Type foregroundServiceType="phoneCall" requis sur Android 14+.
+ * Type foregroundServiceType="camera|microphone|phoneCall" déclaré dans le
+ * manifest (requis Android 14+ / API 34 dès lors que le service reste actif
+ * pendant que WebRTC capture la caméra/le micro). Ce type DOIT être répété au
+ * runtime dans l'appel startForeground(id, notif, type) — voir
+ * startForegroundCompat() ci-dessous — sinon le système lève une
+ * MissingForegroundServiceTypeException et tue le service en plein appel.
  */
 public class KycForegroundCallService extends Service {
 
+    private static final String TAG = "KycForegroundCallService";
     public static final String CHANNEL_ID   = "kyc_call_channel";
     public static final String ACTION_START = "START_CALL";
     public static final String ACTION_STOP  = "STOP_CALL";
@@ -46,17 +58,61 @@ public class KycForegroundCallService extends Service {
             String numero = intent.getStringExtra(EXTRA_NUMBER);
             createNotificationChannel();
             Notification notif = buildNotification(numero != null ? numero : "…");
-            startForeground(NOTIF_ID, notif);
+            startForegroundCompat(notif);
             acquireWakeLock();
             return START_STICKY;
 
         } else if (ACTION_STOP.equals(action)) {
             releaseWakeLock();
-            stopForeground(true);
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
             stopSelf();
         }
 
         return START_NOT_STICKY;
+    }
+
+    // ── Démarrage foreground avec le bon type de service ──────────────────
+    // Le type runtime doit être un sous-ensemble de celui déclaré dans le
+    // manifest. On n'inclut CAMERA/MICROPHONE que si la permission correspondante
+    // est réellement accordée à cet instant (sinon SecurityException garantie
+    // sur API 34+) ; PHONE_CALL reste toujours inclus car c'est le rôle premier
+    // de ce service (maintenir l'appel actif en arrière-plan).
+    private void startForegroundCompat(Notification notif) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, resolveForegroundServiceType());
+            } else {
+                startForeground(NOTIF_ID, notif);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "startForeground avec type a échoué, repli minimal", e);
+            try {
+                startForeground(NOTIF_ID, notif);
+            } catch (Exception fatal) {
+                Log.e(TAG, "Repli startForeground impossible — arrêt du service", fatal);
+                stopSelf();
+            }
+        }
+    }
+
+    private int resolveForegroundServiceType() {
+        int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            boolean hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+            boolean hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+
+            if (hasCamera) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
+            if (hasMic)    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+
+            if (!hasCamera || !hasMic) {
+                Log.w(TAG, "Permission caméra/micro manquante au démarrage du service "
+                    + "— type foreground réduit à phoneCall (caméra=" + hasCamera + ", micro=" + hasMic + ")");
+            }
+        }
+        return type;
     }
 
     // ── Notification permanente pendant l'appel ───────────────────────────

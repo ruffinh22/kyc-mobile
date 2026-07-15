@@ -18,6 +18,7 @@ import { CountryPicker } from '../components/CountryPicker';
 import { SimpleSelect }  from '../components/SimpleSelect';
 import { validatePhoneNumber, getCountryConfig } from '../utils/phoneValidator';
 import { C, R, T } from '../theme/tokens';
+import { AppHeader } from '../components/AppHeader';
 
 const DEFAULT_SERVER  = 'http://10.0.2.2:3001';
 const DEFAULT_COUNTRY = 'CG';

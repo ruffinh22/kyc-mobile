@@ -17,6 +17,7 @@ import { DossierListScreen }      from './src/screens/DossierListScreen';
 import { IncomingCallScreen }      from './src/screens/IncomingCallScreen';
 import { CallScreen }              from './src/screens/CallScreen';
 import { AcquisitionScreenPro }    from './src/screens/AcquisitionScreenPro';
+import { FaceVerifyScreen }        from './src/screens/FaceVerifyScreen';
 import { useAgentStore }           from './src/store/callStore';
 
 const Stack = createStackNavigator();
@@ -70,6 +71,7 @@ export default function App() {
             <Stack.Screen name="Idle"          component={IdleScreen} />
             <Stack.Screen name="DossierList"   component={DossierListScreen} />
             <Stack.Screen name="Acquisition"   component={AcquisitionScreenPro} />
+            <Stack.Screen name="FaceVerifyScreen" component={FaceVerifyScreen} options={{ presentation: 'modal' }} />
             <Stack.Screen
               name="IncomingCall"
               component={IncomingCallScreen}

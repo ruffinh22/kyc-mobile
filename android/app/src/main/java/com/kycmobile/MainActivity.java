@@ -1,4 +1,5 @@
 package com.kycmobile;
+import expo.modules.ReactActivityDelegateWrapper;
 
 import android.os.Build;
 import android.os.Bundle;
@@ -35,10 +36,10 @@ public class MainActivity extends ReactActivity {
 
     @Override
     protected ReactActivityDelegate createReactActivityDelegate() {
-        return new DefaultReactActivityDelegate(
+        return new ReactActivityDelegateWrapper(this, BuildConfig.IS_NEW_ARCHITECTURE_ENABLED, new DefaultReactActivityDelegate(
             this,
             getMainComponentName(),
             DefaultNewArchitectureEntryPoint.getFabricEnabled()
-        );
+        ));
     }
 }

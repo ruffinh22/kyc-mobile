@@ -15,12 +15,17 @@ import { useAgentStore, useCallStore } from '../store/callStore';
 import { signalingService }   from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
 import { C, R, T } from '../theme/tokens';
+import { AppHeader } from '../components/AppHeader';
+import { StatCard } from '../components/StatCard';
+import { IconTile } from '../components/IconTile';
+import { BottomTabBar } from '../components/BottomTabBar';
 
 export function IdleScreen({ navigation }: any) {
   useEffect(() => { KeepAwake.activate(); return () => KeepAwake.deactivate(); }, []);
 
   const { numeroAgent, serverUrl, setConnected, isConnected, logout } = useAgentStore();
   const callStore = useCallStore();
+  const errorMessage = useCallStore((s) => s.errorMessage);
 
   // ── Anneaux pulsants (3 déphasés) ──────────────────────────────────────
   const r1 = useRef(new Animated.Value(1)).current;
@@ -63,9 +68,30 @@ export function IdleScreen({ navigation }: any) {
     (async () => {
       await notificationService.init({
         onIncomingCall: handleIncomingCall,
-        onCallAccepted: (uuid) => { if (!cancelled) navigation.navigate('Call', { callUuid: uuid }); },
+        onCallAccepted: async (uuid) => {
+          if (cancelled) return;
+          // Garde anti-doublon : si déjà pris en charge par le flux in-app
+          // (IncomingCallScreen.handleAccept), on ne relance rien.
+          const status = useCallStore.getState().status;
+          if (status === 'connecting' || status === 'active') return;
+
+          callStore.setConnecting();
+          const { numeroMtn, callUuid: storedUuid } = useCallStore.getState();
+          try {
+            // Sans cet appel, une réponse depuis l'écran verrouillé natif
+            // n'ouvrait jamais la caméra/micro ni la connexion WebRTC.
+            await signalingService.acceptCall();
+            notificationService.endNativeCall(uuid || storedUuid);
+            navigation.replace('Call', { callUuid: uuid || storedUuid, numeroMtn });
+          } catch {
+            signalingService.refuseCall();
+            callStore.resetCall();
+            navigation.replace('Idle');
+          }
+        },
         onCallDeclined: (_uuid) => { if (!cancelled) signalingService.refuseCall(); },
         onCallEnded:    (_uuid) => { if (!cancelled) { signalingService.hangUp(); navigation.replace('Idle'); } },
+        onTokenRefresh: (newToken) => signalingService.updateFcmToken(newToken),
       });
       if (cancelled) return;
       const fcmToken = notificationService.getFCMToken() ?? '';
@@ -80,6 +106,7 @@ export function IdleScreen({ navigation }: any) {
         },
         onCallEnded: () => { if (!cancelled) navigation.replace('Idle'); },
         onError:     (msg) => console.warn('[Signal]', msg),
+        onMediaError:(msg) => { console.warn('[Signal] Média:', msg); callStore.setFailed(msg); },
       });
     })();
     return () => { cancelled = true; signalingService.destroy(); notificationService.destroy(); };
@@ -99,27 +126,7 @@ export function IdleScreen({ navigation }: any) {
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} translucent />
 
-      {/* ── Topbar ──────────────────────────────────────────────────────── */}
-      <View style={s.topbar}>
-        {/* Agent pill */}
-        <View style={s.agentPill}>
-          <View style={s.avatar}>
-            <Text style={s.avatarTxt}>{initials}</Text>
-          </View>
-          <Text style={s.agentNum}>{numeroAgent}</Text>
-        </View>
-
-        {/* Status badge */}
-        <View style={[s.statusBadge, { borderColor: `${onlineColor}44` }]}>
-          <Animated.View style={[s.statusDot, {
-            backgroundColor: onlineColor,
-            // micro-pulse sur le dot quand online
-          }]} />
-          <Text style={[s.statusTxt, { color: onlineColor }]}>
-            {isConnected ? 'EN LIGNE' : 'RECONNEXION'}
-          </Text>
-        </View>
-      </View>
+      <AppHeader title="Accueil" subtitle={numeroAgent || 'Agent KYC'} rightIcon="🔔" onRightPress={() => {}} />
 
       {/* ── Centre : anneaux + icône ─────────────────────────────────────── */}
       <View style={s.center}>
@@ -138,6 +145,12 @@ export function IdleScreen({ navigation }: any) {
           Vous serez notifié dès qu'une{'\n'}vérification KYC est déclenchée.
         </Text>
 
+        {errorMessage ? (
+          <View style={s.alertBanner}>
+            <Text style={s.alertText}>{errorMessage}</Text>
+          </View>
+        ) : null}
+
         {/* Badge numéro */}
         <View style={s.numBadge}>
           <View style={s.numDot} />
@@ -146,18 +159,20 @@ export function IdleScreen({ navigation }: any) {
         </View>
       </View>
 
-      {/* ── Actions bas ─────────────────────────────────────────────────── */}
       <View style={s.footer}>
-        <TouchableOpacity style={s.btnPrimary} onPress={() => navigation.navigate('Acquisition')}>
-          <Text style={s.btnPrimaryTxt}>Soumettre un numéro MTN</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.btnSecondary} onPress={() => navigation.navigate('DossierList')}>
-          <Text style={s.btnSecondaryTxt}>Voir mes dossiers</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.btnGhost} onPress={handleLogout}>
-          <Text style={s.btnGhostTxt}>Changer de compte</Text>
-        </TouchableOpacity>
+        <View style={s.grid}>
+          <IconTile icon="📱" label="Soumettre" color={C.blue} onPress={() => navigation.navigate('Acquisition')} />
+          <IconTile icon="🗂️" label="Dossiers" color={C.yellow} onPress={() => navigation.navigate('DossierList')} />
+          <IconTile icon="🔐" label="Compte" color={C.success} onPress={handleLogout} />
+          <IconTile icon="📞" label="Appels" color={C.blueMid} onPress={() => navigation.navigate('IncomingCall', { numeroMtn: '000', callUuid: 'demo' })} />
+        </View>
       </View>
+
+      <BottomTabBar tabs={[{key:'home',label:'Accueil',icon:'🏠'},{key:'submit',label:'Soumettre',icon:'📱'},{key:'dossiers',label:'Dossiers',icon:'🗂️'},{key:'account',label:'Compte',icon:'👤'}]} activeKey="home" onChange={(key) => {
+        if (key === 'submit') navigation.navigate('Acquisition');
+        if (key === 'dossiers') navigation.navigate('DossierList');
+        if (key === 'account') handleLogout();
+      }} />
     </View>
   );
 }
@@ -239,6 +254,15 @@ const s = StyleSheet.create({
     fontSize: T.sm, color: C.ink2, textAlign: 'center',
     marginTop: 10, lineHeight: 22,
   },
+  alertBanner: {
+    marginTop: 16,
+    backgroundColor: 'rgba(217,45,32,0.10)',
+    borderWidth: 1, borderColor: 'rgba(217,45,32,0.24)',
+    borderRadius: R.md,
+    paddingVertical: 8, paddingHorizontal: 12,
+    maxWidth: 320,
+  },
+  alertText: { fontSize: T.xs, color: C.dangerText, fontWeight: '700', textAlign: 'center' },
   numBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     marginTop: 22,
@@ -254,6 +278,12 @@ const s = StyleSheet.create({
 
   // ── Footer ──
   footer: { paddingHorizontal: 20, paddingBottom: 40, gap: 10 },
+  grid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
   btnPrimary: {
     paddingVertical: 16, borderRadius: R.lg,
     backgroundColor: C.yellow,

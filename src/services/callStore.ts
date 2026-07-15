@@ -11,7 +11,9 @@
 import { create } from 'zustand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-export type CallStatus = 'idle' | 'incoming' | 'connecting' | 'active' | 'ended';
+export type CallStatus =
+  | 'idle' | 'incoming' | 'connecting' | 'active'
+  | 'reconnecting' | 'declined' | 'failed' | 'ended';
 
 interface CallState {
   status:       CallStatus;
@@ -21,15 +23,17 @@ interface CallState {
   isMicOn:      boolean;
   isCameraOn:   boolean;
   callDuration: number;   // secondes
-  errorMessage: string | null;
+  lastError:    string | null;
 
   setIncomingCall: (numeroMtn: string, uuid?: string) => void;
   setConnecting:   () => void;
   setCallActive:   (active: boolean) => void;
+  setReconnecting: () => void;
+  setDeclined:     () => void;
+  setFailed:       (reason?: string) => void;
   setMicOn:        (on: boolean) => void;
   setCameraOn:     (on: boolean) => void;
   setCallDuration: (s: number) => void;
-  setFailed:       (message: string) => void;
   resetCall:       () => void;
 }
 
@@ -41,25 +45,33 @@ export const useCallStore = create<CallState>((set) => ({
   isMicOn:      true,
   isCameraOn:   true,
   callDuration: 0,
-  errorMessage: null,
+  lastError:    null,
 
   // uuid est optionnel : absent sur le chemin WebSocket, présent sur le chemin FCM
   setIncomingCall: (numeroMtn, uuid = '') =>
-    set({ status: 'incoming', numeroMtn, callUuid: uuid, errorMessage: null }),
+    set({ status: 'incoming', numeroMtn, callUuid: uuid, lastError: null }),
 
-  setConnecting: () => set({ status: 'connecting', errorMessage: null }),
+  setConnecting: () => set({ status: 'connecting', lastError: null }),
 
   setCallActive: (active) =>
-    set({ status: active ? 'active' : 'connecting', isCallActive: active, errorMessage: null }),
+    set({ status: active ? 'active' : 'connecting', isCallActive: active }),
+
+  // Coupure réseau transitoire pendant l'appel (grâce ICE avant abandon définitif)
+  setReconnecting: () => set({ status: 'reconnecting' }),
+
+  // Appel refusé par l'agent terrain
+  setDeclined: () => set({ status: 'declined' }),
+
+  // Échec définitif (caméra/micro indisponible, ICE failed, timeout…)
+  setFailed: (reason) => set({ status: 'failed', lastError: reason ?? null }),
 
   setMicOn:        (on) => set({ isMicOn: on }),
   setCameraOn:     (on) => set({ isCameraOn: on }),
   setCallDuration: (s)  => set({ callDuration: s }),
-  setFailed:       (message) => set({ status: 'ended', errorMessage: message }),
 
   resetCall: () => set({
     status: 'idle', numeroMtn: '', callUuid: '',
-    isCallActive: false, isMicOn: true, isCameraOn: true, callDuration: 0, errorMessage: null,
+    isCallActive: false, isMicOn: true, isCameraOn: true, callDuration: 0, lastError: null,
   }),
 }));
 

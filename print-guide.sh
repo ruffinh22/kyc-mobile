@@ -11,9 +11,6 @@ cat << 'EOF'
 │  ÉTAPE 1: PRÉPARER LE TÉLÉPHONE                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 
-  🔌 Connectez le téléphone via USB-C
-  
-  📱 Sur le téléphone:
      • Paramètres → À propos du téléphone
      • Appuyez 7x sur "Numéro de version"
      • Paramètres → Options de développeur

@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// video-signal.js — KYC V4  (version fusionnée + FCM)
+// video-signal.js — KYC V4  (version fusionnée + FCM, renforcée)
 //
 // Protocole WebSocket :
 //   terrain  envoie  : { type:'register', role:'terrain', numero, fcmToken? }
@@ -15,7 +15,18 @@
 //                      { type:'webrtc', payload } / { type:'refus' } / { type:'hangup' }
 //   BO       reçoit  : { type:'registered' } / { type:'terrain-presence', enLigne } /
 //                      { type:'terrain-absent' } / { type:'webrtc', payload } /
-//                      { type:'refus' } / { type:'hangup' }
+//                      { type:'refus' } / { type:'hangup' } / { type:'no-answer', callUuid }
+//
+// Garanties de livraison :
+//   - Si le terrain a un WS actif  → livraison WS immédiate + FCM en parallèle
+//     (redondance en cas de veille profonde de l'OS).
+//   - Si le terrain n'a PAS de WS (app fermée) mais un token FCM déjà connu
+//     → livraison FCM uniquement (voir terrainTokens, persistant).
+//   - Si aucun des deux n'est disponible → 'terrain-absent' immédiat.
+//   - Si l'appel n'aboutit à aucun échange webrtc/refus/hangup dans les
+//     CALL_RING_TIMEOUT_MS → 'no-answer' envoyé au BO, terrain notifié.
+//
+// Supervision : GET /api/signaling/stats
 // ============================================================================
 
 const path  = require('path');
@@ -27,7 +38,7 @@ function initFirebase () {
   if (firebaseMessaging) return;
   const keyPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
   if (!keyPath) {
-    console.warn('[FCM] FIREBASE_SERVICE_ACCOUNT_PATH non défini — push FCM désactivé');
+    logWarn('[FCM] FIREBASE_SERVICE_ACCOUNT_PATH non défini — push FCM désactivé');
     return;
   }
   try {
@@ -38,14 +49,14 @@ function initFirebase () {
       });
     }
     firebaseMessaging = admin.messaging();
-    console.log('[FCM] Firebase Admin initialisé');
+    log('[FCM] Firebase Admin initialisé');
   } catch (e) {
-    console.error('[FCM] Init impossible:', e.message);
+    logWarn('[FCM] Init impossible:', e.message);
   }
 }
 
-// ── Envoi push FCM data-only HIGH_PRIORITY ──────────────────────────────────
-async function sendCallPush ({ fcmToken, numeroMtn, callUuid }) {
+// ── Envoi push FCM data-only HIGH_PRIORITY (avec 1 retry) ───────────────────
+async function sendCallPush ({ fcmToken, numeroMtn, callUuid }, attempt = 1) {
   if (!firebaseMessaging || !fcmToken) return false;
   try {
     await firebaseMessaging.send({
@@ -60,10 +71,14 @@ async function sendCallPush ({ fcmToken, numeroMtn, callUuid }) {
         ttl:      30 * 1000,   // 30 s
       },
     });
-    console.log(`[FCM] Push envoyé → ${numeroMtn}`);
+    log(`[FCM] Push envoyé → ${numeroMtn} (tentative ${attempt})`);
     return true;
   } catch (e) {
-    console.error('[FCM] Erreur push:', e.message);
+    logWarn(`[FCM] Erreur push (tentative ${attempt}):`, e.message);
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 1200));
+      return sendCallPush({ fcmToken, numeroMtn, callUuid }, attempt + 1);
+    }
     return false;
   }
 }
@@ -71,6 +86,26 @@ async function sendCallPush ({ fcmToken, numeroMtn, callUuid }) {
 // ── Tables de sockets en mémoire ────────────────────────────────────────────
 const terrainSockets    = new Map(); // numero → { socket, fcmToken }
 const backofficeSockets = new Map(); // numero → socket
+
+// ── Registre persistant des tokens FCM ──────────────────────────────────────
+// Décorrélé du cycle de vie du WebSocket : un agent terrain peut fermer
+// l'application (WS fermé) et rester joignable par push FCM data-only.
+// Sans cette table, un appel vers un agent "app fermée" échouait immédiatement
+// en 'terrain-absent' car aucune socket WS n'existait plus pour lui.
+const terrainTokens = new Map(); // numero → { fcmToken, updatedAt }
+
+// ── Appels en attente de décrochage (timeout côté serveur) ──────────────────
+// numero → { callUuid, boSocket, timer, numeroMtn }
+const pendingCalls = new Map();
+const CALL_RING_TIMEOUT_MS = 45_000; // aligné sur CALL_TIMEOUT_MS côté mobile
+
+// ── Log horodaté ─────────────────────────────────────────────────────────────
+function log (...args) {
+  console.log(`[${new Date().toISOString()}]`, ...args);
+}
+function logWarn (...args) {
+  console.warn(`[${new Date().toISOString()}]`, ...args);
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function envoyer (s, o) {
@@ -83,6 +118,16 @@ function normNum (n) {
 
 function genCallUuid () {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Annule le timeout de sonnerie serveur dès que l'appel progresse réellement
+// (webrtc, refus explicite, ou raccroché) pour ce numero.
+function clearPendingCall (numero) {
+  const pending = pendingCalls.get(numero);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCalls.delete(numero);
+  }
 }
 
 // ── Plugin Fastify ───────────────────────────────────────────────────────────
@@ -113,9 +158,23 @@ async function routes (fastify) {
         if (!numero) return;
 
         if (role === 'terrain') {
+          // Ferme une éventuelle ancienne socket fantôme du même agent
+          // (ex. reconnexion après crash sans fermeture propre côté client).
+          const previous = terrainSockets.get(numero);
+          if (previous && previous.socket !== socket) {
+            try { previous.socket.close(); } catch (_) {}
+          }
+
           // Stocke socket + token FCM (peut être absent)
           terrainSockets.set(numero, { socket, fcmToken: msg.fcmToken || null });
-          console.log(`[SIGNAL] REGISTER terrain: ${numero} | FCM: ${msg.fcmToken ? 'oui' : 'non'}`);
+          log(`[SIGNAL] REGISTER terrain: ${numero} | FCM: ${msg.fcmToken ? 'oui' : 'non'}`);
+
+          // Persiste le token indépendamment du cycle de vie du WS — c'est ce
+          // qui permet de joindre l'agent même après fermeture de l'app.
+          if (msg.fcmToken) {
+            terrainTokens.set(numero, { fcmToken: msg.fcmToken, updatedAt: Date.now() });
+          }
+
           envoyer(socket, { type: 'registered', role: 'terrain', numero });
 
           // Informer le BO si déjà connecté
@@ -132,35 +191,55 @@ async function routes (fastify) {
 
       // ── call (BO → terrain) ─────────────────────────────────────────────
       if (msg.type === 'call' && role === 'backoffice') {
-        const terrain = terrainSockets.get(numero);
-        if (!terrain) {
+        const terrain     = terrainSockets.get(numero);
+        const tokenEntry  = terrainTokens.get(numero);
+        const numeroMtn   = msg.numeroMtn || '';
+
+        if (!terrain && !tokenEntry) {
+          // Ni WS actif, ni token FCM connu pour cet agent : réellement injoignable.
           envoyer(socket, { type: 'terrain-absent', numero });
           return;
         }
 
         const callUuid = genCallUuid();
 
-        // Le terrain est joignable via WS
-        envoyer(terrain.socket, {
-          type:      'incoming-call',
-          numero,
-          numeroMtn: msg.numeroMtn || '',
-        });
-        console.log(`[SIGNAL] incoming-call envoyé au terrain ${numero}`);
-
-        // Envoyer aussi le push FCM (réveille si écran verrouillé)
-        if (terrain.fcmToken) {
-          sendCallPush({
-            fcmToken: terrain.fcmToken,
-            numeroMtn: msg.numeroMtn || '',
-            callUuid,
-          }).catch(() => {});
+        // Chemin WS : l'app est ouverte au premier plan → livraison instantanée.
+        if (terrain) {
+          envoyer(terrain.socket, { type: 'incoming-call', numero, numeroMtn });
+          log(`[SIGNAL] incoming-call (WS) → terrain ${numero}`);
         }
+
+        // Chemin FCM : toujours tenté en parallèle si un token est connu, même
+        // si le WS est déjà actif (redondance utile si l'app est en veille
+        // profonde côté OS et met du temps à réagir sur le seul canal WS).
+        const fcmToken = terrain?.fcmToken || tokenEntry?.fcmToken;
+        if (fcmToken) {
+          sendCallPush({ fcmToken, numeroMtn, callUuid }).catch(() => {});
+        } else if (!terrain) {
+          // Aucun token et pas de WS : on informe quand même le BO que la
+          // livraison n'est pas garantie plutôt que de laisser sonner dans le vide.
+          logWarn(`[SIGNAL] Appel vers ${numero} sans WS ni token FCM connu`);
+        }
+
+        // Timeout serveur : si personne ne décroche/raccroche dans le délai,
+        // on informe le BO explicitement au lieu de le laisser sonner indéfiniment.
+        if (pendingCalls.has(numero)) {
+          clearTimeout(pendingCalls.get(numero).timer);
+        }
+        const timer = setTimeout(() => {
+          pendingCalls.delete(numero);
+          envoyer(socket, { type: 'no-answer', numero, callUuid });
+          const t = terrainSockets.get(numero);
+          if (t) envoyer(t.socket, { type: 'hangup' });
+          log(`[SIGNAL] no-answer (timeout) → ${numero}`);
+        }, CALL_RING_TIMEOUT_MS);
+        pendingCalls.set(numero, { callUuid, boSocket: socket, numeroMtn, timer });
         return;
       }
 
       // ── webrtc (offer / answer / ice) ───────────────────────────────────
       if (msg.type === 'webrtc') {
+        clearPendingCall(numero); // l'appel progresse réellement, plus de timeout à craindre
         if (role === 'backoffice') {
           const t = terrainSockets.get(numero);
           if (t) envoyer(t.socket, { type: 'webrtc', payload: msg.payload });
@@ -173,6 +252,7 @@ async function routes (fastify) {
 
       // ── refus (terrain) ──────────────────────────────────────────────────
       if (msg.type === 'refus' && role === 'terrain') {
+        clearPendingCall(numero);
         const boSocket = backofficeSockets.get(numero);
         if (boSocket) envoyer(boSocket, { type: 'refus' });
         return;
@@ -180,6 +260,7 @@ async function routes (fastify) {
 
       // ── hangup (l'un ou l'autre) ─────────────────────────────────────────
       if (msg.type === 'hangup') {
+        clearPendingCall(numero);
         if (role === 'backoffice') {
           const t = terrainSockets.get(numero);
           if (t) envoyer(t.socket, { type: 'hangup' });
@@ -197,7 +278,9 @@ async function routes (fastify) {
         const entry = terrainSockets.get(numero);
         if (entry && entry.socket === socket) {
           terrainSockets.delete(numero);
-          // Prévenir le BO
+          // NB : terrainTokens n'est volontairement PAS nettoyé ici — l'agent
+          // reste joignable par push FCM tant que son token n'a pas été
+          // remplacé par un register ultérieur (app rouverte).
           const boSocket = backofficeSockets.get(numero);
           if (boSocket) envoyer(boSocket, { type: 'terrain-presence', enLigne: false });
         }
@@ -209,6 +292,14 @@ async function routes (fastify) {
       }
     });
   });
+
+  // ── Supervision minimale (monitoring / debug) ─────────────────────────────
+  fastify.get('/api/signaling/stats', async () => ({
+    terrainConnectes:    terrainSockets.size,
+    backofficeConnectes: backofficeSockets.size,
+    tokensConnus:        terrainTokens.size,
+    appelsEnAttente:     pendingCalls.size,
+  }));
 }
 
 module.exports = routes;

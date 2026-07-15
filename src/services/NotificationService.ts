@@ -41,6 +41,7 @@ export type NotifCallbacks = {
   onCallAccepted: (callUuid: string) => void;
   onCallDeclined: (callUuid: string) => void;
   onCallEnded:    (callUuid: string) => void;
+  onTokenRefresh?: (newToken: string) => void;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,12 +49,32 @@ class NotificationService {
   private callbacks: NotifCallbacks | null = null;
   private activeCallUuid: string | null = null;
   private fcmToken: string | null = null;
+  private listenersBound = false;
 
   // ── Initialisation ──────────────────────────────────────────────────────────
   async init (cbs: NotifCallbacks): Promise<void> {
     this.callbacks = cbs;
+    await this.requestNotificationPermission();
     await this.setupCallKeep();
     await this.setupFCM();
+  }
+
+  // ── Permission notifications (Android 13+ / POST_NOTIFICATIONS) ─────────
+  private async requestNotificationPermission (): Promise<void> {
+    if (Platform.OS !== 'android' || Platform.Version < 33) return;
+    try {
+      await PermissionsAndroid.request(
+        'android.permission.POST_NOTIFICATIONS' as any,
+        {
+          title:                 'Notifications d\'appel',
+          message:               'Nécessaire pour vous alerter des appels vidéo entrants, même écran verrouillé.',
+          buttonPositive:        'Autoriser',
+          buttonNegative:        'Refuser',
+        }
+      );
+    } catch (e) {
+      console.warn('[Notif] Permission POST_NOTIFICATIONS refusée ou indisponible:', e);
+    }
   }
 
   // ── Token FCM (sync après init) ──────────────────────────────────────────
@@ -66,10 +87,43 @@ class NotificationService {
     try {
       await CallKeep.setup(CALLKEEP_OPTIONS);
       CallKeep.setAvailable(true);
+      this.bindCallKeepEvents();
       console.log('[CallKeep] Setup successful');
     } catch (e) {
       console.warn('[CallKeep] Setup failed:', e);
     }
+  }
+
+  // ── Branchement des événements natifs CallKeep vers les callbacks JS ────
+  // C'est ce lien qui manquait : sans lui, accepter/refuser un appel depuis
+  // l'écran d'appel natif (verrouillé ou app fermée) ne remontait jamais à l'app.
+  private bindCallKeepEvents (): void {
+    if (this.listenersBound) return;
+    this.listenersBound = true;
+
+    CallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
+      console.log('[CallKeep] answerCall', callUUID);
+      this.callbacks?.onCallAccepted(callUUID || this.activeCallUuid || '');
+    });
+
+    CallKeep.addEventListener('endCall', ({ callUUID }: { callUUID: string }) => {
+      console.log('[CallKeep] endCall', callUUID);
+      const id = callUUID || this.activeCallUuid || '';
+      // CallKeep ne distingue pas "raccrocher pendant l'appel" de "refuser avant
+      // décroché" : on laisse le store / l'écran actif faire la distinction via
+      // onCallDeclined, qui déclenche un refus signalé au serveur si l'appel
+      // n'était pas encore actif (le SignalingService applique la bonne action).
+      this.callbacks?.onCallDeclined(id);
+      if (id === this.activeCallUuid) this.activeCallUuid = null;
+    });
+
+    CallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }: { muted: boolean }) => {
+      console.log('[CallKeep] mute natif:', muted);
+    });
+
+    CallKeep.addEventListener('didActivateAudioSession', () => {
+      console.log('[CallKeep] Session audio activée');
+    });
   }
 
   // ── Setup Firebase Messaging ─────────────────────────────────────────────
@@ -83,22 +137,15 @@ class NotificationService {
       if (!granted) return;
     }
 
-    // Token FCM — mis en cache mémoire + AsyncStorage
-    try {
-      const token = await messaging().getToken();
-      this.fcmToken = token;
-      await AsyncStorage.setItem('fcm_token', token);
-      console.log('[FCM] Token enregistré');
-    } catch (e) {
-      console.warn('[FCM] Impossible d\'obtenir le token:', e);
-      // Tente de lire le cache
-      this.fcmToken = await AsyncStorage.getItem('fcm_token');
-    }
+    // Token FCM — mis en cache mémoire + AsyncStorage, avec quelques tentatives
+    // avant de se rabattre sur le cache (réseau instable au premier lancement).
+    this.fcmToken = await this.fetchFCMTokenWithRetry(3);
 
-    // Refresh du token
+    // Refresh du token — le serveur doit être resynchronisé (sinon push mort)
     messaging().onTokenRefresh(async (newToken) => {
       this.fcmToken = newToken;
       await AsyncStorage.setItem('fcm_token', newToken);
+      this.callbacks?.onTokenRefresh?.(newToken);
     });
 
     // App en foreground
@@ -113,6 +160,25 @@ class NotificationService {
     // App ouverte depuis une notification
     const initial = await messaging().getInitialNotification();
     if (initial) this.handlePushPayload(initial);
+  }
+
+  // ── Récupération du token FCM avec tentatives successives ────────────────
+  private async fetchFCMTokenWithRetry (attempts: number): Promise<string | null> {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const token = await messaging().getToken();
+        await AsyncStorage.setItem('fcm_token', token);
+        console.log('[FCM] Token enregistré');
+        return token;
+      } catch (e) {
+        console.warn(`[FCM] Tentative ${i + 1}/${attempts} échouée:`, e);
+        if (i < attempts - 1) {
+          await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+        }
+      }
+    }
+    console.warn('[FCM] Abandon — utilisation du token en cache');
+    return AsyncStorage.getItem('fcm_token');
   }
 
   // ── Traitement payload FCM ──────────────────────────────────────────────
@@ -159,7 +225,9 @@ class NotificationService {
   destroy (): void {
     CallKeep.removeEventListener('answerCall');
     CallKeep.removeEventListener('endCall');
-    CallKeep.removeEventListener('hangupCall');
+    CallKeep.removeEventListener('didPerformSetMutedCallAction');
+    CallKeep.removeEventListener('didActivateAudioSession');
+    this.listenersBound = false;
   }
 }
 

@@ -16,6 +16,11 @@
     "@react-native-picker/picker": "^2.11.4",
     "@react-navigation/native": "^6.1.17",
     "@react-navigation/stack": "^6.3.29",
+    "expo": "~50.0.0",
+    "expo-camera": "~14.0.0",
+    "expo-image-picker": "~14.3.0",
+    "expo-modules-autolinking": "~1.10.0",
+    "expo-modules-core": "~1.11.0",
     "react": "18.2.0",
     "react-native": "0.73.6",
     "react-native-callkeep": "^4.3.12",
@@ -32,7 +37,7 @@
     "react-native-vector-icons": "^10.1.0",
     "react-native-webrtc": "^118.0.3",
     "react-native-webview": "^13.12.3",
-    "ws": "^8.14.0",
+    "ws": "^8.21.1",
     "zustand": "^4.5.2"
   },
   "devDependencies": {

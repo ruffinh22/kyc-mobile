@@ -33,10 +33,27 @@
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
 
+  <!-- ═══ NOTIFICATIONS (Android 13+ / API 33) ═══
+       Obligatoire depuis Android 13 : sans cette déclaration, la demande
+       d'autorisation faite dans NotificationService.ts est silencieusement
+       ignorée et l'utilisateur ne verra jamais l'invite système. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
   <!-- ═══ APPEL SUR ÉCRAN VERROUILLÉ ═══ -->
   <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"
+      android:minSdkVersion="34" />
+
+  <!-- ═══ FOREGROUND SERVICE — TYPES CAMÉRA/MICRO (obligatoire API 34+) ═══
+       Depuis Android 14, un foreground service qui capture caméra/micro doit
+       déclarer explicitement ces permissions, en plus de son type déclaré
+       sur le service lui-même (voir KycForegroundCallService ci-dessous).
+       Sans elles, le service est arrêté par le système lors du passage en
+       arrière-plan pendant un appel actif. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
+      android:minSdkVersion="34" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
       android:minSdkVersion="34" />
 
   <!-- ═══ CALLKEEP (Android Telecom API) ═══ -->
@@ -48,6 +65,10 @@
   <uses-feature android:name="android.hardware.camera"        android:required="true" />
   <uses-feature android:name="android.hardware.camera.front"  android:required="false" />
   <uses-feature android:name="android.hardware.microphone"    android:required="true" />
+  <!-- L'app utilise l'API Telecom (CallKeep) sans être un dialer téléphonique :
+       la déclarer non-requise élargit la compatibilité (tablettes, certains
+       appareils Wi-Fi-only sans modem cellulaire). -->
+  <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
   <application
       android:name=".MainApplication"
@@ -68,6 +89,7 @@
         android:windowSoftInputMode="adjustResize"
         android:exported="true"
         android:showOnLockScreen="true"
+        android:showWhenLocked="true"
         android:turnScreenOn="true">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
@@ -101,9 +123,11 @@
         android:resource="@drawable/ic_notification" />
 
     <!-- ── Service foreground : maintien de l'appel en cours ──────────── -->
+    <!-- Type étendu "camera|microphone|phoneCall" : requis à partir d'Android 14
+         car le service reste actif pendant que WebRTC capture caméra/micro. -->
     <service
         android:name=".KycForegroundCallService"
-        android:foregroundServiceType="phoneCall"
+        android:foregroundServiceType="camera|microphone|phoneCall"
         android:exported="false"
         android:enabled="true" />
 

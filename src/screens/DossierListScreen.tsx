@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
+import { AppHeader } from '../components/AppHeader';
 
 interface DossierItem {
   id: string;
@@ -67,36 +68,78 @@ export function DossierListScreen({ navigation }: any) {
   }, [agentWa, baseUrl]);
 
   const renderItem = ({ item }: { item: DossierItem }) => {
+    const status = String(item.statut || '').toLowerCase();
+    const score = typeof item.score_visage === 'number' ? item.score_visage : null;
+    const matched = item.visage_match === 1;
+
+    const statusStyle =
+      status === 'accepte' || status === 'accepted' || status === 'valide' || status === 'validé'
+        ? s.statusOk
+        : status === 'rejete' || status === 'rejected' || status === 'refuse' || status === 'refusé'
+        ? s.statusKo
+        : s.statusPending;
+
+    const statusLabel =
+      status === 'accepte' || status === 'accepted' || status === 'valide' || status === 'validé'
+        ? 'ACCEPTÉ'
+        : status === 'rejete' || status === 'rejected' || status === 'refuse' || status === 'refusé'
+        ? 'REJETÉ'
+        : 'EN ATTENTE';
+
     return (
       <View style={s.card}>
-        <View style={s.row}>
-          <Text style={s.label}>ID</Text>
-          <Text style={s.value}>{item.id}</Text>
+        <View style={s.cardHeader}>
+          <View style={s.avatarWrap}>
+            <Text style={s.avatarTxt}>{String(item.id).slice(0,2).toUpperCase()}</Text>
+          </View>
+          <View style={s.cardTitleWrap}>
+            <Text style={s.cardId}>{item.id}</Text>
+            <Text style={s.cardSub}>{item.numero_mtn}</Text>
+          </View>
+          <View style={[s.badge, statusStyle]}>
+            <Text style={[s.badgeText, statusStyle]}>{statusLabel}</Text>
+          </View>
         </View>
-        <View style={s.row}>
-          <Text style={s.label}>Numéro MTN</Text>
-          <Text style={s.value}>{item.numero_mtn}</Text>
+
+        <View style={s.scoreBox}>
+          <View style={s.scoreLeft}>
+            <Text style={s.scoreLabel}>Similarité faciale</Text>
+            <Text style={s.scoreValue}>{score != null ? `${score.toFixed(1)}%` : '—'}</Text>
+          </View>
+          <View style={[s.matchPill, matched ? s.matchOk : s.matchWarn]}>
+            <Text style={[s.matchText, matched ? s.matchTextOk : s.matchTextWarn]}>{matched ? 'MATCH' : 'À VALIDER'}</Text>
+          </View>
         </View>
-        <View style={s.row}>
-          <Text style={s.label}>Statut</Text>
-          <Text style={[s.value, item.statut === 'accepte' ? s.statusOk : item.statut === 'rejete' ? s.statusKo : s.statusPending]}>
-            {item.statut.toUpperCase()}
-          </Text>
+
+        <View style={s.metaGrid}>
+          <View style={s.metaCell}>
+            <Text style={s.metaLabel}>Date</Text>
+            <Text style={s.metaValue}>{item.date}</Text>
+          </View>
+          <View style={s.metaCell}>
+            <Text style={s.metaLabel}>Heure</Text>
+            <Text style={s.metaValue}>{item.heure_reception}</Text>
+          </View>
         </View>
-        <View style={s.row}>
-          <Text style={s.label}>Date</Text>
-          <Text style={s.value}>{item.date} {item.heure_reception}</Text>
-        </View>
+
         {item.heure_cloture ? (
-          <View style={s.row}>
-            <Text style={s.label}>Clôturé</Text>
-            <Text style={s.value}>{item.heure_cloture}</Text>
+          <View style={s.noteBox}>
+            <Text style={s.noteLabel}>Clôturé</Text>
+            <Text style={s.noteValue}>{item.heure_cloture}</Text>
           </View>
         ) : null}
+
         {item.raison_rejet ? (
-          <View style={s.row}>
-            <Text style={s.label}>Motif</Text>
-            <Text style={s.value}>{item.raison_rejet}</Text>
+          <View style={s.noteBox}>
+            <Text style={s.noteLabel}>Motif de rejet</Text>
+            <Text style={s.noteValue}>{item.raison_rejet}</Text>
+          </View>
+        ) : null}
+
+        {item.visage_motif ? (
+          <View style={s.noteBox}>
+            <Text style={s.noteLabel}>Analyse IA</Text>
+            <Text style={s.noteValue}>{item.visage_motif}</Text>
           </View>
         ) : null}
       </View>
@@ -106,15 +149,7 @@ export function DossierListScreen({ navigation }: any) {
   return (
     <SafeAreaView style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
-      <View style={s.header}>
-        <View>
-          <Text style={s.title}>Mes dossiers</Text>
-          <Text style={s.subtitle}>Liste des dossiers envoyés par {agentWa || 'votre agent'}</Text>
-        </View>
-        <TouchableOpacity style={s.closeBtn} onPress={() => navigation.goBack()}>
-          <Text style={s.closeTxt}>✕</Text>
-        </TouchableOpacity>
-      </View>
+      <AppHeader title="Mes dossiers" subtitle={`Liste des dossiers envoyés par ${agentWa || 'votre agent'}`} rightIcon="✕" onRightPress={() => navigation.goBack()} />
 
       {loading ? (
         <View style={s.loadingBox}>
@@ -184,10 +219,36 @@ const s = StyleSheet.create({
     shadowColor: '#0F1720', shadowOpacity: 0.05, shadowRadius: 16, shadowOffset: { width: 0, height: 8 },
     elevation: 3,
   },
-  row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  label: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
-  value: { color: C.ink, fontSize: T.sm, flexShrink: 1, textAlign: 'right' },
-  statusOk: { color: C.success },
-  statusKo: { color: C.dangerText },
-  statusPending: { color: C.yellow },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  avatarWrap: { width: 42, height: 42, borderRadius: 21, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  avatarTxt: { color: C.yellow, fontWeight: '800' },
+  cardTitleWrap: { flex: 1, marginRight: 12 },
+  cardId: { color: C.ink, fontSize: T.sm, fontWeight: '800' },
+  cardSub: { marginTop: 2, color: C.ink3, fontSize: T.xs },
+  badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
+  badgeText: { fontSize: T.xs, fontWeight: '800', textTransform: 'uppercase' },
+  scoreBox: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 12, borderRadius: R.lg,
+    backgroundColor: 'rgba(15,23,42,0.03)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)',
+  },
+  scoreLeft: { flex: 1 },
+  scoreLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
+  scoreValue: { marginTop: 2, color: C.ink, fontSize: T.lg, fontWeight: '900' },
+  matchPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
+  matchOk: { backgroundColor: 'rgba(76,175,80,0.12)', borderColor: 'rgba(76,175,80,0.24)' },
+  matchWarn: { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.24)' },
+  matchText: { fontSize: T.xs, fontWeight: '800' },
+  matchTextOk: { color: C.success },
+  matchTextWarn: { color: C.yellow },
+  metaGrid: { flexDirection: 'row', gap: 10 },
+  metaCell: { flex: 1, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: R.md, padding: 10, borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  metaLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
+  metaValue: { marginTop: 2, color: C.ink, fontSize: T.sm, fontWeight: '700' },
+  noteBox: { padding: 10, borderRadius: R.md, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  noteLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
+  noteValue: { marginTop: 2, color: C.ink, fontSize: T.sm },
+  statusOk: { backgroundColor: 'rgba(76,175,80,0.12)', borderColor: 'rgba(76,175,80,0.24)' },
+  statusKo: { backgroundColor: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.24)' },
+  statusPending: { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.24)' },
 });

@@ -57,8 +57,10 @@ type WebRTCPayload =
 // ── Stream listeners (CallScreen s'y abonne) ─────────────────────────────────
 type StreamListener = (event: StreamEvent) => void;
 type StreamEvent =
-  | { type: 'local';   stream: MediaStream }
-  | { type: 'remote';  stream: MediaStream }
+  | { type: 'local';        stream: MediaStream }
+  | { type: 'remote';       stream: MediaStream }
+  | { type: 'reconnecting' }   // coupure réseau transitoire, tentative de reprise en cours
+  | { type: 'reconnected' }    // ICE rétabli après une coupure transitoire
   | { type: 'ended' };
 
 // ── Callbacks principaux ─────────────────────────────────────────────────────
@@ -68,6 +70,7 @@ export type SignalingCallbacks = {
   onIncomingCall: (numeroMtn: string) => void;
   onCallEnded:    () => void;
   onError:        (msg: string) => void;
+  onMediaError?:  (msg: string) => void;  // caméra/micro indisponible
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,6 +87,15 @@ class SignalingService {
   private pingTimer:      ReturnType<typeof setInterval> | null = null;
   private reconnectDelay = 2000;
   private destroyed      = false;
+
+  // Watchdog ping/pong : si le serveur ne répond plus, on force une reconnexion
+  private missedPongs    = 0;
+  private awaitingPong   = false;
+
+  // Grâce ICE : un état 'disconnected' est souvent transitoire (réseau
+  // instable), on laisse une chance de reprise avant d'abandonner l'appel.
+  private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly ICE_GRACE_MS = 10_000;
 
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private localStream: MediaStream | null = null;
@@ -187,7 +199,8 @@ class SignalingService {
         break;
 
       case 'pong':
-        // keepalive OK
+        this.awaitingPong = false;
+        this.missedPongs = 0;
         break;
     }
   }
@@ -228,15 +241,29 @@ class SignalingService {
   }
 
   // ── Accepter l'appel (terrain → ouvre caméra + prépare PC) ──────────────────
+  // Idempotent : si déjà accepté (ex. réponse natives + in-app quasi simultanées),
+  // on renvoie le flux existant au lieu de rouvrir la caméra une 2e fois.
   async acceptCall (): Promise<MediaStream> {
+    if (this.localStream) return this.localStream;
+
     // Créer le PC avant l'offer au cas où l'offer arrive entre-temps
     if (!this.pc) this.pc = this.buildPeerConnection();
 
     const { mediaDevices } = getWebRTC();
-    const stream: MediaStream = await mediaDevices.getUserMedia({
-      audio: true,
-      video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
-    });
+    let stream: MediaStream;
+    try {
+      stream = await mediaDevices.getUserMedia({
+        audio: true,
+        video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
+      });
+    } catch (e: any) {
+      const msg = e?.name === 'NotAllowedError'
+        ? 'Permission caméra/micro refusée'
+        : 'Caméra ou micro indisponible';
+      this.callbacks?.onMediaError?.(msg);
+      this.endCallCleanup();
+      throw e;
+    }
     this.localStream = stream;
 
     stream.getTracks().forEach((track: MediaStreamTrack) => {
@@ -303,7 +330,38 @@ class SignalingService {
     });
 
     pc.addEventListener('connectionstatechange', () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      if (pc.connectionState === 'connected') {
+        // Reprise après une coupure — annule la grâce en cours s'il y en a une
+        if (this.iceGraceTimer) {
+          clearTimeout(this.iceGraceTimer);
+          this.iceGraceTimer = null;
+          this.emitStream({ type: 'reconnected' });
+        }
+        return;
+      }
+
+      if (pc.connectionState === 'disconnected') {
+        // Souvent transitoire (perte réseau brève) — on laisse une chance de
+        // reprise avant de considérer l'appel comme terminé.
+        if (this.iceGraceTimer) return; // grâce déjà en cours
+        this.emitStream({ type: 'reconnecting' });
+        if (typeof (pc as any).restartIce === 'function') {
+          try { (pc as any).restartIce(); } catch {}
+        }
+        this.iceGraceTimer = setTimeout(() => {
+          this.iceGraceTimer = null;
+          if (pc.connectionState !== 'connected') {
+            this.endCallCleanup();
+            this.emitStream({ type: 'ended' });
+            this.callbacks?.onCallEnded();
+          }
+        }, this.ICE_GRACE_MS);
+        return;
+      }
+
+      if (pc.connectionState === 'failed') {
+        // Échec définitif — pas de grâce
+        if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
         this.endCallCleanup();
         this.emitStream({ type: 'ended' });
         this.callbacks?.onCallEnded();
@@ -311,6 +369,12 @@ class SignalingService {
     });
 
     return pc;
+  }
+
+  // ── Re-synchroniser le token FCM (après refresh Firebase) ───────────────
+  updateFcmToken (fcmToken: string) {
+    this.fcmToken = fcmToken;
+    this.sendRaw({ type: 'register', role: 'terrain', numero: this.numeroAgent, fcmToken });
   }
 
   // ── Refuser l'appel ──────────────────────────────────────────────────────
@@ -355,6 +419,7 @@ class SignalingService {
 
   // ── Nettoyage fin d'appel ─────────────────────────────────────────────────
   private endCallCleanup () {
+    if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
     if (this.pc) {
@@ -366,11 +431,30 @@ class SignalingService {
   }
 
   // ── Ping heartbeat ────────────────────────────────────────────────────────
+  // Réseaux mobiles instables (Afrique centrale) : le WebSocket peut rester
+  // "zombie" (readyState OPEN mais aucune donnée ne circule plus). Si 2 pings
+  // d'affilée restent sans pong, on force la fermeture pour déclencher onclose
+  // → reconnexion, plutôt que d'attendre un timeout TCP qui peut prendre des minutes.
   private startPing () {
-    this.pingTimer = setInterval(() => this.sendRaw({ type: 'ping' }), 25000);
+    this.missedPongs  = 0;
+    this.awaitingPong = false;
+    this.pingTimer = setInterval(() => {
+      if (this.awaitingPong) {
+        this.missedPongs += 1;
+        if (this.missedPongs >= 2) {
+          console.warn('[Signal] Watchdog : connexion muette, reconnexion forcée');
+          this.ws?.close();
+          return;
+        }
+      }
+      this.awaitingPong = true;
+      this.sendRaw({ type: 'ping' });
+    }, 15000);
   }
   private stopPing () {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    this.missedPongs  = 0;
+    this.awaitingPong = false;
   }
 
   // ── Envoi brut (si WS ouvert) ─────────────────────────────────────────────

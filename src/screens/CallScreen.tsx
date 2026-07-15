@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  StatusBar, Platform, Animated, Easing,
+  StatusBar, Platform, Animated, Easing, NativeModules,
 } from 'react-native';
 import type { MediaStream } from 'react-native-webrtc';
 import { useKeepAwake } from 'react-native-keep-awake';
@@ -33,10 +33,28 @@ export function CallScreen({ route, navigation }: any) {
   const [timerSec,     setTimerSec]     = useState(0);
   const [hasRemote,    setHasRemote]    = useState(false);
   const [controlsVis,  setControlsVis]  = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeAnim    = useRef(new Animated.Value(1)).current;
+
+  // ── Foreground service natif (notification persistante + wake lock) ──────
+  // Sans cet appel, KycForegroundCallService n'est jamais démarré : pas de
+  // notification "appel en cours", pas de wake lock, et Android peut tuer
+  // l'appel dès que l'app passe en arrière-plan.
+  useEffect(() => {
+    if (Platform.OS === 'android' && NativeModules.KycCallModule?.startForeground) {
+      try { NativeModules.KycCallModule.startForeground(numeroMtn || ''); }
+      catch (e) { console.warn('[CallScreen] startForeground natif indisponible:', e); }
+    }
+    return () => {
+      if (Platform.OS === 'android' && NativeModules.KycCallModule?.stopForeground) {
+        try { NativeModules.KycCallModule.stopForeground(); }
+        catch (e) { console.warn('[CallScreen] stopForeground natif indisponible:', e); }
+      }
+    };
+  }, []);
 
   // ── Abonnement streams ────────────────────────────────────────────────────
   useEffect(() => {
@@ -50,6 +68,14 @@ export function CallScreen({ route, navigation }: any) {
           setStatusTxt('Connecté');
           notificationService.setCallConnected(callUuid);
           startTimer();
+          break;
+        case 'reconnecting':
+          setReconnecting(true);
+          setStatusTxt('Reconnexion…');
+          break;
+        case 'reconnected':
+          setReconnecting(false);
+          setStatusTxt('Connecté');
           break;
         case 'ended':
           handleEndCall(false); break;
@@ -96,7 +122,17 @@ export function CallScreen({ route, navigation }: any) {
   const handleToggleCamera = () => { const on = signalingService.toggleCamera(); setIsCameraOn(on); callStore.setCameraOn(on); showControls(); };
   const handleSwitchCamera = async () => { try { await signalingService.switchCamera(); } catch {} showControls(); };
 
-  const dotColor = hasRemote ? C.success : C.warn;
+  const dotColor = reconnecting ? C.warn : hasRemote ? C.success : C.warn;
+
+  // Pendant une reconnexion, on garde les contrôles visibles (l'utilisateur
+  // doit pouvoir raccrocher facilement s'il le souhaite).
+  useEffect(() => {
+    if (reconnecting) {
+      if (hideTimeout.current) clearTimeout(hideTimeout.current);
+      setControlsVis(true);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    }
+  }, [reconnecting]);
 
   return (
     <View style={s.root}>
@@ -134,6 +170,16 @@ export function CallScreen({ route, navigation }: any) {
           <Text style={s.timerTxt}>{fmt(timerSec)}</Text>
         </View>
       </Animated.View>
+
+      {/* ── Bandeau de reconnexion ───────────────────────────────────────── */}
+      {reconnecting && (
+        <View style={s.reconnectBanner} pointerEvents="none">
+          <View style={s.reconnectDotWrap}>
+            <View style={s.reconnectDot} />
+          </View>
+          <Text style={s.reconnectTxt}>Connexion instable — reconnexion en cours…</Text>
+        </View>
+      )}
 
       {/* ── PiP local ─────────────────────────────────────────────────────── */}
       {localStream && (
@@ -227,6 +273,19 @@ const s = StyleSheet.create({
 
   timerWrap: { flex: 1, alignItems: 'flex-end' },
   timerTxt:  { fontSize: T.sm, fontWeight: '700', color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
+
+  // ── Bandeau reconnexion ──
+  reconnectBanner: {
+    position: 'absolute', top: Platform.OS === 'ios' ? 108 : 84, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(245,158,11,0.16)',
+    borderWidth: 1, borderColor: 'rgba(245,158,11,0.45)',
+    borderRadius: R.pill, paddingVertical: 8, paddingHorizontal: 14,
+    alignSelf: 'center',
+  },
+  reconnectDotWrap: { width: 8, height: 8 },
+  reconnectDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.warn },
+  reconnectTxt: { fontSize: T.xs, fontWeight: '600', color: '#FDE68A' },
 
   // ── PiP ──
   pip: {

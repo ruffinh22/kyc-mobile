@@ -8,8 +8,9 @@
 
 import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import CallKeep from 'react-native-callkeep';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { callSessionService } from './CallSessionService';
 
 // ── Config CallKeep ──────────────────────────────────────────────────────────
 const CALLKEEP_OPTIONS = {
@@ -50,10 +51,14 @@ class NotificationService {
   private activeCallUuid: string | null = null;
   private fcmToken: string | null = null;
   private listenersBound = false;
+  private initialized = false;
 
   // ── Initialisation ──────────────────────────────────────────────────────────
   async init (cbs: NotifCallbacks): Promise<void> {
     this.callbacks = cbs;
+    if (this.initialized) return;
+
+    this.initialized = true;
     await this.requestNotificationPermission();
     await this.setupCallKeep();
     await this.setupFCM();
@@ -79,6 +84,18 @@ class NotificationService {
 
   // ── Token FCM (sync après init) ──────────────────────────────────────────
   getFCMToken (): string | null {
+    return this.fcmToken;
+  }
+
+  async ensureFCMToken (): Promise<string | null> {
+    if (this.fcmToken) return this.fcmToken;
+
+    this.fcmToken = await this.fetchFCMTokenWithRetry(3);
+    if (this.fcmToken) {
+      await AsyncStorage.setItem('fcm_token', this.fcmToken);
+      this.callbacks?.onTokenRefresh?.(this.fcmToken);
+      console.log('[FCM] Token prêt pour la signalisation', this.fcmToken.slice(0, 20));
+    }
     return this.fcmToken;
   }
 
@@ -140,6 +157,10 @@ class NotificationService {
     // Token FCM — mis en cache mémoire + AsyncStorage, avec quelques tentatives
     // avant de se rabattre sur le cache (réseau instable au premier lancement).
     this.fcmToken = await this.fetchFCMTokenWithRetry(3);
+    if (this.fcmToken) {
+      await AsyncStorage.setItem('fcm_token', this.fcmToken);
+      this.callbacks?.onTokenRefresh?.(this.fcmToken);
+    }
 
     // Refresh du token — le serveur doit être resynchronisé (sinon push mort)
     messaging().onTokenRefresh(async (newToken) => {
@@ -198,6 +219,15 @@ class NotificationService {
   // ── Afficher l'écran d'appel natif ──────────────────────────────────────
   showIncomingCall (callUuid: string, numeroMtn: string): void {
     this.activeCallUuid = callUuid;
+    callSessionService.startIncomingCallExperience();
+
+    try {
+      const nativeCallModule = (NativeModules.KycCallModule as any);
+      nativeCallModule?.startForeground?.(numeroMtn);
+    } catch (e) {
+      console.warn('[Notif] startForeground failed:', e);
+    }
+
     CallKeep.displayIncomingCall(
       callUuid,
       numeroMtn,
@@ -214,6 +244,15 @@ class NotificationService {
       CallKeep.endCall(id);
       if (id === this.activeCallUuid) this.activeCallUuid = null;
     }
+
+    callSessionService.stopIncomingCallExperience();
+
+    try {
+      const nativeCallModule = (NativeModules.KycCallModule as any);
+      nativeCallModule?.stopForeground?.();
+    } catch (e) {
+      console.warn('[Notif] stopForeground failed:', e);
+    }
   }
 
   // ── Marquer l'appel comme connecté (démarre le timer CallKeep) ──────────
@@ -228,6 +267,7 @@ class NotificationService {
     CallKeep.removeEventListener('didPerformSetMutedCallAction');
     CallKeep.removeEventListener('didActivateAudioSession');
     this.listenersBound = false;
+    this.initialized = false;
   }
 }
 

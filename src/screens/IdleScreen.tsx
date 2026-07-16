@@ -10,7 +10,7 @@ import {
   Animated, Easing, StatusBar,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import KeepAwake from 'react-native-keep-awake';
+import { keepAwake } from '../utils/keepAwake';
 import { useAgentStore, useCallStore } from '../store/callStore';
 import { signalingService }   from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
@@ -21,7 +21,10 @@ import { IconTile } from '../components/IconTile';
 import { BottomTabBar } from '../components/BottomTabBar';
 
 export function IdleScreen({ navigation }: any) {
-  useEffect(() => { KeepAwake.activate(); return () => KeepAwake.deactivate(); }, []);
+  useEffect(() => {
+    keepAwake.activate();
+    return () => keepAwake.deactivate();
+  }, []);
 
   const { numeroAgent, serverUrl, setConnected, isConnected, logout } = useAgentStore();
   const callStore = useCallStore();
@@ -66,35 +69,8 @@ export function IdleScreen({ navigation }: any) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await notificationService.init({
-        onIncomingCall: handleIncomingCall,
-        onCallAccepted: async (uuid) => {
-          if (cancelled) return;
-          // Garde anti-doublon : si déjà pris en charge par le flux in-app
-          // (IncomingCallScreen.handleAccept), on ne relance rien.
-          const status = useCallStore.getState().status;
-          if (status === 'connecting' || status === 'active') return;
-
-          callStore.setConnecting();
-          const { numeroMtn, callUuid: storedUuid } = useCallStore.getState();
-          try {
-            // Sans cet appel, une réponse depuis l'écran verrouillé natif
-            // n'ouvrait jamais la caméra/micro ni la connexion WebRTC.
-            await signalingService.acceptCall();
-            notificationService.endNativeCall(uuid || storedUuid);
-            navigation.replace('Call', { callUuid: uuid || storedUuid, numeroMtn });
-          } catch {
-            signalingService.refuseCall();
-            callStore.resetCall();
-            navigation.replace('Idle');
-          }
-        },
-        onCallDeclined: (_uuid) => { if (!cancelled) signalingService.refuseCall(); },
-        onCallEnded:    (_uuid) => { if (!cancelled) { signalingService.hangUp(); navigation.replace('Idle'); } },
-        onTokenRefresh: (newToken) => signalingService.updateFcmToken(newToken),
-      });
+      const fcmToken = (await notificationService.ensureFCMToken()) ?? '';
       if (cancelled) return;
-      const fcmToken = notificationService.getFCMToken() ?? '';
       signalingService.init(serverUrl, numeroAgent, fcmToken, {
         onConnected:    () => setConnected(true),
         onDisconnected: () => setConnected(false),
@@ -109,7 +85,7 @@ export function IdleScreen({ navigation }: any) {
         onMediaError:(msg) => { console.warn('[Signal] Média:', msg); callStore.setFailed(msg); },
       });
     })();
-    return () => { cancelled = true; signalingService.destroy(); notificationService.destroy(); };
+    return () => { cancelled = true; };
   }, [serverUrl, numeroAgent]);
 
   const handleLogout = async () => {
@@ -117,6 +93,10 @@ export function IdleScreen({ navigation }: any) {
     await AsyncStorage.multiRemove(['kyc_numero', 'kyc_server']);
     logout();
     navigation.replace('Login');
+  };
+
+  const handleAccount = () => {
+    navigation.navigate('Account');
   };
 
   const initials   = numeroAgent.substring(0, 2).toUpperCase();
@@ -140,10 +120,6 @@ export function IdleScreen({ navigation }: any) {
         </View>
 
         <Text style={s.waitTitle}>En attente d'un appel</Text>
-        <Text style={s.waitSub}>
-          Gardez cette page ouverte.{'\n'}
-          Vous serez notifié dès qu'une{'\n'}vérification KYC est déclenchée.
-        </Text>
 
         {errorMessage ? (
           <View style={s.alertBanner}>
@@ -163,7 +139,7 @@ export function IdleScreen({ navigation }: any) {
         <View style={s.grid}>
           <IconTile icon="📱" label="Soumettre" color={C.blue} onPress={() => navigation.navigate('Acquisition')} />
           <IconTile icon="🗂️" label="Dossiers" color={C.yellow} onPress={() => navigation.navigate('DossierList')} />
-          <IconTile icon="🔐" label="Compte" color={C.success} onPress={handleLogout} />
+          <IconTile icon="🔐" label="Compte" color={C.success} onPress={handleAccount} />
           <IconTile icon="📞" label="Appels" color={C.blueMid} onPress={() => navigation.navigate('IncomingCall', { numeroMtn: '000', callUuid: 'demo' })} />
         </View>
       </View>
@@ -171,7 +147,7 @@ export function IdleScreen({ navigation }: any) {
       <BottomTabBar tabs={[{key:'home',label:'Accueil',icon:'🏠'},{key:'submit',label:'Soumettre',icon:'📱'},{key:'dossiers',label:'Dossiers',icon:'🗂️'},{key:'account',label:'Compte',icon:'👤'}]} activeKey="home" onChange={(key) => {
         if (key === 'submit') navigation.navigate('Acquisition');
         if (key === 'dossiers') navigation.navigate('DossierList');
-        if (key === 'account') handleLogout();
+        if (key === 'account') handleAccount();
       }} />
     </View>
   );
@@ -281,8 +257,8 @@ const s = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 12,
+    alignItems: 'flex-start',
+    width: '100%',
   },
   btnPrimary: {
     paddingVertical: 16, borderRadius: R.lg,

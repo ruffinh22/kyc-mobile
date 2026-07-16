@@ -42,8 +42,7 @@
   <!-- ═══ APPEL SUR ÉCRAN VERROUILLÉ ═══ -->
   <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"
-      android:minSdkVersion="34" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
   <!-- ═══ FOREGROUND SERVICE — TYPES CAMÉRA/MICRO (obligatoire API 34+) ═══
        Depuis Android 14, un foreground service qui capture caméra/micro doit
@@ -51,10 +50,8 @@
        sur le service lui-même (voir KycForegroundCallService ci-dessous).
        Sans elles, le service est arrêté par le système lors du passage en
        arrière-plan pendant un appel actif. -->
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
-      android:minSdkVersion="34" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
-      android:minSdkVersion="34" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
   <!-- ═══ CALLKEEP (Android Telecom API) ═══ -->
   <uses-permission android:name="android.permission.CALL_PHONE" />

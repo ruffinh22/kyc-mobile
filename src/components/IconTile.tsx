@@ -21,7 +21,12 @@ export function IconTile({ icon, label, color = C.blue, onPress }: IconTileProps
 }
 
 const s = StyleSheet.create({
-  tile: { alignItems: 'center', width: 84, marginBottom: 14 },
+  tile: {
+    alignItems: 'center',
+    width: 84,
+    marginBottom: 14,
+    flexBasis: 84,
+  },
   iconCircle: {
     width: 56,
     height: 56,

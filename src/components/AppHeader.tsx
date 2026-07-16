@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, R, T } from '../theme/tokens';
 
 interface AppHeaderProps {
@@ -10,8 +11,10 @@ interface AppHeaderProps {
 }
 
 export function AppHeader({ title, subtitle, rightIcon, onRightPress }: AppHeaderProps) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={s.container}>
+    <View style={[s.container, { paddingTop: insets.top + 12 }]}> 
       <View style={s.left}>
         <View style={s.logoWrap}>
           <View style={s.logoInner}>

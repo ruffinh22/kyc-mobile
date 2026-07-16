@@ -3,8 +3,8 @@
  * Navigation stack : Login → Idle → IncomingCall → Call
  * Auto-restore de session si numero + serveur mémorisés
  */
-import React, { useEffect, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useRef, useState } from 'react';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -18,13 +18,17 @@ import { IncomingCallScreen }      from './src/screens/IncomingCallScreen';
 import { CallScreen }              from './src/screens/CallScreen';
 import { AcquisitionScreenPro }    from './src/screens/AcquisitionScreenPro';
 import { FaceVerifyScreen }        from './src/screens/FaceVerifyScreen';
-import { useAgentStore }           from './src/store/callStore';
+import { AccountScreen }           from './src/screens/AccountScreen';
+import { useAgentStore, useCallStore } from './src/store/callStore';
+import { notificationService } from './src/services/NotificationService';
+import { signalingService } from './src/services/SignalingService';
 
 const Stack = createStackNavigator();
 
 export default function App() {
   const [initialRoute, setInitialRoute] = useState<string | null>(null);
   const setAgent = useAgentStore(s => s.setAgent);
+  const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
   // ── Restauration de session ──────────────────────────────────────────────
   useEffect(() => {
@@ -46,6 +50,51 @@ export default function App() {
     })();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const handleIncomingFromAppStart = (callUuid: string, numeroMtn: string) => {
+      if (cancelled) return;
+      useCallStore.getState().setIncomingCall(numeroMtn, callUuid);
+      const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+      if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
+      navigationRef.current?.reset({
+        index: 0,
+        routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
+      });
+    };
+
+    const handleAcceptedFromAppStart = async (uuid: string) => {
+      if (cancelled) return;
+      const { numeroMtn } = useCallStore.getState();
+      useCallStore.getState().setConnecting();
+      try {
+        await signalingService.acceptCall();
+        navigationRef.current?.reset({
+          index: 0,
+          routes: [{ name: 'Call', params: { callUuid: uuid, numeroMtn } }],
+        });
+      } catch {
+        signalingService.refuseCall();
+        useCallStore.getState().resetCall();
+        navigationRef.current?.reset({ index: 0, routes: [{ name: 'Idle' }] });
+      }
+    };
+
+    notificationService.init({
+      onIncomingCall: handleIncomingFromAppStart,
+      onCallAccepted: handleAcceptedFromAppStart,
+      onCallDeclined: () => signalingService.refuseCall(),
+      onCallEnded: () => {
+        signalingService.hangUp();
+        navigationRef.current?.reset({ index: 0, routes: [{ name: 'Idle' }] });
+      },
+      onTokenRefresh: (newToken) => signalingService.updateFcmToken(newToken),
+    }).catch((err) => console.warn('[App] Notification init failed', err));
+
+    return () => { cancelled = true; };
+  }, []);
+
   if (!initialRoute) {
     return (
       <View style={{ flex: 1, backgroundColor: '#0D1117', alignItems: 'center', justifyContent: 'center' }}>
@@ -58,7 +107,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <Stack.Navigator
             initialRouteName={initialRoute}
             screenOptions={{
@@ -71,6 +120,7 @@ export default function App() {
             <Stack.Screen name="Idle"          component={IdleScreen} />
             <Stack.Screen name="DossierList"   component={DossierListScreen} />
             <Stack.Screen name="Acquisition"   component={AcquisitionScreenPro} />
+            <Stack.Screen name="Account"       component={AccountScreen} />
             <Stack.Screen name="FaceVerifyScreen" component={FaceVerifyScreen} options={{ presentation: 'modal' }} />
             <Stack.Screen
               name="IncomingCall"

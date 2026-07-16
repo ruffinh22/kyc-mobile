@@ -33,6 +33,63 @@ const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 // Peers WebRTC par wa_agent (signaling)
 const signalingPeers = new Map<string, Set<WsSocket>>();
+const terrainSockets = new Map<string, WsSocket>();
+const terrainTokens = new Map<string, string>();
+
+function normalizeNumero(value: string | undefined): string {
+  return String(value ?? '').replace(/\D/g, '').slice(0, 20);
+}
+
+async function sendIncomingCallPush(params: {
+  token: string;
+  numero: string;
+  numeroMtn: string;
+  callUuid: string;
+}): Promise<boolean> {
+  const serverKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY;
+  if (!params.token || !serverKey) return false;
+
+  const payload = {
+    to: params.token,
+    priority: 'high',
+    data: {
+      type: 'incoming-call',
+      numero: params.numero,
+      numeroMtn: params.numeroMtn,
+      callUuid: params.callUuid,
+      sentAt: String(Date.now()),
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        title: 'Appel vidéo entrant',
+        body: `Appel de ${params.numeroMtn}`,
+      },
+    },
+  };
+
+  try {
+    const res = await fetch('https://fcm.googleapis.com/fcm/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `key=${serverKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.warn('[FCM] push failed', res.status, text);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('[FCM] push exception', err);
+    return false;
+  }
+}
 
 function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
@@ -311,10 +368,55 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // NOTE: prepare/verify-session endpoints are defined in `face-verify.ts`.
 
   // ==========================================================================
+  // HTTP /api/call/test — déclenche un appel entrant vers un terrain depuis le serveur
+  // ==========================================================================
+  app.post('/api/call/test', async (req, reply) => {
+    const body = (req.body ?? {}) as { numero?: string; numeroMtn?: string };
+    const numero = normalizeNumero(body.numero);
+    const numeroMtn = String(body.numeroMtn ?? '0700000000');
+
+    if (!numero) {
+      return reply.code(400).send({ success: false, error: 'numero requis' });
+    }
+
+    const targetSocket = terrainSockets.get(numero);
+    const pushToken = terrainTokens.get(numero);
+    const callUuid = `server-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    let wsDelivered = false;
+    if (targetSocket) {
+      try {
+        targetSocket.send(JSON.stringify({ type: 'incoming-call', numeroMtn, numero, callUuid }));
+        wsDelivered = true;
+      } catch {
+        wsDelivered = false;
+      }
+    }
+
+    let pushDelivered = false;
+    if (pushToken) {
+      pushDelivered = await sendIncomingCallPush({ token: pushToken, numero, numeroMtn, callUuid });
+    }
+
+    return reply.send({
+      success: true,
+      delivered: wsDelivered || pushDelivered,
+      via: wsDelivered ? (pushDelivered ? 'ws+fcm' : 'ws') : (pushDelivered ? 'fcm' : 'none'),
+      wsDelivered,
+      pushDelivered,
+      numero,
+      numeroMtn,
+      callUuid,
+      message: wsDelivered || pushDelivered ? 'appel distribué' : 'terrain non connecté et aucune clé FCM disponible',
+    });
+  });
+
   // WS /api/signaling — WebRTC signaling terrain ↔ back-office
   // ==========================================================================
   app.get('/api/signaling', { websocket: true }, (socket: WsSocket, _req: FastifyRequest) => {
     let room: string | null = null;
+    let role: string | null = null;
+    let numero: string | null = null;
 
     const send = (data: unknown) => {
       try { socket.send(JSON.stringify(data)); } catch { /* fermé */ }
@@ -322,7 +424,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
     socket.on('message', (raw: Buffer) => {
       try {
-        const msg = JSON.parse(raw.toString()) as { type: string; room?: string; [k: string]: unknown };
+        const msg = JSON.parse(raw.toString()) as { type: string; room?: string; role?: string; numero?: string; numeroMtn?: string; fcmToken?: string; [k: string]: unknown };
 
         if (msg.type === 'join' && msg.room) {
           room = String(msg.room).replace(/\D/g, '').slice(0, 15);
@@ -334,6 +436,30 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
               try { peer.send(JSON.stringify({ type: 'peer-joined', room })); } catch { /* fermé */ }
             }
           });
+          return;
+        }
+
+        if (msg.type === 'register') {
+          role = String(msg.role ?? '').toLowerCase();
+          numero = normalizeNumero(msg.numero);
+          if (!numero) return;
+          if (role === 'terrain') {
+            terrainSockets.set(numero, socket);
+            if (msg.fcmToken) terrainTokens.set(numero, String(msg.fcmToken));
+            send({ type: 'registered', role: 'terrain', numero });
+          }
+          return;
+        }
+
+        if (msg.type === 'call' && role === 'backoffice' && numero) {
+          const target = normalizeNumero(msg.numero);
+          const targetSocket = terrainSockets.get(target);
+          if (targetSocket) {
+            try {
+              targetSocket.send(JSON.stringify({ type: 'incoming-call', numeroMtn: String(msg.numeroMtn ?? ''), numero: target }));
+            } catch { /* fermé */ }
+          }
+          send({ type: targetSocket ? 'call-delivered' : 'terrain-absent', numero: target });
           return;
         }
 
@@ -360,6 +486,9 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
             try { peer.send(JSON.stringify({ type: 'peer-left', room })); } catch { /* fermé */ }
           });
         }
+      }
+      if (role === 'terrain' && numero) {
+        terrainSockets.delete(numero);
       }
     });
   });

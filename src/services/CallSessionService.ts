@@ -1,7 +1,7 @@
 import { Vibration, Platform } from 'react-native';
 import Sound from 'react-native-sound';
 
-const VIBRATION_PATTERN = [0, 600, 350, 600, 350, 600];
+const VIBRATION_PATTERN = [0, 700, 400, 700, 400, 900];
 
 class CallSessionService {
   private ringtoneRef: Sound | null = null;
@@ -25,13 +25,13 @@ class CallSessionService {
   private startRingtone(): void {
     if (this.ringtoneRef) return;
     Sound.setCategory('Playback', true);
-    const sound = new Sound('ringtone.mp3', Sound.MAIN_BUNDLE, (err) => {
+    const sound = new Sound('ringtone.wav', Sound.MAIN_BUNDLE, (err) => {
       if (err || !this.isActive) {
         if (sound) sound.release();
         return;
       }
       sound.setNumberOfLoops(-1);
-      sound.setVolume(Platform.OS === 'ios' ? 0.8 : 1.0);
+      sound.setVolume(Platform.OS === 'ios' ? 0.9 : 1.0);
       sound.play();
       this.ringtoneRef = sound;
     });
@@ -51,7 +51,7 @@ class CallSessionService {
     Vibration.vibrate(VIBRATION_PATTERN, true);
     this.vibrationTimer = setInterval(() => {
       Vibration.vibrate(VIBRATION_PATTERN, true);
-    }, 3600);
+    }, 2200);
   }
 
   private stopVibration(): void {

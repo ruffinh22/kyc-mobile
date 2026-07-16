@@ -9,14 +9,17 @@ import {
   StatusBar, Platform, Animated, Easing, NativeModules,
 } from 'react-native';
 import type { MediaStream } from 'react-native-webrtc';
-import { useKeepAwake } from 'react-native-keep-awake';
+import { keepAwake } from '../utils/keepAwake';
 import { signalingService }    from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
 import { useCallStore }         from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
 
 export function CallScreen({ route, navigation }: any) {
-  useKeepAwake();
+  useEffect(() => {
+    keepAwake.activate();
+    return () => keepAwake.deactivate();
+  }, []);
 
   const { callUuid, numeroMtn } = route.params ?? {};
   const RTCView = useMemo(() => {

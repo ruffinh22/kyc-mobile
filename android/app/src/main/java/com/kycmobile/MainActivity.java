@@ -18,7 +18,7 @@ public class MainActivity extends ReactActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+        super.onCreate(null);
 
         // ── Allume l'écran et affiche par-dessus le keyguard ──────────────
         // Nécessaire pour l'écran d'appel entrant sur Android 8+

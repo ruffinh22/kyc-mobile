@@ -65,6 +65,12 @@ async function main(): Promise<void> {
     reply.code(404).send({ error: 'Route introuvable' })
   );
 
+  if (!process.env.FCM_SERVER_KEY && !process.env.FCM_API_KEY) {
+    app.log.warn('[FCM] FCM_SERVER_KEY/FCM_API_KEY non défini — les pushes d\'appel entrants seront désactivés en arrière-plan');
+  } else {
+    app.log.info('[FCM] Clé serveur FCM détectée — les appels entrants peuvent être poussés en arrière-plan');
+  }
+
   await app.listen({ port: PORT, host: HOST });
   app.log.info(`✅ KYC V4 démarré — http://${HOST}:${PORT} [${NODE_ENV}]`);
 

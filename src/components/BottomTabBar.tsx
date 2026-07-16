@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, R, T } from '../theme/tokens';
 
 interface TabItem {
@@ -15,8 +16,10 @@ interface BottomTabBarProps {
 }
 
 export function BottomTabBar({ tabs, activeKey, onChange }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={s.container}>
+    <View style={[s.container, { paddingBottom: insets.bottom + 10 }]}> 
       {tabs.map((tab) => {
         const active = tab.key === activeKey;
         return (

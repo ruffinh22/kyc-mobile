@@ -5,7 +5,7 @@ buildscript {
         compileSdkVersion = 35
         targetSdkVersion = 35
         ndkVersion = "25.2.9519653"
-        kotlinVersion = "1.9.22"
+        kotlinVersion = "1.8.0"
         hermesEnabled = true
         reactNativeVersion = "0.73.6"
     }
@@ -15,18 +15,46 @@ buildscript {
         mavenLocal()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.6.0")
+        classpath("com.android.tools.build:gradle:8.3.1")
         classpath("com.google.gms:google-services:4.4.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.10")
         classpath("com.facebook.react:react-native-gradle-plugin:0.73.6")
     }
 }
 
 allprojects {
     repositories {
+        maven {
+            url "$rootDir/../node_modules/expo-camera/android/maven"
+        }
         google()
         mavenCentral()
         maven { url 'https://www.jitpack.io' }
+        maven { url 'https://jitpack.io' }
+    }
+
+    configurations.all {
+        resolutionStrategy {
+            force 'org.jitsi:webrtc:118.0.0'
+        }
+    }
+}
+
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_17
+                    targetCompatibility JavaVersion.VERSION_17
+                }
+            }
+            project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions {
+                    jvmTarget = '17'
+                }
+            }
+        }
     }
 }
 

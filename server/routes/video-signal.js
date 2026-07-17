@@ -240,12 +240,13 @@ async function routes (fastify) {
       // ── webrtc (offer / answer / ice) ───────────────────────────────────
       if (msg.type === 'webrtc') {
         clearPendingCall(numero); // l'appel progresse réellement, plus de timeout à craindre
+        log(`[SIGNAL] relay webrtc ${msg.payload?.kind || 'unknown'} role=${role} numero=${numero}`);
         if (role === 'backoffice') {
           const t = terrainSockets.get(numero);
-          if (t) envoyer(t.socket, { type: 'webrtc', payload: msg.payload });
+          if (t) envoyer(t.socket, { type: 'webrtc', payload: msg.payload, numero });
         } else if (role === 'terrain') {
           const boSocket = backofficeSockets.get(numero);
-          if (boSocket) envoyer(boSocket, { type: 'webrtc', payload: msg.payload });
+          if (boSocket) envoyer(boSocket, { type: 'webrtc', payload: msg.payload, numero });
         }
         return;
       }

@@ -256,7 +256,7 @@ class NotificationService {
   }
 
   // ── Traitement payload FCM ──────────────────────────────────────────────
-  private handlePushPayload (msg: FirebaseMessagingTypes.RemoteMessage): void {
+  private async handlePushPayload (msg: FirebaseMessagingTypes.RemoteMessage): Promise<void> {
     const data = msg.data;
     if (!data || data.type !== 'incoming-call') return;
 
@@ -265,8 +265,25 @@ class NotificationService {
     const callUuid  = String(data.callUuid ?? `fcm-${Date.now()}`);
 
     this.activeCallUuid = callUuid;
+    await this.persistPendingIncomingCall(callUuid, numeroMtn);
     this.showIncomingCall(callUuid, numeroMtn);
     this.callbacks?.onIncomingCall(callUuid, numeroMtn);
+  }
+
+  private async persistPendingIncomingCall (callUuid: string, numeroMtn: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem('pending_incoming_call', JSON.stringify({ callUuid, numeroMtn }));
+    } catch (e) {
+      console.warn('[Notif] impossible d’enregistrer l’appel entrant en attente', e);
+    }
+  }
+
+  private async clearPendingIncomingCall (): Promise<void> {
+    try {
+      await AsyncStorage.removeItem('pending_incoming_call');
+    } catch (e) {
+      console.warn('[Notif] impossible de nettoyer l’appel entrant en attente', e);
+    }
   }
 
   // ── Afficher l'écran d'appel natif ──────────────────────────────────────
@@ -279,7 +296,11 @@ class NotificationService {
       // Sur Android, démarre le service foreground natif qui joue lui-même
       // la sonnerie (sonneriekyc.mp3 ou repli système) + vibration, en boucle,
       // indépendamment de l'état du moteur JS — voir KycForegroundCallService.
-      nativeCallModule?.startForeground?.(numeroMtn);
+      if (nativeCallModule?.startForegroundWithCallData) {
+        nativeCallModule.startForegroundWithCallData(numeroMtn, callUuid);
+      } else {
+        nativeCallModule?.startForeground?.(numeroMtn);
+      }
     } catch (e) {
       console.warn('[Notif] startForeground failed:', e);
     }
@@ -298,11 +319,12 @@ class NotificationService {
   // la durée de l'appel). À appeler à la place de endNativeCall() quand
   // l'utilisateur accepte — endNativeCall() reste réservé au refus/raccroché/
   // timeout, qui doivent eux arrêter le service complètement.
-  answerNativeCall (callUuid?: string): void {
+  async answerNativeCall (callUuid?: string): Promise<void> {
     const id = callUuid ?? this.activeCallUuid;
     if (id) {
       CallKeep.setCurrentCallActive(id);
     }
+    await this.clearPendingIncomingCall();
     try {
       const nativeCallModule = (NativeModules.KycCallModule as any);
       nativeCallModule?.answerCall?.();
@@ -312,12 +334,13 @@ class NotificationService {
   }
 
   // ── Terminer l'appel natif ─────────────────────────────────────────────
-  endNativeCall (callUuid?: string): void {
+  async endNativeCall (callUuid?: string): Promise<void> {
     const id = callUuid ?? this.activeCallUuid;
     if (id) {
       CallKeep.endCall(id);
       if (id === this.activeCallUuid) this.activeCallUuid = null;
     }
+    await this.clearPendingIncomingCall();
 
     callSessionService.stopIncomingCallExperience();
 

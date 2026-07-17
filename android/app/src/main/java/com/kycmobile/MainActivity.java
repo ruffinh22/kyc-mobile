@@ -1,6 +1,7 @@
 package com.kycmobile;
 import expo.modules.ReactActivityDelegateWrapper;
 
+import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
@@ -20,6 +21,15 @@ public class MainActivity extends ReactActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(null);
 
+        Intent intent = getIntent();
+        if (intent != null) {
+            String callUuid = intent.getStringExtra("callUuid");
+            String numeroMtn = intent.getStringExtra("numeroMtn");
+            if (callUuid != null && numeroMtn != null) {
+                KycCallModule.setPendingIncomingCall(callUuid, numeroMtn);
+            }
+        }
+
         // ── Allume l'écran et affiche par-dessus le keyguard ──────────────
         // Nécessaire pour l'écran d'appel entrant sur Android 8+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -31,6 +41,19 @@ public class MainActivity extends ReactActivity {
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON   |
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             );
+        }
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null) {
+            String callUuid = intent.getStringExtra("callUuid");
+            String numeroMtn = intent.getStringExtra("numeroMtn");
+            if (callUuid != null && numeroMtn != null) {
+                KycCallModule.setPendingIncomingCall(callUuid, numeroMtn);
+            }
         }
     }
 

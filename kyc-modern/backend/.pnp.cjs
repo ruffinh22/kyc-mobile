@@ -42,7 +42,7 @@ const RAW_RUNTIME_STATE =
           ["@types/ws", "npm:8.18.1"],\
           ["bcrypt", "npm:6.0.0"],\
           ["dotenv", "npm:17.4.2"],\
-          ["fastify", "npm:5.9.0"],\
+          ["fastify", "npm:5.10.0"],\
           ["fastify-tsconfig", "npm:3.0.0"],\
           ["firebase-admin", "npm:14.1.0"],\
           ["jsonwebtoken", "npm:9.0.3"],\
@@ -1926,6 +1926,19 @@ const RAW_RUNTIME_STATE =
           ["rfdc", "npm:1.4.1"]\
         ],\
         "linkType": "HARD"\
+      }],\
+      ["npm:7.0.1", {\
+        "packageLocation": "../../../.yarn/berry/cache/fast-json-stringify-npm-7.0.1-b66ed3bab7-10c0.zip/node_modules/fast-json-stringify/",\
+        "packageDependencies": [\
+          ["@fastify/merge-json-schemas", "npm:0.2.1"],\
+          ["ajv", "npm:8.20.0"],\
+          ["ajv-formats", "virtual:42f2ffad249aa2355efc66861bbe173c02c83bb6ca1ed15de3d473bfddb2fb9d5da37115688b1cb010c633a945fbceedfea5b67e789b18c12fd1a0349e4ede12#npm:3.0.1"],\
+          ["fast-json-stringify", "npm:7.0.1"],\
+          ["fast-uri", "npm:4.1.0"],\
+          ["json-schema-ref-resolver", "npm:3.0.0"],\
+          ["rfdc", "npm:1.4.1"]\
+        ],\
+        "linkType": "HARD"\
       }]\
     ]],\
     ["fast-querystring", [\
@@ -1952,6 +1965,13 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "../../../.yarn/berry/cache/fast-uri-npm-3.1.3-90ca1925ff-10c0.zip/node_modules/fast-uri/",\
         "packageDependencies": [\
           ["fast-uri", "npm:3.1.3"]\
+        ],\
+        "linkType": "HARD"\
+      }],\
+      ["npm:4.1.0", {\
+        "packageLocation": "../../../.yarn/berry/cache/fast-uri-npm-4.1.0-debe479442-10c0.zip/node_modules/fast-uri/",\
+        "packageDependencies": [\
+          ["fast-uri", "npm:4.1.0"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -1983,8 +2003,8 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["fastify", [\
-      ["npm:5.9.0", {\
-        "packageLocation": "../../../.yarn/berry/cache/fastify-npm-5.9.0-39b1340a69-10c0.zip/node_modules/fastify/",\
+      ["npm:5.10.0", {\
+        "packageLocation": "../../../.yarn/berry/cache/fastify-npm-5.10.0-cfdf1c2d98-10c0.zip/node_modules/fastify/",\
         "packageDependencies": [\
           ["@fastify/ajv-compiler", "npm:4.0.5"],\
           ["@fastify/error", "npm:4.2.0"],\
@@ -1992,8 +2012,8 @@ const RAW_RUNTIME_STATE =
           ["@fastify/proxy-addr", "npm:5.1.0"],\
           ["abstract-logging", "npm:2.0.1"],\
           ["avvio", "npm:9.2.0"],\
-          ["fast-json-stringify", "npm:6.4.0"],\
-          ["fastify", "npm:5.9.0"],\
+          ["fast-json-stringify", "npm:7.0.1"],\
+          ["fastify", "npm:5.10.0"],\
           ["find-my-way", "npm:9.6.0"],\
           ["light-my-request", "npm:6.6.0"],\
           ["pino", "npm:10.3.1"],\
@@ -2889,7 +2909,7 @@ const RAW_RUNTIME_STATE =
           ["@types/ws", "npm:8.18.1"],\
           ["bcrypt", "npm:6.0.0"],\
           ["dotenv", "npm:17.4.2"],\
-          ["fastify", "npm:5.9.0"],\
+          ["fastify", "npm:5.10.0"],\
           ["fastify-tsconfig", "npm:3.0.0"],\
           ["firebase-admin", "npm:14.1.0"],\
           ["jsonwebtoken", "npm:9.0.3"],\

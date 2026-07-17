@@ -64,6 +64,7 @@ public class KycForegroundCallService extends Service {
     public static final String ACTION_ANSWER = "ANSWER_CALL";
     public static final String ACTION_STOP   = "STOP_CALL";
     public static final String EXTRA_NUMBER  = "numeroMtn";
+    public static final String EXTRA_CALL_UUID = "callUuid";
 
     private static final long[] VIBRATION_PATTERN = {0, 700, 400, 700, 400, 900};
     private static final int NOTIF_ID = 1001;
@@ -72,6 +73,7 @@ public class KycForegroundCallService extends Service {
     private MediaPlayer ringtonePlayer;
     private Vibrator vibrator;
     private String currentNumero = "…";
+    private String currentCallUuid = null;
 
     // ── Démarrage du service ──────────────────────────────────────────────
     @Override
@@ -82,6 +84,7 @@ public class KycForegroundCallService extends Service {
 
         if (ACTION_START.equals(action) || ACTION_RING.equals(action)) {
             currentNumero = intent.getStringExtra(EXTRA_NUMBER);
+            currentCallUuid = intent.getStringExtra(EXTRA_CALL_UUID);
             if (currentNumero == null) currentNumero = "…";
             createNotificationChannel();
             Notification notif = buildRingingNotification(currentNumero);
@@ -89,6 +92,7 @@ public class KycForegroundCallService extends Service {
             acquireWakeLock();
             startNativeRingtone();
             startNativeVibration();
+            launchIncomingCallActivity(currentNumero, currentCallUuid);
             return START_STICKY;
 
         } else if (ACTION_ANSWER.equals(action)) {
@@ -249,6 +253,19 @@ public class KycForegroundCallService extends Service {
         return type;
     }
 
+    private void launchIncomingCallActivity(String numeroMtn, String callUuid) {
+        try {
+            Intent activityIntent = new Intent(this, MainActivity.class);
+            activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            activityIntent.putExtra("numeroMtn", numeroMtn);
+            activityIntent.putExtra("callUuid", callUuid);
+            startActivity(activityIntent);
+            Log.i(TAG, "Activity d’appel entrant lancée depuis le service foreground");
+        } catch (Exception e) {
+            Log.w(TAG, "Impossible de lancer l’activité d’appel entrant", e);
+        }
+    }
+
     // ── Notification pendant la sonnerie ──────────────────────────────────
     private Notification buildRingingNotification(String numeroMtn) {
         return baseNotifBuilder(numeroMtn)
@@ -268,6 +285,12 @@ public class KycForegroundCallService extends Service {
     private NotificationCompat.Builder baseNotifBuilder(String numeroMtn) {
         Intent tapIntent = new Intent(this, MainActivity.class);
         tapIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (currentCallUuid != null) {
+            tapIntent.putExtra(EXTRA_CALL_UUID, currentCallUuid);
+        }
+        if (currentNumero != null) {
+            tapIntent.putExtra(EXTRA_NUMBER, currentNumero);
+        }
 
         int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
             ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
@@ -342,13 +365,24 @@ public class KycForegroundCallService extends Service {
 
     // ── Méthodes statiques (appelées depuis JS via NativeModule) ─────────
     public static void start(Context ctx, String numeroMtn) {
-        ring(ctx, numeroMtn);
+        ring(ctx, numeroMtn, null);
+    }
+
+    public static void start(Context ctx, String numeroMtn, String callUuid) {
+        ring(ctx, numeroMtn, callUuid);
     }
 
     public static void ring(Context ctx, String numeroMtn) {
+        ring(ctx, numeroMtn, null);
+    }
+
+    public static void ring(Context ctx, String numeroMtn, String callUuid) {
         Intent i = new Intent(ctx, KycForegroundCallService.class);
         i.setAction(ACTION_RING);
         i.putExtra(EXTRA_NUMBER, numeroMtn);
+        if (callUuid != null) {
+            i.putExtra(EXTRA_CALL_UUID, callUuid);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ctx.startForegroundService(i);
         } else {

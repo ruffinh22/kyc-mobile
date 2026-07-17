@@ -8,7 +8,7 @@ import { NavigationContainer, NavigationContainerRef } from '@react-navigation/n
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StatusBar, View, ActivityIndicator } from 'react-native';
+import { StatusBar, View, ActivityIndicator, AppState, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { LoginScreen }            from './src/screens/LoginScreen';
@@ -52,6 +52,35 @@ export default function App() {
     }
   };
 
+  const openIncomingCallRoute = async (callUuid: string, numeroMtn: string) => {
+    useCallStore.getState().setIncomingCall(numeroMtn, callUuid);
+    await AsyncStorage.setItem('pending_incoming_call', JSON.stringify({ callUuid, numeroMtn }));
+
+    const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+    if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
+
+    navigationRef.current?.reset({
+      index: 0,
+      routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
+    });
+  };
+
+  const restorePendingCallFromNative = async () => {
+    try {
+      const payload = await NativeModules.KycCallModule?.consumePendingIncomingCall?.();
+      if (!payload) return false;
+
+      const parsed = JSON.parse(payload) as { callUuid?: string; numeroMtn?: string };
+      if (!parsed.callUuid || !parsed.numeroMtn) return false;
+
+      await openIncomingCallRoute(parsed.callUuid, parsed.numeroMtn);
+      return true;
+    } catch (err) {
+      console.warn('[App] Native pending call restore failed', err);
+      return false;
+    }
+  };
+
   // ── Restauration de session ──────────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -77,13 +106,7 @@ export default function App() {
 
     const handleIncomingFromAppStart = (callUuid: string, numeroMtn: string) => {
       if (cancelled) return;
-      useCallStore.getState().setIncomingCall(numeroMtn, callUuid);
-      const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
-      if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
-      navigationRef.current?.reset({
-        index: 0,
-        routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
-      });
+      void openIncomingCallRoute(callUuid, numeroMtn);
     };
 
     const handleAcceptedFromAppStart = async (uuid: string) => {
@@ -119,6 +142,41 @@ export default function App() {
     }).catch((err) => console.warn('[App] Notification init failed', err));
 
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const restorePendingCall = async () => {
+      const fromNative = await restorePendingCallFromNative();
+      if (fromNative) return;
+
+      try {
+        const raw = await AsyncStorage.getItem('pending_incoming_call');
+        if (!raw) return;
+
+        const parsed = JSON.parse(raw) as { callUuid?: string; numeroMtn?: string };
+        if (!parsed.callUuid || !parsed.numeroMtn) return;
+
+        const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+        if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
+
+        useCallStore.getState().setIncomingCall(parsed.numeroMtn, parsed.callUuid);
+        navigationRef.current?.reset({
+          index: 0,
+          routes: [{ name: 'IncomingCall', params: { numeroMtn: parsed.numeroMtn, callUuid: parsed.callUuid } }],
+        });
+      } catch (err) {
+        console.warn('[App] Pending call restore failed', err);
+      }
+    };
+
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void restorePendingCall();
+      }
+    });
+
+    void restorePendingCall();
+    return () => sub.remove();
   }, []);
 
   if (!initialRoute) {

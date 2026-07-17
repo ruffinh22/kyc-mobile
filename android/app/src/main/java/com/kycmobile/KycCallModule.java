@@ -65,6 +65,8 @@ public class KycCallModule extends ReactContextBaseJavaModule {
     private String currentCallState = STATE_IDLE;
     private String currentPeerId = null;
     private long callStartTime = 0;
+    private static String pendingCallUuid = null;
+    private static String pendingNumeroMtn = null;
 
     public KycCallModule(ReactApplicationContext context) {
         super(context);
@@ -190,14 +192,36 @@ public class KycCallModule extends ReactContextBaseJavaModule {
      */
     @ReactMethod
     public void startForeground(String numeroMtn) {
+        startForegroundWithCallData(numeroMtn, null);
+    }
+
+    @ReactMethod
+    public void startForegroundWithCallData(String numeroMtn, String callUuid) {
         try {
-            Log.d(TAG, "startForeground called with numero: " + numeroMtn);
-            KycForegroundCallService.start(getReactApplicationContext(), numeroMtn);
+            Log.d(TAG, "startForegroundWithCallData called with numero: " + numeroMtn + " callUuid=" + callUuid);
+            KycForegroundCallService.start(getReactApplicationContext(), numeroMtn, callUuid);
             currentCallState = STATE_RINGING;
             Log.i(TAG, "Foreground service started");
         } catch (Exception e) {
             Log.e(TAG, "Error starting foreground service", e);
         }
+    }
+
+    public static void setPendingIncomingCall(String callUuid, String numeroMtn) {
+        pendingCallUuid = callUuid;
+        pendingNumeroMtn = numeroMtn;
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public String consumePendingIncomingCall() {
+        if (pendingCallUuid == null || pendingNumeroMtn == null) {
+            return "";
+        }
+        String payload = "{\"callUuid\":\"" + pendingCallUuid.replace("\\", "\\\\").replace("\"", "\\\"")
+            + "\",\"numeroMtn\":\"" + pendingNumeroMtn.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+        pendingCallUuid = null;
+        pendingNumeroMtn = null;
+        return payload;
     }
 
     /**

@@ -18,7 +18,7 @@ export function AppHeader({ title, subtitle, rightIcon, onRightPress }: AppHeade
       <View style={s.left}>
         <View style={s.logoWrap}>
           <View style={s.logoInner}>
-            <Text style={s.logoText}>M</Text>
+            <Text style={s.logoText}>MTN</Text>
           </View>
         </View>
         <View style={s.textWrap}>
@@ -70,7 +70,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoText: { color: C.blue, fontWeight: '900', fontSize: T.base },
+  logoText: { color: C.blue, fontWeight: '900', fontSize: 11 },
   textWrap: { marginLeft: 12, flex: 1 },
   title: { fontSize: T.md, fontWeight: '800', color: C.ink },
   subtitle: { marginTop: 2, fontSize: T.xs, color: C.ink3 },

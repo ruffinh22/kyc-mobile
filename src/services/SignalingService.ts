@@ -32,12 +32,10 @@ import { useCallStore } from '../store/callStore';
 
 const getWebRTC = () => require('react-native-webrtc') as any;
 
-// ── Config ICE ───────────────────────────────────────────────────────────────
-const ICE_SERVERS = [
+// ── Config ICE de secours ───────────────────────────────────────────────────
+const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  // TURN conseillé pour les réseaux contraints (Afrique centrale) :
-  // { urls: 'turn:turn.example.com:3478', username: 'user', credential: 'pass' },
 ];
 
 // ── Types protocole ──────────────────────────────────────────────────────────
@@ -205,6 +203,7 @@ class SignalingService {
         break;
 
       case 'pong':
+        console.log('[Signal] pong reçu, missedPongs remis à 0');
         this.awaitingPong = false;
         this.missedPongs = 0;
         break;
@@ -246,45 +245,76 @@ class SignalingService {
     }
   }
 
-  // ── Accepter l'appel (terrain → ouvre caméra + prépare PC) ──────────────────
-  // Idempotent : si déjà accepté (ex. réponse natives + in-app quasi simultanées),
-  // on renvoie le flux existant au lieu de rouvrir la caméra une 2e fois.
-  async acceptCall (): Promise<MediaStream> {
-    if (this.localStream) return this.localStream;
+  // ── Acquisition du flux local (caméra/micro) ─────────────────────────────────
+  // Idempotent et partagée entre acceptCall() et handleOffer() : quel que soit
+  // l'ordre d'arrivée (l'utilisateur appuie sur "Accepter" avant ou après que
+  // l'offer WebRTC arrive du serveur), les tracks locaux sont TOUJOURS ajoutés
+  // au PeerConnection avant qu'une answer ne soit créée/envoyée.
+  //
+  // BUG CORRIGÉ : auparavant, acceptCall() (déclenché par le tap utilisateur)
+  // et handleOffer() (déclenché par le message WS 'webrtc/offer') tournaient
+  // en parallèle sans se coordonner. getUserMedia() prenant ~3s (init caméra),
+  // handleOffer() créait et envoyait l'answer SDP AVANT que les tracks locaux
+  // ne soient ajoutés au PC — l'answer partait donc sans média. Comme il n'y a
+  // pas de renégociation (pas de re-offer après addTrack tardif), le
+  // back-office ne recevait jamais le flux vidéo/audio du terrain : la
+  // connexion ICE pouvait s'établir mais aucune image n'apparaissait jamais.
+  private ensureLocalStreamPromise: Promise<MediaStream> | null = null;
 
-    // Créer le PC avant l'offer au cas où l'offer arrive entre-temps
-    if (!this.pc) this.pc = this.buildPeerConnection();
+  private ensureLocalStream (): Promise<MediaStream> {
+    if (this.localStream) return Promise.resolve(this.localStream);
+    if (this.ensureLocalStreamPromise) return this.ensureLocalStreamPromise;
 
-    const { mediaDevices } = getWebRTC();
-    let stream: MediaStream;
-    try {
-      stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
+    this.ensureLocalStreamPromise = (async () => {
+      if (!this.pc) {
+        this.pc = await this.buildPeerConnection();
+      }
+
+      const { mediaDevices } = getWebRTC();
+      let stream: MediaStream;
+      try {
+        stream = await mediaDevices.getUserMedia({
+          audio: true,
+          video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
+        });
+      } catch (e: any) {
+        const msg = e?.name === 'NotAllowedError'
+          ? 'Permission caméra/micro refusée'
+          : 'Caméra ou micro indisponible';
+        this.callbacks?.onMediaError?.(msg);
+        this.endCallCleanup();
+        this.ensureLocalStreamPromise = null;
+        throw e;
+      }
+
+      this.localStream = stream;
+      stream.getTracks().forEach((track: MediaStreamTrack) => {
+        this.pc!.addTrack(track, stream);
       });
-    } catch (e: any) {
-      const msg = e?.name === 'NotAllowedError'
-        ? 'Permission caméra/micro refusée'
-        : 'Caméra ou micro indisponible';
-      this.callbacks?.onMediaError?.(msg);
-      this.endCallCleanup();
-      throw e;
-    }
-    this.localStream = stream;
+      this.emitStream({ type: 'local', stream });
+      return stream;
+    })();
 
-    stream.getTracks().forEach((track: MediaStreamTrack) => {
-      this.pc!.addTrack(track, stream);
-    });
+    return this.ensureLocalStreamPromise;
+  }
 
-    this.emitStream({ type: 'local', stream });
-    return stream;
+  // ── Accepter l'appel (terrain → ouvre caméra + prépare PC) ──────────────────
+  // Idempotent : si déjà accepté (ex. réponse natives + in-app quasi simultanées,
+  // ou si handleOffer a déjà déclenché l'acquisition), on renvoie le flux
+  // existant/en cours au lieu de rouvrir la caméra une 2e fois.
+  async acceptCall (): Promise<MediaStream> {
+    return this.ensureLocalStream();
   }
 
   // ── Traitement de l'offer (reçu du back-office) ───────────────────────────
   private async handleOffer (sdp: string) {
-    if (!this.pc) this.pc = this.buildPeerConnection();
+    if (!this.pc) this.pc = await this.buildPeerConnection();
 
     try {
+      // Attendre que le flux local (caméra/micro) soit prêt et ses tracks
+      // ajoutés au PC AVANT de créer l'answer, sinon l'answer part sans média.
+      await this.ensureLocalStream();
+
       const { RTCSessionDescription } = getWebRTC();
       await this.pc.setRemoteDescription(
         new RTCSessionDescription({ type: 'offer', sdp })
@@ -313,10 +343,33 @@ class SignalingService {
     this.pendingCandidates = [];
   }
 
+  private async fetchIceServers (): Promise<any[]> {
+    try {
+      const base = this.serverUrl.replace(/\/$/, '');
+      const apiBase = base.startsWith('http') ? base : `http://${base}`;
+      const res = await fetch(`${apiBase}/api/turn-credentials?numero=${this.numeroAgent}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const uris = Array.isArray(data?.uris) ? data.uris : [];
+      return [
+        ...STUN_SERVERS,
+        ...uris.map((urls: string) => ({
+          urls,
+          username: data?.username,
+          credential: data?.password,
+        })),
+      ];
+    } catch (e) {
+      console.warn('[Signal] TURN credentials indisponibles, repli sur STUN seul', e);
+      return STUN_SERVERS;
+    }
+  }
+
   // ── Construction RTCPeerConnection ────────────────────────────────────────
-  private buildPeerConnection (): RTCPeerConnection {
+  private async buildPeerConnection (): Promise<RTCPeerConnection> {
     const { RTCPeerConnection } = getWebRTC();
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }) as RTCPeerConnection;
+    const iceServers = await this.fetchIceServers();
+    const pc = new RTCPeerConnection({ iceServers }) as RTCPeerConnection;
 
     pc.addEventListener('icecandidate', (e: any) => {
       if (e.candidate) {
@@ -327,15 +380,30 @@ class SignalingService {
       }
     });
 
-    pc.addEventListener('track', (e: any) => {
-      const stream: MediaStream = e.streams?.[0];
-      if (stream) {
+    const handleIncomingStream = (e: any) => {
+      const stream: MediaStream | undefined = e.stream ?? e.streams?.[0];
+      if (!stream) return;
+      console.log('[Signal] flux distant reçu', {
+        trackCount: stream.getTracks?.().length ?? 0,
+        connectionState: pc.connectionState,
+      });
+      useCallStore.getState().setCallActive(true);
+      this.emitStream({ type: 'remote', stream });
+    };
+
+    pc.addEventListener('track', handleIncomingStream);
+    pc.addEventListener('addstream', handleIncomingStream);
+    (pc as any).ontrack = handleIncomingStream;
+
+    pc.addEventListener('iceconnectionstatechange', () => {
+      console.log('[Signal] ICE state', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         useCallStore.getState().setCallActive(true);
-        this.emitStream({ type: 'remote', stream });
       }
     });
 
     pc.addEventListener('connectionstatechange', () => {
+      console.log('[Signal] connection state', pc.connectionState);
       if (pc.connectionState === 'connected') {
         // Reprise après une coupure — annule la grâce en cours s'il y en a une
         if (this.iceGraceTimer) {
@@ -431,6 +499,7 @@ class SignalingService {
     this.stopPing();
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
+    this.ensureLocalStreamPromise = null;
     if (this.pc) {
       this.pc.close();
       this.pc = null;
@@ -458,14 +527,14 @@ class SignalingService {
       if (this.awaitingPong) {
         this.missedPongs += 1;
         if (this.missedPongs >= 2) {
-          console.warn('[Signal] Watchdog : connexion muette, reconnexion forcée');
-          this.ws?.close();
-          this.pingTimer = null;
-          return;
+          console.warn('[Signal] Watchdog : pas de pong reçu, maintien de la session malgré tout');
+          this.awaitingPong = false;
+          this.missedPongs = 0;
         }
       }
 
       this.awaitingPong = true;
+      console.log('[Signal] ping envoyé, en attente de pong...');
       this.sendRaw({ type: 'ping' });
       this.pingTimer = setTimeout(tick, 15000);
     };

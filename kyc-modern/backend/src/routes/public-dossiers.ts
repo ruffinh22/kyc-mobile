@@ -34,9 +34,13 @@ const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // Peers WebRTC par wa_agent (signaling)
 const signalingPeers = new Map<string, Set<WsSocket>>();
 const terrainSockets = new Map<string, WsSocket>();
+const backofficeSockets = new Map<string, WsSocket>();
 const terrainTokens = new Map<string, string>();
 
 const fcmServerKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || '';
+const turnSecret = process.env.TURN_SHARED_SECRET || '';
+const turnHost = process.env.TURN_HOST || '41.85.184.155';
+const turnTtlSeconds = 600;
 const serviceAccountPath = path.resolve(process.cwd(), 'kyc-congo-399bc93f01c9.json');
 let cachedServiceAccount: any = null;
 
@@ -182,6 +186,28 @@ function normalizeNumero(value: string | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 
+function generateTurnCredentials(identity: string) {
+  if (!turnSecret) {
+    throw new Error('TURN_SHARED_SECRET manquant côté serveur (.env)');
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000) + turnTtlSeconds;
+  const username = `${timestamp}:${identity}`;
+  const hmac = crypto.createHmac('sha1', turnSecret);
+  hmac.update(username);
+  const password = hmac.digest('base64');
+
+  return {
+    username,
+    password,
+    ttl: turnTtlSeconds,
+    uris: [
+      `turn:${turnHost}:3478?transport=udp`,
+      `turn:${turnHost}:3478?transport=tcp`,
+    ],
+  };
+}
+
 async function sendIncomingCallPush(params: {
   token: string;
   numero: string;
@@ -236,7 +262,37 @@ function nowSec()  { return Math.floor(Date.now() / 1000); }
 
 export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
-  app.post('/api/device/register-fcm', async (req, reply) => {
+  app.get('/api/turn-credentials', async (req: FastifyRequest, reply: any) => {
+    const query = (req.query ?? {}) as { numero?: string };
+    const numero = normalizeNumero(query.numero);
+
+    if (!numero) {
+      return reply.code(400).send({ error: 'numero requis' });
+    }
+
+    try {
+      const creds = generateTurnCredentials(numero);
+      return reply.send({
+        success: true,
+        numero,
+        username: creds.username,
+        password: creds.password,
+        ttl: creds.ttl,
+        uris: creds.uris,
+        iceServers: creds.uris.map((urls: string) => ({
+          urls,
+          username: creds.username,
+          credential: creds.password,
+        })),
+        message: 'TURN prêt',
+      });
+    } catch (err) {
+      req.log.error(err, '[TURN] génération credentials échouée');
+      return reply.code(500).send({ error: 'Configuration TURN indisponible' });
+    }
+  });
+
+  app.post('/api/device/register-fcm', async (req: FastifyRequest, reply: any) => {
     const body = (req.body ?? {}) as { numero?: string; token?: string };
     const numero = normalizeNumero(body.numero);
     const token = String(body.token ?? '').trim();
@@ -261,7 +317,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   app.post('/api/public/dossiers', {
     config: { rateLimit: { max: 20, timeWindow: 60_000 } },
-  }, async (req, reply) => {
+  }, async (req: FastifyRequest, reply: any) => {
     if (!req.isMultipart())
       return reply.code(400).send({ error: 'Format multipart attendu' });
 
@@ -354,12 +410,12 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>(
     '/api/public/dossiers/:id/live',
     { config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
-    async (req, reply) => {
+    async (req: FastifyRequest, reply: any) => {
       if (!req.isMultipart()) {
         return reply.code(400).send({ error: 'Format multipart attendu' });
       }
 
-      const dossierId = req.params.id?.trim();
+      const dossierId = (req.params as { id?: string }).id?.trim();
       if (!dossierId) {
         return reply.code(400).send({ error: 'ID dossier manquant' });
       }
@@ -475,7 +531,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   // GET /api/public/dossiers?wa_agent=
   // ==========================================================================
-  app.get('/api/public/dossiers', async (req, reply) => {
+  app.get('/api/public/dossiers', async (req: FastifyRequest, reply: any) => {
     const q  = req.query as Record<string, string>;
     const wa = String(q.wa_agent ?? '').replace(/\D/g, '');
     if (!wa || wa.length < 8)
@@ -499,7 +555,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   // GET /api/public/mon-tableau?wa_agent=
   // ==========================================================================
-  app.get('/api/public/mon-tableau', async (req, reply) => {
+  app.get('/api/public/mon-tableau', async (req: FastifyRequest, reply: any) => {
     const q  = req.query as Record<string, string>;
     const wa = String(q.wa_agent ?? '').replace(/\D/g, '');
     if (!wa || wa.length < 8)
@@ -527,7 +583,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   // HTTP /api/call/test — déclenche un appel entrant vers un terrain depuis le serveur
   // ==========================================================================
-  app.post('/api/call/test', async (req, reply) => {
+  app.post('/api/call/test', async (req: FastifyRequest, reply: any) => {
     const body = (req.body ?? {}) as { numero?: string; numeroMtn?: string };
     const numero = normalizeNumero(body.numero);
     const numeroMtn = String(body.numeroMtn ?? '0700000000');
@@ -548,6 +604,15 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
         wsDelivered = true;
       } catch {
         wsDelivered = false;
+      }
+    }
+
+    const backofficeSocket = backofficeSockets.get(numero);
+    if (backofficeSocket) {
+      try {
+        backofficeSocket.send(JSON.stringify({ type: 'incoming-call', numeroMtn, numero, callUuid }));
+      } catch {
+        // ignore
       }
     }
 
@@ -581,6 +646,11 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  app.get('/test/webrtc', async (_req: FastifyRequest, reply: any) => {
+    reply.type('text/html');
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Test WebRTC KYC</title><style>body{font-family:Arial,sans-serif;margin:24px;background:#0f172a;color:#f8fafc}.panel{background:#111827;padding:16px;border-radius:12px;margin-bottom:12px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}button,input{padding:10px 12px;border-radius:8px;border:1px solid #334155}button{cursor:pointer;background:#2563eb;color:white;border:0}video{width:100%;max-width:480px;border-radius:12px;background:#020617;min-height:220px;margin-top:8px}.status{margin-top:8px;color:#93c5fd;white-space:pre-wrap}</style></head><body><div class="panel"><h2>Test WebRTC KYC</h2><p>Validation de bout en bout de la session vidéo entre l’app mobile et le backend.</p><label>Numéro terrain</label><input id="numero" value="0167376539" /><div class="row"><button id="connectBtn">Connecter</button><button id="callBtn">Lancer l’appel test</button></div><div id="status" class="status">Prêt</div></div><div class="panel"><h3>Local</h3><video id="localVideo" autoplay muted playsinline></video></div><div class="panel"><h3>Distant</h3><video id="remoteVideo" autoplay playsinline></video></div><script>const numeroInput=document.getElementById("numero");const statusEl=document.getElementById("status");const connectBtn=document.getElementById("connectBtn");const callBtn=document.getElementById("callBtn");const localVideo=document.getElementById("localVideo");const remoteVideo=document.getElementById("remoteVideo");let ws=null;let pc=null;let localStream=null;const logs=[];function log(message){const line=new Date().toLocaleTimeString()+" "+message;logs.push(line);console.log("[TEST]", message);statusEl.textContent=logs.slice(-8).join("\\n");}function wsUrl(){const loc=window.location;const protocol=loc.protocol==="https:"?"wss":"ws";return protocol+"://"+loc.host+"/api/signaling";}async function createLocalStream(){try{return await navigator.mediaDevices.getUserMedia({video:true,audio:true});}catch(err){log("Caméra indisponible, génération d’un flux vidéo synthétique");const canvas=document.createElement("canvas");canvas.width=640;canvas.height=480;const ctx=canvas.getContext("2d");let frame=0;const draw=()=>{if(!ctx)return;const gradient=ctx.createLinearGradient(0,0,canvas.width,canvas.height);gradient.addColorStop(0,"#020617");gradient.addColorStop(1,"#2563eb");ctx.fillStyle=gradient;ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle="#f8fafc";ctx.font="bold 36px Arial";ctx.fillText("Test WebRTC KYC",70,120);ctx.font="24px Arial";ctx.fillText("Flux synthétique",70,180);ctx.beginPath();ctx.arc(500,140,70,0,Math.PI*2);ctx.fillStyle="rgba(255,255,255,0.25)";ctx.fill();ctx.beginPath();ctx.arc(500+Math.sin(frame/15)*20,140+Math.cos(frame/12)*20,35,0,Math.PI*2);ctx.fillStyle="#fbbf24";ctx.fill();frame+=1;};const animate=()=>{draw();requestAnimationFrame(animate);};animate();return canvas.captureStream(15);} }async function initPeer(){if(pc)return pc;pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});pc.onicecandidate=(e)=>{if(e.candidate&&ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:"webrtc",payload:{kind:"ice",candidate:e.candidate.toJSON()},numero:numeroInput.value}));log("ICE candidat envoyé");}};pc.ontrack=(e)=>{const stream=e.streams&&e.streams[0];if(stream){remoteVideo.srcObject=stream;log("Flux distant visible");}};localStream=await createLocalStream();localVideo.srcObject=localStream;localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));log("Flux local prêt");return pc;}async function connect(){if(ws&&ws.readyState===WebSocket.OPEN)return;ws=new WebSocket(wsUrl());ws.onopen=()=>{log("WebSocket connecté");ws.send(JSON.stringify({type:"register",role:"backoffice",numero:numeroInput.value}));};ws.onmessage=async(event)=>{const msg=JSON.parse(event.data);log("Message reçu: "+msg.type);if(msg.type==="registered"){log("Back-office enregistré");return;}if(msg.type==="incoming-call"){log("Appel entrant reçu, génération de l’offre…");await initPeer();const offer=await pc.createOffer();await pc.setLocalDescription(offer);ws.send(JSON.stringify({type:"webrtc",payload:{kind:"offer",sdp:pc.localDescription.sdp},numero:numeroInput.value}));log("Offer envoyée");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="answer"){await pc.setRemoteDescription(new RTCSessionDescription({type:"answer",sdp:msg.payload.sdp}));log("Answer reçue");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="ice"&&pc&&pc.remoteDescription){await pc.addIceCandidate(new RTCIceCandidate(msg.payload.candidate));log("ICE ajouté");}};}connectBtn.onclick=()=>connect();callBtn.onclick=async()=>{await connect();const response=await fetch("/api/call/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({numero:numeroInput.value,numeroMtn:"0700000000"})});const data=await response.json();log("Réponse appel test: "+(data.message||JSON.stringify(data)));};</script></body></html>';
+  });
+
   // WS /api/signaling — WebRTC signaling terrain ↔ back-office
   // ==========================================================================
   app.get('/api/signaling', { websocket: true }, (socket: WsSocket, _req: FastifyRequest) => {
@@ -595,6 +665,15 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     socket.on('message', (raw: Buffer) => {
       try {
         const msg = JSON.parse(raw.toString()) as { type: string; room?: string; role?: string; numero?: string; numeroMtn?: string; fcmToken?: string; [k: string]: unknown };
+
+        if (msg.type === 'ping') {
+          send({ type: 'pong' });
+          return;
+        }
+
+        if (msg.type === 'pong') {
+          return;
+        }
 
         if (msg.type === 'join' && msg.room) {
           room = String(msg.room).replace(/\D/g, '').slice(0, 15);
@@ -613,10 +692,14 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
           role = String(msg.role ?? '').toLowerCase();
           numero = normalizeNumero(msg.numero);
           if (!numero) return;
+          console.log('[SIGNAL] register', { role, numero });
           if (role === 'terrain') {
             terrainSockets.set(numero, socket);
             if (msg.fcmToken) terrainTokens.set(numero, String(msg.fcmToken));
             send({ type: 'registered', role: 'terrain', numero });
+          } else if (role === 'backoffice') {
+            backofficeSockets.set(numero, socket);
+            send({ type: 'registered', role: 'backoffice', numero });
           }
           return;
         }
@@ -630,6 +713,23 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
             } catch { /* fermé */ }
           }
           send({ type: targetSocket ? 'call-delivered' : 'terrain-absent', numero: target });
+          return;
+        }
+
+        if (msg.type === 'webrtc' && role && numero) {
+          const payload = msg.payload as { kind?: string } | undefined;
+          console.log('[SIGNAL] relay webrtc', { role, numero, kind: payload?.kind, hasPayload: Boolean(msg.payload) });
+          if (role === 'terrain') {
+            const boSocket = backofficeSockets.get(numero);
+            if (boSocket) {
+              try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero })); } catch { /* fermé */ }
+            }
+          } else if (role === 'backoffice') {
+            const targetSocket = terrainSockets.get(numero);
+            if (targetSocket) {
+              try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero })); } catch { /* fermé */ }
+            }
+          }
           return;
         }
 
@@ -659,6 +759,9 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       }
       if (role === 'terrain' && numero) {
         terrainSockets.delete(numero);
+      }
+      if (role === 'backoffice' && numero) {
+        backofficeSockets.delete(numero);
       }
     });
   });

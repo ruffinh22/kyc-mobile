@@ -8,6 +8,9 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeMap;
+import android.content.pm.PackageManager;
+import android.hardware.Camera;
+import android.os.Build;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -73,15 +76,21 @@ public class CameraModule extends ReactContextBaseJavaModule {
                 return;
             }
             
-            boolean hasCameraHardware = getReactApplicationContext()
-                    .getPackageManager()
-                    .hasSystemFeature("android.hardware.camera");
-            
+            PackageManager pm = getReactApplicationContext().getPackageManager();
+            boolean hasCameraHardware = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY);
+            boolean hasFrontCamera = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT);
+            boolean hasBackCamera = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA);
+            boolean hasCameraPermission = getReactApplicationContext().checkCallingOrSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+
             WritableMap result = new WritableNativeMap();
             result.putBoolean("available", hasCameraHardware);
+            result.putBoolean("frontCameraSupported", hasFrontCamera);
+            result.putBoolean("backCameraSupported", hasBackCamera);
+            result.putBoolean("cameraPermissionGranted", hasCameraPermission);
             result.putString("status", hasCameraHardware ? "ready" : "unavailable");
-            
-            Log.d(TAG, "Camera availability: " + hasCameraHardware);
+            result.putString("apiLevel", String.valueOf(Build.VERSION.SDK_INT));
+
+            Log.d(TAG, "Camera availability: " + hasCameraHardware + " / permission=" + hasCameraPermission);
             promise.resolve(result);
             
         } catch (Exception e) {
@@ -98,10 +107,19 @@ public class CameraModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void getCameraCapabilities(Promise promise) {
         try {
+            PackageManager pm = getReactApplicationContext().getPackageManager();
+            boolean hasFlash = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH);
+            boolean hasFront = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT);
+            boolean hasBack = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA);
+            boolean hasCameraPermission = getReactApplicationContext().checkCallingOrSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+
             WritableMap capabilities = new WritableNativeMap();
-            capabilities.putBoolean("flashSupported", true);
-            capabilities.putBoolean("zoomSupported", true);
-            capabilities.putBoolean("autoFocusSupported", true);
+            capabilities.putBoolean("flashSupported", hasFlash);
+            capabilities.putBoolean("zoomSupported", hasBack || hasFront);
+            capabilities.putBoolean("autoFocusSupported", hasBack || hasFront);
+            capabilities.putBoolean("cameraPermissionGranted", hasCameraPermission);
+            capabilities.putBoolean("frontCameraSupported", hasFront);
+            capabilities.putBoolean("backCameraSupported", hasBack);
             capabilities.putString("nativeModule", "CameraModule");
             capabilities.putString("fallback", "expo-camera");
             

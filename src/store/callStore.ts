@@ -70,10 +70,12 @@ interface AgentState {
   country?:     string | null;
   fonctionAgent?: string | null;
   zoneAgent?:    string | null;
+  preferredCamera?: 'front' | 'back' | null;
   isConnected: boolean;
   setAgent:    (numOrProfile: string | {
     numeroAgent: string; serverUrl: string; country?: string; fonctionAgent?: string; zoneAgent?: string
   }, url?: string) => void;
+  setPreferredCamera: (camera: 'front' | 'back') => void;
   setConnected:(v: boolean) => void;
   logout:      () => void;
 }
@@ -84,6 +86,7 @@ export const useAgentStore = create<AgentState>((set) => ({
   country:     null,
   fonctionAgent: null,
   zoneAgent:    null,
+  preferredCamera: null,
   isConnected: false,
   setAgent:    (numOrProfile: any, url?: string) => {
     if (typeof numOrProfile === 'string') {
@@ -99,6 +102,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       zoneAgent:    p.zoneAgent ?? null,
     });
   },
+  setPreferredCamera: (camera) => set({ preferredCamera: camera }),
   setConnected:(v)        => set({ isConnected: v }),
-  logout:      ()         => set({ numeroAgent: '', serverUrl: '', country: null, fonctionAgent: null, zoneAgent: null, isConnected: false }),
+  logout:      ()         => set({ numeroAgent: '', serverUrl: '', country: null, fonctionAgent: null, zoneAgent: null, preferredCamera: null, isConnected: false }),
 }));

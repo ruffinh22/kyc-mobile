@@ -27,6 +27,12 @@ const CALLKEEP_OPTIONS = {
     okButton:            'OK',
     imageName:           'phone_account_icon',
     additionalPermissions: [PermissionsAndroid.PERMISSIONS.READ_CALL_LOG],
+    // selfManaged: true → l'app gère elle-même l'UI d'appel (notre IncomingCallScreen +
+    // écran natif CallKeep en verrouillé) au lieu de déléguer à l'UI Telecom par défaut
+    // du téléphone. C'est le mode utilisé par WhatsApp/Messenger : sans lui, certains
+    // constructeurs (Samsung, Xiaomi) affichent une UI Telecom générique à la place de
+    // la tienne, ou refusent l'appel entrant si aucun compte téléphonique SIM n'existe.
+    selfManaged: true,
     foregroundService: {
       channelId:         'kyc_call_channel',
       channelName:       'Appels KYC',
@@ -52,6 +58,8 @@ class NotificationService {
   private fcmToken: string | null = null;
   private listenersBound = false;
   private initialized = false;
+  private callKeepConfigured = false;
+  private fcmConfigured = false;
 
   // ── Initialisation ──────────────────────────────────────────────────────────
   async init (cbs: NotifCallbacks): Promise<void> {
@@ -59,9 +67,34 @@ class NotificationService {
     if (this.initialized) return;
 
     this.initialized = true;
+    await this.registerBackgroundHandlers();
+  }
+
+  async registerBackgroundHandlers (): Promise<void> {
     await this.requestNotificationPermission();
     await this.setupCallKeep();
     await this.setupFCM();
+  }
+
+  // ── Exemption d'optimisation batterie (Doze) ─────────────────────────────
+  // C'est LA cause n°1 des appels manqués app-fermée sur Samsung/Xiaomi/Oppo :
+  // même avec un foreground service et un FCM haute priorité correctement
+  // configurés, le système peut retarder de plusieurs minutes (voire tuer)
+  // le processus si l'app n'est pas exemptée de Doze. WhatsApp demande cette
+  // exemption au premier lancement — on fait pareil ici, une seule fois.
+  async ensureBatteryOptimizationExemption (): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const isIgnoring = await NativeModules.KycCallModule?.isIgnoringBatteryOptimizations?.();
+      if (isIgnoring) return true;
+
+      await AsyncStorage.setItem('battery_exemption_requested', '1');
+      NativeModules.KycCallModule?.requestIgnoreBatteryOptimizations?.();
+      return false; // la demande est lancée, l'utilisateur doit valider dans la boîte système
+    } catch (e) {
+      console.warn('[Notif] Vérification exemption batterie indisponible:', e);
+      return false;
+    }
   }
 
   // ── Permission notifications (Android 13+ / POST_NOTIFICATIONS) ─────────
@@ -101,10 +134,13 @@ class NotificationService {
 
   // ── Setup CallKeep ───────────────────────────────────────────────────────
   private async setupCallKeep (): Promise<void> {
+    if (this.callKeepConfigured) return;
+
     try {
       await CallKeep.setup(CALLKEEP_OPTIONS);
       CallKeep.setAvailable(true);
       this.bindCallKeepEvents();
+      this.callKeepConfigured = true;
       console.log('[CallKeep] Setup successful');
     } catch (e) {
       console.warn('[CallKeep] Setup failed:', e);
@@ -120,7 +156,11 @@ class NotificationService {
 
     CallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
       console.log('[CallKeep] answerCall', callUUID);
-      this.callbacks?.onCallAccepted(callUUID || this.activeCallUuid || '');
+      const id = callUUID || this.activeCallUuid || '';
+      // Décroché depuis l'écran verrouillé natif : on arrête la sonnerie sans
+      // tuer le service foreground (voir answerNativeCall ci-dessous).
+      this.answerNativeCall(id);
+      this.callbacks?.onCallAccepted(id);
     });
 
     CallKeep.addEventListener('endCall', ({ callUUID }: { callUUID: string }) => {
@@ -145,6 +185,9 @@ class NotificationService {
 
   // ── Setup Firebase Messaging ─────────────────────────────────────────────
   private async setupFCM (): Promise<void> {
+    if (this.fcmConfigured) return;
+    this.fcmConfigured = true;
+
     // Permission iOS
     if (Platform.OS === 'ios') {
       const status = await messaging().requestPermission();
@@ -170,13 +213,23 @@ class NotificationService {
     });
 
     // App en foreground
-    messaging().onMessage(async (msg) => this.handlePushPayload(msg));
+    messaging().onMessage(async (msg) => {
+      console.log('[FCM] message reçu en foreground', msg.data);
+      this.handlePushPayload(msg);
+    });
 
     // App en background — tap sur notification
-    messaging().onNotificationOpenedApp((msg) => this.handlePushPayload(msg));
+    messaging().onNotificationOpenedApp((msg) => {
+      console.log('[FCM] notification ouverte depuis background', msg.data);
+      this.handlePushPayload(msg);
+    });
 
     // App terminée — message data-only HIGH_PRIORITY
-    messaging().setBackgroundMessageHandler(async (msg) => this.handlePushPayload(msg));
+    messaging().setBackgroundMessageHandler(async (msg) => {
+      console.log('[FCM] background message handler', msg.data);
+      this.handlePushPayload(msg);
+      return Promise.resolve();
+    });
 
     // App ouverte depuis une notification
     const initial = await messaging().getInitialNotification();
@@ -223,6 +276,9 @@ class NotificationService {
 
     try {
       const nativeCallModule = (NativeModules.KycCallModule as any);
+      // Sur Android, démarre le service foreground natif qui joue lui-même
+      // la sonnerie (sonneriekyc.mp3 ou repli système) + vibration, en boucle,
+      // indépendamment de l'état du moteur JS — voir KycForegroundCallService.
       nativeCallModule?.startForeground?.(numeroMtn);
     } catch (e) {
       console.warn('[Notif] startForeground failed:', e);
@@ -235,6 +291,24 @@ class NotificationService {
       'number',
       true,   // supportsVideo
     );
+  }
+
+  // ── Décrocher l'appel : arrête sonnerie/vibration natives SANS tuer le
+  // service foreground (notification + wake lock restent actifs pour toute
+  // la durée de l'appel). À appeler à la place de endNativeCall() quand
+  // l'utilisateur accepte — endNativeCall() reste réservé au refus/raccroché/
+  // timeout, qui doivent eux arrêter le service complètement.
+  answerNativeCall (callUuid?: string): void {
+    const id = callUuid ?? this.activeCallUuid;
+    if (id) {
+      CallKeep.setCurrentCallActive(id);
+    }
+    try {
+      const nativeCallModule = (NativeModules.KycCallModule as any);
+      nativeCallModule?.answerCall?.();
+    } catch (e) {
+      console.warn('[Notif] answerCall natif indisponible:', e);
+    }
   }
 
   // ── Terminer l'appel natif ─────────────────────────────────────────────

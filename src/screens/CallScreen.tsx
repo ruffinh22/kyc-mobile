@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  StatusBar, Platform, Animated, Easing, NativeModules,
+  StatusBar, Platform, Animated, Easing,
 } from 'react-native';
 import type { MediaStream } from 'react-native-webrtc';
 import { keepAwake } from '../utils/keepAwake';
@@ -42,25 +42,35 @@ export function CallScreen({ route, navigation }: any) {
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeAnim    = useRef(new Animated.Value(1)).current;
 
-  // ── Foreground service natif (notification persistante + wake lock) ──────
-  // Sans cet appel, KycForegroundCallService n'est jamais démarré : pas de
-  // notification "appel en cours", pas de wake lock, et Android peut tuer
-  // l'appel dès que l'app passe en arrière-plan.
-  useEffect(() => {
-    if (Platform.OS === 'android' && NativeModules.KycCallModule?.startForeground) {
-      try { NativeModules.KycCallModule.startForeground(numeroMtn || ''); }
-      catch (e) { console.warn('[CallScreen] startForeground natif indisponible:', e); }
-    }
-    return () => {
-      if (Platform.OS === 'android' && NativeModules.KycCallModule?.stopForeground) {
-        try { NativeModules.KycCallModule.stopForeground(); }
-        catch (e) { console.warn('[CallScreen] stopForeground natif indisponible:', e); }
-      }
-    };
-  }, []);
+  // ── Foreground service natif ──────────────────────────────────────────
+  // Le service tourne déjà en continu depuis IncomingCallScreen.handleAccept()
+  // (answerNativeCall → ACTION_ANSWER, sonnerie arrêtée, service+notification
+  // maintenus). On NE rappelle PAS startForeground ici : sur Android, cette
+  // méthode déclenche maintenant l'action "sonner" côté natif (voir
+  // KycForegroundCallService) — la relancer ici referait sonner l'appareil
+  // en pleine conversation. L'arrêt se fait via notificationService.endNativeCall()
+  // dans handleEndCall, pas ici.
 
   // ── Abonnement streams ────────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
+
+    const startCallFlow = async () => {
+      try {
+        await signalingService.acceptCall();
+        if (!cancelled) {
+          setStatusTxt('Connexion vidéo…');
+        }
+      } catch (e) {
+        console.warn('[CallScreen] acceptCall failed', e);
+        if (!cancelled) {
+          setStatusTxt('Connexion impossible');
+        }
+      }
+    };
+
+    startCallFlow();
+
     const unsub = signalingService.addStreamListener((event) => {
       switch (event.type) {
         case 'local':
@@ -84,7 +94,7 @@ export function CallScreen({ route, navigation }: any) {
           handleEndCall(false); break;
       }
     });
-    return () => { unsub(); stopTimer(); };
+    return () => { cancelled = true; unsub(); stopTimer(); };
   }, []);
 
   // ── Contrôles auto-hide ───────────────────────────────────────────────────

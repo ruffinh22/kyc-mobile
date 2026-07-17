@@ -13,6 +13,7 @@ import {
   StatusBar, SafeAreaView, Animated, PermissionsAndroid,
 } from 'react-native';
 import { launchCamera, CameraOptions } from 'react-native-image-picker';
+import { NativeModules } from 'react-native';
 import { useAgentStore }  from '../store/callStore';
 import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
 import { C, R, T } from '../theme/tokens'; // Design tokens
@@ -31,11 +32,14 @@ export function AcquisitionScreenPro({ navigation }: any) {
     numeroAgent: s.numeroAgent, country: s.country,
     fonctionAgent: s.fonctionAgent, zoneAgent: s.zoneAgent, serverUrl: s.serverUrl,
   }));
+  const preferredCamera = useAgentStore(s => s.preferredCamera);
+  const setPreferredCamera = useAgentStore(s => s.setPreferredCamera);
 
   const [numeroMtn, setNumeroMtn]     = useState('');
   const [photos, setPhotos]           = useState<{ recto: Photo|null; verso: Photo|null }>({ recto: null, verso: null });
   const [cameraMode, setCameraMode]   = useState<'recto'|'verso'|null>(null);
   const [camPerm, setCamPerm]         = useState<boolean|null>(null);
+  const [selectedCamera, setSelectedCamera] = useState<'front'|'back'>(preferredCamera === 'front' ? 'front' : 'back');
   const [loading, setLoading]         = useState(false);
   const [progress, setProgress]       = useState(0);
   const [error, setError]             = useState('');
@@ -44,19 +48,39 @@ export function AcquisitionScreenPro({ navigation }: any) {
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (preferredCamera === 'front' || preferredCamera === 'back') {
+      setSelectedCamera(preferredCamera);
+    }
+  }, [preferredCamera]);
+
+  useEffect(() => {
     (async () => {
       try {
         if (Platform.OS === 'android') {
-          const granted = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.CAMERA,
-            {
-              title: 'Permission caméra',
-              message: 'L’application a besoin d’accéder à la caméra pour capturer les documents.',
-              buttonPositive: 'Autoriser',
-              buttonNegative: 'Refuser',
-            }
-          );
-          setCamPerm(granted === PermissionsAndroid.RESULTS.GRANTED);
+          const cameraModule = NativeModules.CameraModule as any;
+          const result = cameraModule?.checkCameraAvailability
+            ? await cameraModule.checkCameraAvailability()
+            : null;
+
+          const nativeAvailable = result?.available === true;
+          const granted = nativeAvailable
+            ? PermissionsAndroid.RESULTS.GRANTED
+            : PermissionsAndroid.RESULTS.DENIED;
+
+          if (nativeAvailable) {
+            const permission = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.CAMERA,
+              {
+                title: 'Permission caméra',
+                message: 'L’application a besoin d’accéder à la caméra pour capturer les documents.',
+                buttonPositive: 'Autoriser',
+                buttonNegative: 'Refuser',
+              }
+            );
+            setCamPerm(permission === PermissionsAndroid.RESULTS.GRANTED);
+          } else {
+            setCamPerm(false);
+          }
         } else {
           setCamPerm(true);
         }
@@ -78,7 +102,7 @@ export function AcquisitionScreenPro({ navigation }: any) {
     try {
       const options: CameraOptions = {
         mediaType: 'photo',
-        cameraType: 'back',
+        cameraType: selectedCamera,
         quality: 0.8,
         saveToPhotos: false,
       };
@@ -190,6 +214,27 @@ export function AcquisitionScreenPro({ navigation }: any) {
               </View>
               <View style={{ width: 44 }} />
             </SafeAreaView>
+
+            <View style={cs.cameraSelectorRow}>
+              <TouchableOpacity
+                style={[cs.cameraOption, selectedCamera === 'back' && cs.cameraOptionActive]}
+                onPress={() => {
+                  setSelectedCamera('back');
+                  setPreferredCamera('back');
+                }}
+              >
+                <Text style={[cs.cameraOptionTxt, selectedCamera === 'back' && cs.cameraOptionTxtActive]}>Arrière</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[cs.cameraOption, selectedCamera === 'front' && cs.cameraOptionActive]}
+                onPress={() => {
+                  setSelectedCamera('front');
+                  setPreferredCamera('front');
+                }}
+              >
+                <Text style={[cs.cameraOptionTxt, selectedCamera === 'front' && cs.cameraOptionTxtActive]}>Avant</Text>
+              </TouchableOpacity>
+            </View>
 
             <View style={cs.frameOuter}>
               <View style={cs.frame}>
@@ -599,6 +644,18 @@ const cs = StyleSheet.create({
   camTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   camDot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: C.yellow },
   camTitle:     { fontSize: T.md, fontWeight: '800', color: '#fff', letterSpacing: -0.2 },
+  cameraSelectorRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, paddingTop: 10, paddingBottom: 4 },
+  cameraOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  cameraOptionActive: { backgroundColor: C.blue, borderColor: C.blue },
+  cameraOptionTxt: { color: C.ink, fontWeight: '700' },
+  cameraOptionTxtActive: { color: '#fff' },
 
   frameOuter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   frame: {

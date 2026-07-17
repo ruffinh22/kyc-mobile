@@ -52,7 +52,7 @@ type SignalMsg =
 type WebRTCPayload =
   | { kind: 'offer';  sdp: string }
   | { kind: 'answer'; sdp: string }
-  | { kind: 'ice';    candidate: RTCIceCandidateInit };
+  | { kind: 'ice';    candidate: any };
 
 // ── Stream listeners (CallScreen s'y abonne) ─────────────────────────────────
 type StreamListener = (event: StreamEvent) => void;
@@ -84,7 +84,7 @@ class SignalingService {
   private streamListeners: StreamListener[] = [];
 
   private reconnectTimer: ReturnType<typeof setTimeout>  | null = null;
-  private pingTimer:      ReturnType<typeof setInterval> | null = null;
+  private pingTimer:      ReturnType<typeof setTimeout>  | null = null;
   private reconnectDelay = 2000;
   private destroyed      = false;
 
@@ -97,7 +97,7 @@ class SignalingService {
   private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_GRACE_MS = 10_000;
 
-  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private pendingCandidates: any[] = [];
   private localStream: MediaStream | null = null;
   private facingMode: 'user' | 'environment' = 'environment'; // Caméra arrière par défaut (terrain)
 
@@ -127,6 +127,11 @@ class SignalingService {
   // ── Connexion WebSocket ──────────────────────────────────────────────────────
   private connect () {
     if (this.destroyed) return;
+    this.stopPing();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     const base = this.serverUrl.replace(/\/$/, '');
     const httpUrl = base.startsWith('http') ? base : `http://${base}`;
@@ -151,9 +156,10 @@ class SignalingService {
       this.startPing();
     };
 
-    this.ws.onmessage = (e: { data: string }) => {
+    this.ws.onmessage = (e: MessageEvent) => {
       try {
-        const msg: SignalMsg = JSON.parse(e.data);
+        const data = typeof e.data === 'string' ? e.data : String(e.data ?? '');
+        const msg: SignalMsg = JSON.parse(data);
         this.handleMessage(msg);
       } catch {}
     };
@@ -381,6 +387,8 @@ class SignalingService {
   refuseCall () {
     this.sendRaw({ type: 'refus' });
     this.endCallCleanup();
+    this.emitStream({ type: 'ended' });
+    this.callbacks?.onCallEnded();
   }
 
   // ── Raccrocher ───────────────────────────────────────────────────────────
@@ -420,6 +428,7 @@ class SignalingService {
   // ── Nettoyage fin d'appel ─────────────────────────────────────────────────
   private endCallCleanup () {
     if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
+    this.stopPing();
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
     if (this.pc) {
@@ -438,21 +447,37 @@ class SignalingService {
   private startPing () {
     this.missedPongs  = 0;
     this.awaitingPong = false;
-    this.pingTimer = setInterval(() => {
+    this.stopPing();
+
+    const tick = () => {
+      if (this.destroyed || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.pingTimer = null;
+        return;
+      }
+
       if (this.awaitingPong) {
         this.missedPongs += 1;
         if (this.missedPongs >= 2) {
           console.warn('[Signal] Watchdog : connexion muette, reconnexion forcée');
           this.ws?.close();
+          this.pingTimer = null;
           return;
         }
       }
+
       this.awaitingPong = true;
       this.sendRaw({ type: 'ping' });
-    }, 15000);
+      this.pingTimer = setTimeout(tick, 15000);
+    };
+
+    this.pingTimer = setTimeout(tick, 15000);
   }
+
   private stopPing () {
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.pingTimer) {
+      clearTimeout(this.pingTimer);
+      this.pingTimer = null;
+    }
     this.missedPongs  = 0;
     this.awaitingPong = false;
   }
@@ -467,7 +492,10 @@ class SignalingService {
   // ── Reconnexion auto (backoff exponentiel) ────────────────────────────────
   private scheduleReconnect () {
     if (this.destroyed) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.destroyed) return;
       this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, 30_000);
       this.connect();
     }, this.reconnectDelay);
@@ -477,7 +505,10 @@ class SignalingService {
   destroy () {
     this.destroyed = true;
     this.stopPing();
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.endCallCleanup();
     this.streamListeners = [];
     this.ws?.close();

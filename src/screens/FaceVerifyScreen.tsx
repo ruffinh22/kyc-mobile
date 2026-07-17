@@ -12,7 +12,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, SafeAreaView,
-  StatusBar, ActivityIndicator, Platform
+  StatusBar, ActivityIndicator, Platform, NativeModules
 } from 'react-native';
 import { Camera, CameraType } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
@@ -52,7 +52,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
     fonctionAgent,
     zoneAgent,
   } = route.params;
-  const { numeroAgent } = useAgentStore();
+  const { numeroAgent, preferredCamera, setPreferredCamera } = useAgentStore();
 
   const cameraRef = useRef<any>(null);
   const flashRef = useRef<View>(null);
@@ -74,18 +74,31 @@ export function FaceVerifyScreen({ route, navigation }: any) {
   // 'uploading' | 'done' | 'error'
   const [phase, setPhase] = useState<'init' | 'capture' | 'fallback' | 'uploading' | 'done' | 'error'>('init');
   const [errMsg, setErrMsg] = useState('');
+  const [selectedCamera, setSelectedCamera] = useState<'front' | 'back'>(preferredCamera === 'front' ? 'front' : preferredCamera === 'back' ? 'back' : 'front');
   const [result, setResult] = useState<{ message: string } | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
 
   const baseUrl = serverUrl?.replace(/\/$/, '') || '';
   const apiBase = baseUrl.startsWith('http') ? baseUrl : `http://${baseUrl}`;
 
+  useEffect(() => {
+    if (preferredCamera === 'front' || preferredCamera === 'back') {
+      setSelectedCamera(preferredCamera);
+    }
+  }, [preferredCamera]);
+
   // ── Init ────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
+        const cameraModule = NativeModules.CameraModule as any;
+        const nativeInfo = cameraModule?.checkCameraAvailability
+          ? await cameraModule.checkCameraAvailability()
+          : null;
+        const nativeAvailable = nativeInfo?.available === true && nativeInfo?.cameraPermissionGranted === true;
+
         const perm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!perm.granted) {
+        if (!perm.granted || !nativeAvailable) {
           setPhase('fallback');
           setInstrTitle('Caméra live indisponible');
           setInstrSub('Utilise l’appareil photo du téléphone pour continuer');
@@ -263,7 +276,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
       }
 
       const res = await ImagePicker.launchCameraAsync({
-        cameraType: ImagePicker.CameraType.front,
+        cameraType: selectedCamera === 'front' ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
         quality: 0.92,
         base64: false,
         allowsEditing: false,
@@ -279,7 +292,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
       setErrMsg(err.message || "Erreur de la caméra de secours");
       setPhase('error');
     }
-  }, [handleCapturedPhoto]);
+  }, [handleCapturedPhoto, selectedCamera]);
 
   // ── Handlers ────────────────────────────────────────────────────────────
   const [arrow, setArrow] = useState<string | null>(null);
@@ -293,7 +306,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
         <Camera
           ref={cameraRef}
           style={s.camera}
-          type={CameraType.front}
+          type={selectedCamera === 'front' ? CameraType.front : CameraType.back}
           onCameraReady={() => setCameraReady(true)}
         />
       )}
@@ -317,7 +330,26 @@ export function FaceVerifyScreen({ route, navigation }: any) {
               <Text style={s.closeTxt}>✕</Text>
             </TouchableOpacity>
             <Text style={s.headerTitle}>Vérification faciale</Text>
-            <View style={{ width: 44 }} />
+            <View style={s.cameraSwitchRow}>
+              <TouchableOpacity
+                style={[s.cameraSwitchBtn, selectedCamera === 'front' && s.cameraSwitchBtnActive]}
+                onPress={() => {
+                  setSelectedCamera('front');
+                  setPreferredCamera('front');
+                }}
+              >
+                <Text style={[s.cameraSwitchTxt, selectedCamera === 'front' && s.cameraSwitchTxtActive]}>Avant</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.cameraSwitchBtn, selectedCamera === 'back' && s.cameraSwitchBtnActive]}
+                onPress={() => {
+                  setSelectedCamera('back');
+                  setPreferredCamera('back');
+                }}
+              >
+                <Text style={[s.cameraSwitchTxt, selectedCamera === 'back' && s.cameraSwitchTxtActive]}>Arrière</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Stepper */}
@@ -497,6 +529,31 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 12,
+  },
+  cameraSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cameraSwitchBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.12)',
+  },
+  cameraSwitchBtnActive: {
+    backgroundColor: C.blue,
+    borderColor: C.blue,
+  },
+  cameraSwitchTxt: {
+    color: C.ink,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  cameraSwitchTxtActive: {
+    color: '#fff',
   },
   closeBtn: {
     width: 44,

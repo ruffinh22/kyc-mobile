@@ -36,6 +36,148 @@ const signalingPeers = new Map<string, Set<WsSocket>>();
 const terrainSockets = new Map<string, WsSocket>();
 const terrainTokens = new Map<string, string>();
 
+const fcmServerKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || '';
+const serviceAccountPath = path.resolve(process.cwd(), 'kyc-congo-399bc93f01c9.json');
+let cachedServiceAccount: any = null;
+
+console.log('[FCM] service account path', serviceAccountPath);
+
+function loadServiceAccount(): any | null {
+  if (cachedServiceAccount) return cachedServiceAccount;
+
+  try {
+    if (!fs.existsSync(serviceAccountPath)) {
+      console.warn('[FCM] Fichier de compte de service introuvable', serviceAccountPath);
+      return null;
+    }
+
+    cachedServiceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    return cachedServiceAccount;
+  } catch (err) {
+    console.warn('[FCM] Impossible de lire le compte de service', err);
+    return null;
+  }
+}
+
+function base64UrlEncode(buffer: Buffer): string {
+  return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function signJwt(serviceAccount: any): string | null {
+  try {
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iss: serviceAccount.client_email,
+      scope: 'https://www.googleapis.com/auth/firebase.messaging',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: now,
+      exp: now + 3600,
+    };
+
+    const encodedHeader = base64UrlEncode(Buffer.from(JSON.stringify(header)));
+    const encodedPayload = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
+    const signingInput = `${encodedHeader}.${encodedPayload}`;
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(signingInput);
+    const privateKey = crypto.createPrivateKey(serviceAccount.private_key);
+    const signature = signer.sign(privateKey);
+
+    return `${signingInput}.${base64UrlEncode(signature)}`;
+  } catch (err) {
+    console.warn('[FCM] Impossible de signer le JWT', err);
+    return null;
+  }
+}
+
+async function getFcmAccessToken(): Promise<string | null> {
+  const serviceAccount = loadServiceAccount();
+  if (!serviceAccount) return null;
+
+  const assertion = signJwt(serviceAccount);
+  if (!assertion) return null;
+
+  try {
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion,
+      }),
+    });
+
+    const result = await response.json() as any;
+    if (!response.ok) {
+      console.warn('[FCM] OAuth token error', response.status, result);
+      return null;
+    }
+
+    return result.access_token ?? null;
+  } catch (err) {
+    console.warn('[FCM] Impossible de récupérer le token OAuth FCM', err);
+    return null;
+  }
+}
+
+async function sendFcmHttp(payload: any): Promise<boolean> {
+  if (fcmServerKey) {
+    try {
+      const response = await fetch('https://fcm.googleapis.com/fcm/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `key=${fcmServerKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await response.text();
+      console.log('[FCM] legacy response', response.status, text);
+      return response.ok;
+    } catch (err) {
+      console.warn('[FCM] legacy push exception', err);
+    }
+  }
+
+  const serviceAccount = loadServiceAccount();
+  if (!serviceAccount?.project_id) {
+    console.warn('[FCM] Aucun compte Firebase utilisable pour l’envoi du push');
+    return false;
+  }
+
+  try {
+    const accessToken = await getFcmAccessToken();
+    if (!accessToken) {
+      console.warn('[FCM] impossible d’obtenir un token OAuth pour le push');
+      return false;
+    }
+
+    const response = await fetch(`https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          token: payload.to,
+          data: payload.data,
+          notification: payload.notification,
+          android: payload.android,
+        },
+      }),
+    });
+
+    const text = await response.text();
+    console.log('[FCM] v1 response', response.status, text);
+    return response.ok;
+  } catch (err) {
+    console.warn('[FCM] v1 push exception', err);
+    return false;
+  }
+}
+
 function normalizeNumero(value: string | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
@@ -46,12 +188,20 @@ async function sendIncomingCallPush(params: {
   numeroMtn: string;
   callUuid: string;
 }): Promise<boolean> {
-  const serverKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY;
-  if (!params.token || !serverKey) return false;
+  if (!params.token) {
+    console.warn('[FCM] push skipped: no token registered for terrain', params.numero);
+    return false;
+  }
+
+  console.log('[FCM] preparing push', {
+    forNumero: params.numero,
+    tokenPreview: params.token.slice(0, 20),
+    callUuid: params.callUuid,
+    numeroMtn: params.numeroMtn,
+  });
 
   const payload = {
     to: params.token,
-    priority: 'high',
     data: {
       type: 'incoming-call',
       numero: params.numero,
@@ -66,25 +216,14 @@ async function sendIncomingCallPush(params: {
         body: `Appel de ${params.numeroMtn}`,
       },
     },
+    notification: {
+      title: 'Appel vidéo entrant',
+      body: `Appel de ${params.numeroMtn}`,
+    },
   };
 
   try {
-    const res = await fetch('https://fcm.googleapis.com/fcm/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `key=${serverKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.warn('[FCM] push failed', res.status, text);
-      return false;
-    }
-
-    return true;
+    return await sendFcmHttp(payload);
   } catch (err) {
     console.warn('[FCM] push exception', err);
     return false;
@@ -96,6 +235,24 @@ function nowTime() { return new Date().toTimeString().slice(0, 5); }
 function nowSec()  { return Math.floor(Date.now() / 1000); }
 
 export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
+
+  app.post('/api/device/register-fcm', async (req, reply) => {
+    const body = (req.body ?? {}) as { numero?: string; token?: string };
+    const numero = normalizeNumero(body.numero);
+    const token = String(body.token ?? '').trim();
+
+    if (!numero || !token) {
+      return reply.code(400).send({ success: false, error: 'numero et token requis' });
+    }
+
+    terrainTokens.set(numero, token);
+    return reply.send({
+      success: true,
+      registered: true,
+      numero,
+      tokenPreview: `${token.slice(0, 12)}...`,
+    });
+  });
 
   // ==========================================================================
   // POST /api/public/dossiers
@@ -381,6 +538,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
     const targetSocket = terrainSockets.get(numero);
     const pushToken = terrainTokens.get(numero);
+    const hasFcmServerKey = Boolean(process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || true);
     const callUuid = `server-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     let wsDelivered = false;
@@ -398,12 +556,24 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       pushDelivered = await sendIncomingCallPush({ token: pushToken, numero, numeroMtn, callUuid });
     }
 
+    const pushReason = !pushToken
+      ? 'no_registered_token'
+      : !hasFcmServerKey
+        ? 'no_fcm_server_key'
+        : (pushDelivered ? 'sent' : 'delivery_failed');
+    const pushHint = !hasFcmServerKey
+      ? 'Ajoute FCM_SERVER_KEY ou FCM_API_KEY dans le .env du backend pour activer la livraison push hors app'
+      : undefined;
+
     return reply.send({
       success: true,
       delivered: wsDelivered || pushDelivered,
       via: wsDelivered ? (pushDelivered ? 'ws+fcm' : 'ws') : (pushDelivered ? 'fcm' : 'none'),
       wsDelivered,
       pushDelivered,
+      pushConfigured: Boolean(pushToken && hasFcmServerKey),
+      pushReason,
+      pushHint,
       numero,
       numeroMtn,
       callUuid,

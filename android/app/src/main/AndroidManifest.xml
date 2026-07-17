@@ -44,6 +44,13 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
+  <!-- ═══ EXEMPTION DOZE/BATTERIE ═══
+       Sans elle, le système peut retarder ou tuer le processus JS avant que
+       l'appel entrant ne s'affiche, en particulier sur Samsung/Xiaomi/Oppo.
+       C'est la permission qui permet à l'app de proposer à l'utilisateur de
+       se whitelister elle-même (boîte de dialogue système, pas automatique). -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
   <!-- ═══ FOREGROUND SERVICE — TYPES CAMÉRA/MICRO (obligatoire API 34+) ═══
        Depuis Android 14, un foreground service qui capture caméra/micro doit
        déclarer explicitement ces permissions, en plus de son type déclaré

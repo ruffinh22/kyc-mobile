@@ -1,48 +1,44 @@
 import { Vibration, Platform } from 'react-native';
-import Sound from 'react-native-sound';
 
+/**
+ * CallSessionService.ts
+ * ─────────────────────────────────────────────────────────────────────────────
+ * MIGRATION (v2) : la sonnerie n'est plus jouée ici en JS via react-native-sound.
+ * Elle est maintenant jouée nativement par KycForegroundCallService (Android),
+ * démarrée dès NativeModules.KycCallModule.startForeground() — c'est-à-dire dès
+ * que le push arrive, indépendamment de l'état du moteur JS. Ça règle 2 problèmes
+ * de l'ancienne version :
+ *   1. La sonnerie dépendait d'un fichier .wav chargé via le bridge JS, en échec
+ *      silencieux si l'asset n'était pas correctement bundlé côté natif.
+ *   2. Sur le tout premier appel app fermée, le JS "headless" devait d'abord finir
+ *      d'initialiser CallKeep avant de pouvoir jouer un son — ratant la fenêtre.
+ * La vibration JS ci-dessous est conservée uniquement comme repli quand l'app est
+ * déjà au premier plan (écran IncomingCallScreen monté) ; sur Android, la
+ * vibration native du foreground service est déjà active en parallèle — appeler
+ * Vibration.vibrate() par-dessus ne double pas l'effet grâce à Vibration.cancel()
+ * qui réinitialise le pattern à chaque appel.
+ */
 const VIBRATION_PATTERN = [0, 700, 400, 700, 400, 900];
 
 class CallSessionService {
-  private ringtoneRef: Sound | null = null;
   private vibrationTimer: ReturnType<typeof setInterval> | null = null;
   private isActive = false;
 
   startIncomingCallExperience(): void {
     if (this.isActive) return;
     this.isActive = true;
-    this.startRingtone();
-    this.startVibration();
+    // Sur Android, la sonnerie ET la vibration sont déjà gérées nativement par
+    // KycForegroundCallService (voir NotificationService.showIncomingCall).
+    // On ne relance la vibration JS que sur iOS, qui n'a pas cette migration.
+    if (Platform.OS === 'ios') {
+      this.startVibration();
+    }
   }
 
   stopIncomingCallExperience(): void {
-    if (!this.isActive && !this.ringtoneRef && !this.vibrationTimer) return;
+    if (!this.isActive && !this.vibrationTimer) return;
     this.isActive = false;
-    this.stopRingtone();
     this.stopVibration();
-  }
-
-  private startRingtone(): void {
-    if (this.ringtoneRef) return;
-    Sound.setCategory('Playback', true);
-    const sound = new Sound('ringtone.wav', Sound.MAIN_BUNDLE, (err) => {
-      if (err || !this.isActive) {
-        if (sound) sound.release();
-        return;
-      }
-      sound.setNumberOfLoops(-1);
-      sound.setVolume(Platform.OS === 'ios' ? 0.9 : 1.0);
-      sound.play();
-      this.ringtoneRef = sound;
-    });
-  }
-
-  private stopRingtone(): void {
-    if (this.ringtoneRef) {
-      this.ringtoneRef.stop();
-      this.ringtoneRef.release();
-      this.ringtoneRef = null;
-    }
   }
 
   private startVibration(): void {

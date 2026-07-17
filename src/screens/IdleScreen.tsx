@@ -65,12 +65,48 @@ export function IdleScreen({ navigation }: any) {
     navigation.navigate('IncomingCall', { numeroMtn, callUuid });
   }, [navigation, callStore]);
 
+  // ── Exemption batterie (une seule fois, dès que l'app est au premier plan) ──
+  // Doit se faire ici (écran monté, Activity disponible) et pas dans le chemin
+  // headless de registerBackgroundHandlers, qui n'a pas d'Activity pour afficher
+  // la boîte de dialogue système.
+  useEffect(() => {
+    (async () => {
+      const alreadyAsked = await AsyncStorage.getItem('battery_exemption_requested');
+      if (!alreadyAsked) {
+        await notificationService.ensureBatteryOptimizationExemption();
+      }
+    })();
+  }, []);
+
+  const registerFcmTokenWithBackend = useCallback(async (token: string) => {
+    if (!serverUrl || !numeroAgent || !token) return;
+
+    const base = serverUrl.replace(/\/$/, '');
+    const apiBase = base.startsWith('http') ? base : `http://${base}`;
+
+    try {
+      const res = await fetch(`${apiBase}/api/device/register-fcm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ numero: numeroAgent, token }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.warn('[Idle] FCM registration failed', res.status, text);
+      }
+    } catch (err) {
+      console.warn('[Idle] FCM registration error', err);
+    }
+  }, [numeroAgent, serverUrl]);
+
   // ── Init FCM → WS ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const fcmToken = (await notificationService.ensureFCMToken()) ?? '';
       if (cancelled) return;
+      await registerFcmTokenWithBackend(fcmToken);
       signalingService.init(serverUrl, numeroAgent, fcmToken, {
         onConnected:    () => setConnected(true),
         onDisconnected: () => setConnected(false),
@@ -259,6 +295,8 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     width: '100%',
+    flexWrap: 'nowrap',
+    gap: 8,
   },
   btnPrimary: {
     paddingVertical: 16, borderRadius: R.lg,

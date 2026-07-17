@@ -1,5 +1,11 @@
 package com.kycmobile;
 
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.util.Log;
 
 import com.facebook.react.bridge.Promise;
@@ -115,6 +121,64 @@ public class KycCallModule extends ReactContextBaseJavaModule {
         } catch (Exception e) {
             Log.e(TAG, "Error initializing module", e);
             promise.reject("INIT_ERROR", "Module initialization failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Vérifie si l'app est déjà exemptée de l'optimisation batterie (Doze).
+     * Appelé depuis NotificationService.ts avant de proposer la demande, pour
+     * ne pas re-solliciter l'utilisateur inutilement à chaque lancement.
+     */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public boolean isIgnoringBatteryOptimizations() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true; // pas de Doze avant M
+            PowerManager pm = (PowerManager) getReactApplicationContext().getSystemService(Context.POWER_SERVICE);
+            return pm != null && pm.isIgnoringBatteryOptimizations(getReactApplicationContext().getPackageName());
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking battery optimization status", e);
+            return false;
+        }
+    }
+
+    /**
+     * Ouvre la boîte de dialogue système demandant l'exemption Doze pour cette
+     * app. Nécessite REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dans le manifest.
+     * C'est LA cause n°1 des appels manqués app-fermée sur Samsung/Xiaomi/Oppo :
+     * sans cette exemption, le système peut retarder ou tuer le processus JS
+     * avant même que le foreground service ne démarre.
+     */
+    @ReactMethod
+    public void requestIgnoreBatteryOptimizations() {
+        try {
+            String packageName = getReactApplicationContext().getPackageName();
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + packageName));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getReactApplicationContext().startActivity(intent);
+            Log.i(TAG, "Battery optimization exemption dialog requested");
+        } catch (Exception e) {
+            // Certains OEM (MIUI notamment) refusent cet intent standard ; dans ce
+            // cas on log seulement — un guide manuel restera nécessaire pour ces
+            // appareils (paramètres constructeur hors API standard Android).
+            Log.e(TAG, "Error requesting battery optimization exemption", e);
+        }
+    }
+
+    /**
+     * Arrêter la sonnerie/vibration native SANS arrêter le service foreground
+     * (notification + wake lock restent actifs pendant toute la durée de
+     * l'appel). Appelé quand l'utilisateur décroche — évite le "stop puis
+     * restart" fragile de l'ancienne version.
+     */
+    @ReactMethod
+    public void answerCall() {
+        try {
+            Log.d(TAG, "answerCall called — arrêt sonnerie, service maintenu");
+            KycForegroundCallService.answer(getReactApplicationContext());
+            currentCallState = STATE_CONNECTING;
+        } catch (Exception e) {
+            Log.e(TAG, "Error answering call natively", e);
         }
     }
 

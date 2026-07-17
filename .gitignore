@@ -93,3 +93,6 @@ coverage/
 # Misc
 .cache/
 .metro-health-check-result.json
+
+# local-only Firebase credentials
+kyc-modern/backend/kyc-congo-399bc93f01c9.json

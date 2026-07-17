@@ -3,7 +3,11 @@ import path from 'path';
 import Fastify from 'fastify';
 import cors       from '@fastify/cors';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+const envPath = path.resolve(__dirname, '../.env');
+dotenv.config({ path: envPath });
+console.log('[ENV] Chargement du fichier .env depuis', envPath);
+console.log('[ENV] FCM_SERVER_KEY présent ?', Boolean(process.env.FCM_SERVER_KEY));
+console.log('[ENV] FCM_API_KEY présent ?', Boolean(process.env.FCM_API_KEY));
 import helmet     from '@fastify/helmet';
 import cookie     from '@fastify/cookie';
 import multipart  from '@fastify/multipart';
@@ -67,6 +71,7 @@ async function main(): Promise<void> {
 
   if (!process.env.FCM_SERVER_KEY && !process.env.FCM_API_KEY) {
     app.log.warn('[FCM] FCM_SERVER_KEY/FCM_API_KEY non défini — les pushes d\'appel entrants seront désactivés en arrière-plan');
+    app.log.warn('[FCM] Définis FCM_SERVER_KEY avec la clé serveur Firebase du projet pour activer les notifications hors app');
   } else {
     app.log.info('[FCM] Clé serveur FCM détectée — les appels entrants peuvent être poussés en arrière-plan');
   }

@@ -93,12 +93,16 @@ export function IncomingCallScreen({ route, navigation }: any) {
 
   const handleAccept = async () => {
     stopAll();
-    notificationService.endNativeCall(callUuid);
+    // answerNativeCall (pas endNativeCall) : arrête la sonnerie native sans
+    // tuer le service foreground — il reste un seul service continu du
+    // "ça sonne" au "en cours", pas de coupure/redémarrage fragile.
+    notificationService.answerNativeCall(callUuid);
     callStore.setConnecting();
     try {
       await signalingService.acceptCall();
       navigation.replace('Call', { callUuid, numeroMtn });
     } catch {
+      notificationService.endNativeCall(callUuid);
       signalingService.refuseCall();
       callStore.resetCall();
       navigation.replace('Idle');

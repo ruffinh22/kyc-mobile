@@ -30,6 +30,28 @@ export default function App() {
   const setAgent = useAgentStore(s => s.setAgent);
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
+  const registerFcmTokenWithBackend = async (serverUrl: string, numeroAgent: string, token: string) => {
+    if (!serverUrl || !numeroAgent || !token) return;
+
+    const base = serverUrl.replace(/\/$/, '');
+    const apiBase = base.startsWith('http') ? base : `http://${base}`;
+
+    try {
+      const res = await fetch(`${apiBase}/api/device/register-fcm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ numero: numeroAgent, token }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.warn('[App] FCM registration failed', res.status, text);
+      }
+    } catch (err) {
+      console.warn('[App] FCM registration error', err);
+    }
+  };
+
   // ── Restauration de session ──────────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -89,7 +111,11 @@ export default function App() {
         signalingService.hangUp();
         navigationRef.current?.reset({ index: 0, routes: [{ name: 'Idle' }] });
       },
-      onTokenRefresh: (newToken) => signalingService.updateFcmToken(newToken),
+      onTokenRefresh: async (newToken) => {
+        signalingService.updateFcmToken(newToken);
+        const { numeroAgent, serverUrl } = useAgentStore.getState();
+        await registerFcmTokenWithBackend(serverUrl, numeroAgent, newToken);
+      },
     }).catch((err) => console.warn('[App] Notification init failed', err));
 
     return () => { cancelled = true; };

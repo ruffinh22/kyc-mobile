@@ -73,6 +73,15 @@ export interface Dossier {
   autre_numero: string | null;
   nom_pere: string | null;
   nom_mere: string | null;
+  adresse_complete: string | null;
+  numero_cni: string | null;
+  sexe: string | null;
+  nationalite: string | null;
+  profession: string | null;
+  country: string | null;
+  ocr_overrides: string | null;
+  flow_step: number | null;
+  acquisition_status: string | null;
   created_at: number;
   updated_at: number;
   closed_at: number | null;

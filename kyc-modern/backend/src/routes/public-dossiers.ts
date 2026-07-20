@@ -22,6 +22,7 @@ type WsSocket = any;
 // On réexpose la logique via une fonction partagée pour éviter la duplication.
 // Si tu préfères l'inline, copie compareWithRekognition() ici.
 import { verifierVisageAutoById } from './face-verify-shared';
+import { buildDossierCreatePayload } from '../utils/dossierPayload';
 
 const UPLOAD_CNI   = process.env.UPLOAD_CNI || path.join(process.cwd(), 'uploads', 'cni');
 const MAX_FILE     = 5  * 1024 * 1024; // 5 Mo pour recto/verso
@@ -410,30 +411,35 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     }
 
     await db.createDossier({
-      id,
-      numero_mtn:     numero_mtn.trim().replace(/\D/g, ''),
-      wa_agent:       normalizedWaAgent || undefined,
-      username_agent: username_agent || undefined,
-      fonction_agent: fonction_agent || undefined,
-      zone_agent:     zone_agent     || undefined,
-      date,
-      heure_reception: nowTime(),
-      photo_recto:    photoPaths.photo_recto,
-      photo_verso:    photoPaths.photo_verso,
-      photo_live:     photoPaths.photo_live, // null si non fourni ici
-      // ── Infos titulaire pour l'enregistrement SIM ─────────────────────────
-      nom_titulaire:    nom_titulaire.trim(),
-      prenom_titulaire: prenom_titulaire.trim(),
-      date_naissance:   date_naissance.trim(),
-      lieu_naissance:   lieu_naissance.trim(),
-      autre_numero:     (autre_numero ?? '').trim().replace(/\D/g, '') || undefined,
-      nom_pere:         nom_pere.trim(),
-      nom_mere:         nom_mere.trim(),
-      adresse_complete: (adresse_complete ?? '').trim() || undefined,
-      numero_cni:       (numero_cni ?? '').trim() || undefined,
-      sexe:             (sexe ?? '').trim() || undefined,
-      nationalite:      (nationalite ?? '').trim() || undefined,
-      profession:       (profession ?? '').trim() || undefined,
+      ...buildDossierCreatePayload({
+        id,
+        numero_mtn: numero_mtn.trim().replace(/\D/g, ''),
+        country: country?.trim() || null,
+        wa_agent: normalizedWaAgent || null,
+        username_agent: username_agent || null,
+        fonction_agent: fonction_agent || null,
+        zone_agent: zone_agent || null,
+        date,
+        heure_reception: nowTime(),
+        nom_titulaire: nom_titulaire.trim(),
+        prenom_titulaire: prenom_titulaire.trim(),
+        date_naissance: date_naissance.trim(),
+        lieu_naissance: lieu_naissance.trim(),
+        autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || null,
+        nom_pere: nom_pere.trim(),
+        nom_mere: nom_mere.trim(),
+        adresse_complete: (adresse_complete ?? '').trim() || null,
+        numero_cni: (numero_cni ?? '').trim() || null,
+        sexe: (sexe ?? '').trim() || null,
+        nationalite: (nationalite ?? '').trim() || null,
+        profession: (profession ?? '').trim() || null,
+        ocr_overrides: fields.ocr_overrides || null,
+        flow_step: 4,
+        acquisition_status: 'submitted',
+      }),
+      photo_recto: photoPaths.photo_recto,
+      photo_verso: photoPaths.photo_verso,
+      photo_live: photoPaths.photo_live,
     });
 
     db.audit(null, 'DOSSIER_PUBLIC_CREE', `id=${id} wa=${wa_agent ?? ''}`, req.ip);
@@ -441,11 +447,15 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({
       success: true,
       id,
-      ref:          id,
-      numero:       numero_mtn.trim(),
-      recto_path:   photoPaths.photo_recto  ?? '',
-      verso_path:   photoPaths.photo_verso  ?? '',
-      photo_live:   photoPaths.photo_live   ?? '',
+      ref: id,
+      numero: numero_mtn.trim(),
+      recto_path: photoPaths.photo_recto ?? '',
+      verso_path: photoPaths.photo_verso ?? '',
+      photo_live: photoPaths.photo_live ?? '',
+      country: country?.trim() || null,
+      flow_step: 4,
+      acquisition_status: 'submitted',
+      message: 'Dossier créé avec succès — données d’acquisition enregistrées.',
     });
   });
 
@@ -609,6 +619,9 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       autre_numero: d.autre_numero ?? null,
       nom_pere: d.nom_pere ?? null,
       nom_mere: d.nom_mere ?? null,
+      country: d.country ?? null,
+      flow_step: d.flow_step ?? 4,
+      acquisition_status: d.acquisition_status ?? 'submitted',
     }));
     const stats = { total: 0, en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
     for (const d of filtered) {
@@ -652,6 +665,9 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
         autre_numero: d.autre_numero ?? null,
         nom_pere: d.nom_pere ?? null,
         nom_mere: d.nom_mere ?? null,
+        country: d.country ?? null,
+        flow_step: d.flow_step ?? 4,
+        acquisition_status: d.acquisition_status ?? 'submitted',
       })),
     });
   });

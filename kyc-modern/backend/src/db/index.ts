@@ -30,7 +30,34 @@ export async function initDb(): Promise<void> {
   const conn = await pool.getConnection();
   await conn.ping();
   conn.release();
+  await ensureDossierColumns();
   console.log('[DB] MySQL connecté :', process.env.DB_NAME);
+}
+
+async function ensureDossierColumns(): Promise<void> {
+  if (!pool) return;
+
+  const statements = [
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS adresse_complete VARCHAR(500) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS numero_cni VARCHAR(50) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS sexe VARCHAR(20) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS nationalite VARCHAR(100) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS profession VARCHAR(100) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS country VARCHAR(5) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS ocr_overrides VARCHAR(200) DEFAULT NULL",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS flow_step TINYINT(1) DEFAULT 4",
+    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS acquisition_status VARCHAR(30) DEFAULT 'submitted'",
+  ];
+
+  for (const statement of statements) {
+    try {
+      await pool.execute(statement);
+    } catch (err: any) {
+      if (err?.code !== 'ER_DUP_FIELDNAME' && err?.code !== 'ER_PARSE_ERROR') {
+        console.warn('[DB] impossible d’ajouter la colonne dossier', statement, err);
+      }
+    }
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -247,21 +274,35 @@ export async function createDossier(data: {
   fonction_agent?: string; zone_agent?: string; date: string;
   heure_reception: string; photo_recto?: string; photo_verso?: string; photo_live?: string;
   score_visage?: number | null; visage_match?: number | null; visage_motif?: string;
-  visage_verifie_le?: number | null;
+  visage_verifie_le?: number | null; nom_titulaire?: string | null;
+  prenom_titulaire?: string | null; date_naissance?: string | null;
+  lieu_naissance?: string | null; autre_numero?: string | null; nom_pere?: string | null;
+  nom_mere?: string | null; adresse_complete?: string | null; numero_cni?: string | null;
+  sexe?: string | null; nationalite?: string | null; profession?: string | null;
+  country?: string | null; ocr_overrides?: string | null; flow_step?: number | null;
+  acquisition_status?: string | null;
 }): Promise<void> {
   const now = nowSec();
   await exec(
     `INSERT INTO dossiers (id, numero_mtn, wa_agent, username_agent, fonction_agent, zone_agent,
       date, heure_reception, photo_recto, photo_verso, photo_live, score_visage, visage_match,
-      visage_motif, visage_verifie_le, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?, ?)`,
+      visage_motif, visage_verifie_le, nom_titulaire, prenom_titulaire, date_naissance,
+      lieu_naissance, autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
+      sexe, nationalite, profession, country, ocr_overrides, flow_step, acquisition_status,
+      created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       data.id, data.numero_mtn, data.wa_agent ?? null, data.username_agent ?? null,
       data.fonction_agent ?? null, data.zone_agent ?? null,
       data.date, data.heure_reception,
       data.photo_recto ?? null, data.photo_verso ?? null, data.photo_live ?? null,
       data.score_visage ?? null, data.visage_match ?? null, data.visage_motif ?? null,
-      data.visage_verifie_le ?? null, now, now,
+      data.visage_verifie_le ?? null, data.nom_titulaire ?? null, data.prenom_titulaire ?? null,
+      data.date_naissance ?? null, data.lieu_naissance ?? null, data.autre_numero ?? null,
+      data.nom_pere ?? null, data.nom_mere ?? null, data.adresse_complete ?? null,
+      data.numero_cni ?? null, data.sexe ?? null, data.nationalite ?? null,
+      data.profession ?? null, data.country ?? null, data.ocr_overrides ?? null,
+      data.flow_step ?? null, data.acquisition_status ?? null, now, now,
     ]
   );
 }
@@ -277,6 +318,10 @@ export async function updateDossier(
     'numero_mtn', 'wa_agent', 'username_agent', 'fonction_agent', 'zone_agent',
     'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live',
     'score_visage', 'visage_match', 'visage_motif', 'visage_verifie_le',
+    'nom_titulaire', 'prenom_titulaire', 'date_naissance', 'lieu_naissance',
+    'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
+    'sexe', 'nationalite', 'profession', 'country', 'ocr_overrides',
+    'flow_step', 'acquisition_status',
   ];
   const sets: string[] = ['updated_at=?'];
   const vals: unknown[] = [nowSec()];

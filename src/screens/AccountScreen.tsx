@@ -58,12 +58,22 @@ export function AccountScreen({ navigation }: any) {
   const cfg = useMemo(() => getCountryConfig(form.country), [form.country]);
   const valid = useMemo(() => validatePhoneNumber(form.numeroAgent, form.country), [form.numeroAgent, form.country]);
 
+  const isLocalDevHost = (url: string) => /^(https?:\/\/)?(10\.0\.2\.2|localhost|127\.0\.0\.1|192\.168\.|10\.)/i.test(url);
+
   const handleSave = async () => {
     const clean = form.numeroAgent.replace(/\D/g, '');
     if (!clean) { setError('Le numéro est requis'); return; }
     if (!valid.isValid) { setError(valid.error || 'Numéro invalide'); return; }
     if (!form.fonctionAgent) { setError('Sélectionnez votre fonction'); return; }
     if (!form.zoneAgent) { setError('Sélectionnez votre zone'); return; }
+    if (!form.serverUrl.trim()) { setError('L\'URL serveur est requise'); return; }
+    // Cette app manipule des données KYC (identité, biométrie faciale) : on
+    // n'empêche pas un serveur local/émulateur en dev, mais on avertit si un
+    // serveur non-https est utilisé en dehors de ce contexte de développement.
+    if (!/^https:\/\//i.test(form.serverUrl) && !isLocalDevHost(form.serverUrl)) {
+      setError('Utilisez une URL en https:// pour un serveur de production (données KYC sensibles)');
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -150,11 +160,11 @@ export function AccountScreen({ navigation }: any) {
           {error ? <Text style={s.error}>{error}</Text> : null}
           {saved ? <Text style={s.success}>Profil enregistré</Text> : null}
 
-          <TouchableOpacity style={s.primaryBtn} onPress={handleSave} activeOpacity={0.9}>
+          <TouchableOpacity style={s.primaryBtn} onPress={handleSave} activeOpacity={0.9} accessibilityRole="button" accessibilityLabel="Enregistrer le profil">
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryBtnText}>Enregistrer</Text>}
           </TouchableOpacity>
 
-          <TouchableOpacity style={s.secondaryBtn} onPress={handleLogout} activeOpacity={0.9}>
+          <TouchableOpacity style={s.secondaryBtn} onPress={handleLogout} activeOpacity={0.9} accessibilityRole="button" accessibilityLabel="Se déconnecter">
             <Text style={s.secondaryBtnText}>Se déconnecter</Text>
           </TouchableOpacity>
         </View>

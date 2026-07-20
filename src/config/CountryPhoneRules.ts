@@ -24,6 +24,8 @@ export interface PhoneRule {
   validPrefixes: string[];
   /** Format d'affichage pour l'utilisateur */
   displayFormat: string;
+  /** Texte de substitution affiché dans le champ de saisie */
+  placeholder: string;
   /** Exemple de numéro valide */
   example: string;
   /** Opérateurs MTN disponibles dans le pays */
@@ -50,6 +52,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 9,
     validPrefixes: ['0'], // MTN Congo: 06xxx xxxx, 07xxx xxxx
     displayFormat: '0XX XXX XXXX',
+    placeholder: '061234567',
     example: '061234567',
     operators: {
       mtn: true,
@@ -63,6 +66,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 10,
     validPrefixes: ['01'],
     displayFormat: '01 XX XX XX XX',
+    placeholder: '0123456789',
     example: '0123456789',
     operators: {
       mtn: true,
@@ -76,6 +80,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 10, // Côte d'Ivoire: 10 chiffres
     validPrefixes: ['0'], // Commence par 0
     displayFormat: '0X XXXX XXXX',
+    placeholder: '0501234567',
     example: '0501234567',
     operators: {
       mtn: true,
@@ -90,6 +95,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 9, // Cameroun: 9 chiffres (6, 7)
     validPrefixes: ['6', '7'],
     displayFormat: 'XX XXX XXX',
+    placeholder: '612345678',
     example: '612345678',
     operators: {
       mtn: true,
@@ -103,6 +109,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 7, // Guinée Bissau: 7 chiffres
     validPrefixes: ['9', '7'],
     displayFormat: 'XXX XXXX',
+    placeholder: '9654321',
     example: '9654321',
     operators: {
       mtn: true,
@@ -115,6 +122,7 @@ export const COUNTRY_PHONE_RULES: Record<string, PhoneRule> = {
     digitCount: 8, // Guinée: 8 chiffres
     validPrefixes: ['6'],
     displayFormat: 'XX XXX XXX',
+    placeholder: '61234567',
     example: '61234567',
     operators: {
       mtn: true,

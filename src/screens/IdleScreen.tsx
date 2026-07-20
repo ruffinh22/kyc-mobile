@@ -14,19 +14,27 @@ import { keepAwake } from '../utils/keepAwake';
 import { useAgentStore, useCallStore } from '../store/callStore';
 import { signalingService }   from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
+import { callHistoryService } from '../services/CallHistoryService';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 import { StatCard } from '../components/StatCard';
 import { IconTile } from '../components/IconTile';
 import { BottomTabBar } from '../components/BottomTabBar';
 
-export function IdleScreen({ navigation }: any) {
+type IdleScreenProps = {
+  navigation: {
+    navigate: (screen: string, params?: object) => void;
+    replace: (screen: string, params?: object) => void;
+  };
+};
+
+export function IdleScreen({ navigation }: IdleScreenProps) {
   useEffect(() => {
     keepAwake.activate();
     return () => keepAwake.deactivate();
   }, []);
 
-  const { numeroAgent, serverUrl, setConnected, isConnected, logout } = useAgentStore();
+  const { numeroAgent, serverUrl, setConnected, isConnected } = useAgentStore();
   const callStore = useCallStore();
   const errorMessage = useCallStore((s) => s.errorMessage);
 
@@ -113,6 +121,7 @@ export function IdleScreen({ navigation }: any) {
         onIncomingCall: (numeroMtn) => {
           const uuid = `ws-${Date.now()}`;
           callStore.setIncomingCall(numeroMtn, uuid);
+          void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
           notificationService.showIncomingCall(uuid, numeroMtn);
           if (!cancelled) navigation.navigate('IncomingCall', { numeroMtn, callUuid: uuid });
         },
@@ -124,19 +133,10 @@ export function IdleScreen({ navigation }: any) {
     return () => { cancelled = true; };
   }, [serverUrl, numeroAgent]);
 
-  const handleLogout = async () => {
-    signalingService.destroy();
-    await AsyncStorage.multiRemove(['kyc_numero', 'kyc_server']);
-    logout();
-    navigation.replace('Login');
-  };
-
   const handleAccount = () => {
     navigation.navigate('Account');
   };
 
-  const initials   = numeroAgent.substring(0, 2).toUpperCase();
-  const onlineColor = isConnected ? C.success : C.danger;
 
   return (
     <View style={s.root}>
@@ -158,7 +158,7 @@ export function IdleScreen({ navigation }: any) {
         <Text style={s.waitTitle}>En attente d'un appel</Text>
 
         {errorMessage ? (
-          <View style={s.alertBanner}>
+          <View style={s.alertBanner} accessibilityRole="alert" accessibilityLiveRegion="polite">
             <Text style={s.alertText}>{errorMessage}</Text>
           </View>
         ) : null}
@@ -175,8 +175,8 @@ export function IdleScreen({ navigation }: any) {
         <View style={s.grid}>
           <IconTile icon="📱" label="Soumettre" color={C.blue} onPress={() => navigation.navigate('Acquisition')} />
           <IconTile icon="🗂️" label="Dossiers" color={C.yellow} onPress={() => navigation.navigate('DossierList')} />
+          <IconTile icon="📞" label="Appels" color={C.blueMid} onPress={() => navigation.navigate('CallHistory')} />
           <IconTile icon="🔐" label="Compte" color={C.success} onPress={handleAccount} />
-          <IconTile icon="📞" label="Appels" color={C.blueMid} onPress={() => navigation.navigate('IncomingCall', { numeroMtn: '000', callUuid: 'demo' })} />
         </View>
       </View>
 
@@ -184,6 +184,7 @@ export function IdleScreen({ navigation }: any) {
         if (key === 'submit') navigation.navigate('Acquisition');
         if (key === 'dossiers') navigation.navigate('DossierList');
         if (key === 'account') handleAccount();
+        if (key === 'home') navigation.navigate('Idle');
       }} />
     </View>
   );

@@ -15,6 +15,7 @@ import { keepAwake } from '../utils/keepAwake';
 import { signalingService }    from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
 import { useCallStore }         from '../store/callStore';
+import { callHistoryService } from '../services/CallHistoryService';
 import { C, R, T } from '../theme/tokens';
 
 // ── Palette institutionnelle (cohérente avec IncomingCallScreen) ───────────
@@ -64,6 +65,9 @@ function CtrlButton({
         onPressOut={() => press(1)}
         onPress={onPress}
         hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ selected: !!active }}
       >
         <Animated.View
           style={[
@@ -85,7 +89,13 @@ function CtrlButton({
   );
 }
 
-export function CallScreen({ route, navigation }: any) {
+type CallScreenParams = { callUuid: string; numeroMtn: string };
+type CallScreenProps = {
+  route: { params: CallScreenParams };
+  navigation: { replace: (screen: string, params?: object) => void };
+};
+
+export function CallScreen({ route, navigation }: CallScreenProps) {
   useEffect(() => {
     keepAwake.activate();
     return () => keepAwake.deactivate();
@@ -98,19 +108,24 @@ export function CallScreen({ route, navigation }: any) {
   }, []);
   const callStore = useCallStore();
 
-  const [localStream,  setLocalStream]  = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // Initialisés depuis l'état déjà connu du service : si l'offer/answer/ICE
+  // s'est terminé pendant que l'agent voyait encore IncomingCallScreen (aucun
+  // écran n'écoutait alors), on ne part pas d'un écran vide qui attendrait un
+  // événement qui ne se reproduira jamais.
+  const [localStream,  setLocalStream]  = useState<MediaStream | null>(() => signalingService.getLocalStream());
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(() => signalingService.getRemoteStream());
   const [isMicOn,      setIsMicOn]      = useState(true);
   const [isCameraOn,   setIsCameraOn]   = useState(true);
-  const [statusTxt,    setStatusTxt]    = useState('Connexion…');
-  const [callReady,    setCallReady]    = useState(false);
+  const initialRemote = signalingService.getRemoteStream();
+  const [statusTxt,    setStatusTxt]    = useState(initialRemote ? 'Connecté' : 'Connexion…');
+  const [callReady,    setCallReady]    = useState(!!initialRemote);
   const [timerSec,     setTimerSec]     = useState(0);
-  const [hasRemote,    setHasRemote]    = useState(false);
+  const [hasRemote,    setHasRemote]    = useState(!!initialRemote);
   const [controlsVis,  setControlsVis]  = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [lowNetwork, setLowNetwork] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const [connectionPhase, setConnectionPhase] = useState<'connecting' | 'reconnecting' | 'fallback' | 'connected' | 'paused'>('connecting');
+  const [connectionPhase, setConnectionPhase] = useState<'connecting' | 'reconnecting' | 'fallback' | 'connected' | 'paused'>(initialRemote ? 'connected' : 'connecting');
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -237,7 +252,14 @@ export function CallScreen({ route, navigation }: any) {
   // ── Timer ─────────────────────────────────────────────────────────────────
   const startTimer = () => {
     setTimerSec(0);
-    timerRef.current = setInterval(() => setTimerSec(s => s + 1), 1000);
+    callStore.setCallDuration(0);
+    timerRef.current = setInterval(() => {
+      setTimerSec(s => {
+        const next = s + 1;
+        callStore.setCallDuration(next);
+        return next;
+      });
+    }, 1000);
   };
   const stopTimer = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -248,11 +270,15 @@ export function CallScreen({ route, navigation }: any) {
   // ── Raccrocher ────────────────────────────────────────────────────────────
   const handleEndCall = useCallback((notify = true) => {
     stopTimer();
+    const finalDuration = timerSec || callStore.callDuration;
     notificationService.endNativeCall(callUuid);
     if (notify) signalingService.hangUp();
+    if (callUuid) {
+      void callHistoryService.upsert({ callUuid, numeroMtn, durationSec: finalDuration });
+    }
     callStore.resetCall();
     navigation.replace('Idle');
-  }, [callUuid, navigation, callStore]);
+  }, [callUuid, numeroMtn, navigation, callStore, timerSec]);
 
   const handleToggleMic    = () => { const on = signalingService.toggleMic();    setIsMicOn(on);    callStore.setMicOn(on);    showControls(); };
   const handleToggleCamera = () => { const on = signalingService.toggleCamera(); setIsCameraOn(on); callStore.setCameraOn(on); showControls(); };
@@ -314,7 +340,7 @@ export function CallScreen({ route, navigation }: any) {
             key={remoteStream.toURL()}
             streamURL={remoteStream.toURL()}
             style={s.remoteVideo}
-            objectFit="cover"
+            objectFit="contain"
             mirror={false}
           />
         </Pressable>
@@ -352,7 +378,7 @@ export function CallScreen({ route, navigation }: any) {
             <Text style={s.statusTxt}>{statusTxt}</Text>
           </View>
           <View style={s.timerWrap}>
-            <Text style={{ fontSize: 12, color: TEXT_MUTED }}>🕒</Text>
+            <Text style={s.timerLabel}>Durée</Text>
             <Text style={s.timerTxt}>{fmt(timerSec)}</Text>
           </View>
         </View>
@@ -540,8 +566,14 @@ const s = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dot:       { width: 6, height: 6, borderRadius: 3 },
   statusTxt: { fontSize: T.xs, fontWeight: '600', color: TEXT_SOFT, letterSpacing: 0.2 },
-  timerWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  timerTxt:  { fontSize: T.xs, fontWeight: '600', color: TEXT_MUTED, fontVariant: ['tabular-nums'] },
+  timerWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 5, paddingHorizontal: 10,
+    borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
+  },
+  timerLabel: { fontSize: 10, fontWeight: '700', color: TEXT_SOFT, letterSpacing: 0.3, textTransform: 'uppercase' },
+  timerTxt:  { fontSize: T.xs, fontWeight: '700', color: '#F8FAFC', fontVariant: ['tabular-nums'] },
 
   identityRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   numTag: {

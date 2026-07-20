@@ -14,6 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LoginScreen }            from './src/screens/LoginScreen';
 import { IdleScreen }             from './src/screens/IdleScreen';
 import { DossierListScreen }      from './src/screens/DossierListScreen';
+import { CallHistoryScreen }       from './src/screens/CallHistoryScreen';
 import { IncomingCallScreen }      from './src/screens/IncomingCallScreen';
 import { CallScreen }              from './src/screens/CallScreen';
 import { AcquisitionScreenPro }    from './src/screens/AcquisitionScreenPro';
@@ -203,6 +204,7 @@ export default function App() {
             <Stack.Screen name="Login"         component={LoginScreen} />
             <Stack.Screen name="Idle"          component={IdleScreen} />
             <Stack.Screen name="DossierList"   component={DossierListScreen} />
+            <Stack.Screen name="CallHistory"   component={CallHistoryScreen} />
             <Stack.Screen name="Acquisition"   component={AcquisitionScreenPro} />
             <Stack.Screen name="Account"       component={AccountScreen} />
             <Stack.Screen name="FaceVerifyScreen" component={FaceVerifyScreen} options={{ presentation: 'modal' }} />

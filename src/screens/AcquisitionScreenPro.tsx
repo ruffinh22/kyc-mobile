@@ -6,14 +6,16 @@
  * plus jamais redemandé ici. Seuls le numéro MTN et les 2 photos sont saisis
  * à chaque dossier.
  */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image,
   StatusBar, SafeAreaView, Animated, PermissionsAndroid,
+  Modal, FlatList, Alert,
 } from 'react-native';
 import { launchCamera, CameraOptions } from 'react-native-image-picker';
 import { NativeModules } from 'react-native';
+import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { useAgentStore }  from '../store/callStore';
 import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
 import { C, R, T } from '../theme/tokens'; // Design tokens
@@ -25,9 +27,24 @@ interface Photo { uri: string; type: 'recto' | 'verso'; }
 const STEPS = [
   { id: 1, label: 'Numéro à certifier', icon: '📱' },
   { id: 2, label: 'Documents CNI', icon: '🪪' },
+  { id: 3, label: 'Identité', icon: '🛡️' },
+  { id: 4, label: 'Filiation & infos', icon: '🧾' },
 ];
 
-export function AcquisitionScreenPro({ navigation }: any) {
+// Champs issus de la lecture OCR de la CNI. Une fois validés, ils deviennent
+// non modifiables pour réduire les risques de fraude et garantir une
+// traçabilité claire de l'identité du titulaire.
+const OCR_LOCKED_FIELDS = ['nomTitulaire', 'prenomTitulaire', 'dateNaissance', 'lieuNaissance', 'numeroCni', 'sexe', 'nationalite'] as const;
+type OcrLockedField = typeof OCR_LOCKED_FIELDS[number];
+
+export type AcquisitionScreenProProps = {
+  navigation: {
+    navigate: (screen: string, params?: object) => void;
+    goBack: () => void;
+  };
+};
+
+export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) {
   const agent = useAgentStore(s => ({
     numeroAgent: s.numeroAgent, country: s.country,
     fonctionAgent: s.fonctionAgent, zoneAgent: s.zoneAgent, serverUrl: s.serverUrl,
@@ -45,13 +62,58 @@ export function AcquisitionScreenPro({ navigation }: any) {
   const [error, setError]             = useState('');
   const [success, setSuccess]         = useState(false);
   const [activeStep, setActiveStep]   = useState(1);
+  const [nationalityPickerVisible, setNationalityPickerVisible] = useState(false);
+  const [selectedCountryCode, setSelectedCountryCode] = useState<CountryCode>('CG');
+  const [countryName, setCountryName] = useState('Congo (Brazzaville)');
   const shakeAnim = useRef(new Animated.Value(0)).current;
+
+  // ── Infos titulaire (pré-remplies par OCR sur le recto + saisie agent) ────
+  // nomTitulaire / prenomTitulaire / dateNaissance / lieuNaissance : lus par
+  // OCR sur le recto de la CNI (voir runOcr), toujours modifiables ensuite.
+  // autreNumero / nomPere / nomMere / adresseComplete / numeroCni / sexe /
+  // nationalite / profession : jamais issus de l'OCR, saisis par l'agent
+  // terrain et préremplis si le service OCR les retourne.
+  const [idInfo, setIdInfo] = useState({
+    nomTitulaire: '', prenomTitulaire: '', dateNaissance: '', lieuNaissance: '',
+    autreNumero: '', nomPere: '', nomMere: '', adresseComplete: '', numeroCni: '',
+    sexe: '', nationalite: '', profession: '',
+  });
+  const [ocrStatus, setOcrStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
+  // Champs OCR déverrouillés manuellement après confirmation explicite de l'agent
+  // (ex. erreur de lecture) — conservé pour audit et envoyé au serveur.
+  const [manualOverride, setManualOverride] = useState<Record<string, boolean>>({});
+  const setIdField = (key: keyof typeof idInfo, value: string) =>
+    setIdInfo(prev => ({ ...prev, [key]: value }));
+
+  // Un champ OCR est verrouillé s'il a été rempli avec succès par la lecture
+  // automatique et que l'agent n'a pas explicitement demandé/confirmé une correction.
+  const isFieldLocked = (key: OcrLockedField) =>
+    ocrStatus === 'success' && !!idInfo[key].trim() && !manualOverride[key];
+
+  const requestUnlock = (key: OcrLockedField, label: string) => {
+    Alert.alert(
+      'Corriger une donnée vérifiée',
+      `« ${label} » provient de la lecture automatique de la CNI. Le modifier sera enregistré et signalé pour contrôle qualité. Continuer ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Modifier quand même', style: 'destructive', onPress: () => setManualOverride(prev => ({ ...prev, [key]: true })) },
+      ],
+    );
+  };
 
   useEffect(() => {
     if (preferredCamera === 'front' || preferredCamera === 'back') {
       setSelectedCamera(preferredCamera);
     }
   }, [preferredCamera]);
+
+  useEffect(() => {
+    if (agent.country) {
+      const code = agent.country.toUpperCase();
+      setSelectedCountryCode(code as CountryCode);
+      setCountryName(code === 'BJ' ? 'Bénin' : code === 'CI' ? 'Côte d’Ivoire' : 'Congo (Brazzaville)');
+    }
+  }, [agent.country]);
 
   useEffect(() => {
     (async () => {
@@ -85,6 +147,7 @@ export function AcquisitionScreenPro({ navigation }: any) {
           setCamPerm(true);
         }
       } catch (e) {
+        console.warn('[Acquisition] Vérification permission caméra échouée :', e);
         setCamPerm(false);
       }
     })();
@@ -118,10 +181,60 @@ export function AcquisitionScreenPro({ navigation }: any) {
 
       setPhotos(p => ({ ...p, [type]: { uri, type } }));
       setCameraMode(null); setError('');
-      if (type === 'recto') setActiveStep(2);
+      if (type === 'recto') {
+        setActiveStep(2);
+        void runOcr(uri);
+      }
     } catch (err: any) {
+      console.warn('[Acquisition] capturePhoto a échoué :', err);
       setError(`Erreur caméra: ${err.message || 'inconnue'}`);
       shake();
+    }
+  };
+
+  // ── OCR du recto CNI (auto-remplissage nom/prénom/naissance) ──────────────
+  // Endpoint attendu côté serveur : POST /api/ocr/id-card — contrat détaillé
+  // dans SERVER_SPEC.md. Tant que l'endpoint n'existe pas côté back, cet
+  // appel échoue silencieusement (404/erreur réseau) et l'agent bascule sur
+  // la saisie manuelle — le formulaire reste utilisable dans tous les cas.
+  const runOcr = async (uri: string) => {
+    setOcrStatus('loading');
+    try {
+      const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
+      const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
+      const fd = new FormData();
+      fd.append('country', agent.country);
+      fd.append('photo_recto', { uri, type: 'image/jpeg', name: 'recto.jpg' } as any);
+
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 12_000);
+      const res = await fetch(`${base}/api/ocr/id-card`, { method: 'POST', body: fd, signal: ctrl.signal });
+      clearTimeout(tid);
+
+      if (!res.ok) throw new Error(`OCR HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data?.success) throw new Error(data?.error || 'OCR sans résultat');
+
+      // On ne complète que les champs encore vides, pour ne jamais écraser
+      // une correction déjà saisie par l'agent (ex. relance OCR après reprise photo).
+      setIdInfo(prev => ({
+        ...prev,
+        nomTitulaire:    prev.nomTitulaire    || data.nom || '',
+        prenomTitulaire: prev.prenomTitulaire || data.prenom || '',
+        dateNaissance:   prev.dateNaissance   || data.date_naissance || '',
+        lieuNaissance:   prev.lieuNaissance   || data.lieu_naissance || '',
+        adresseComplete: prev.adresseComplete || data.adresse_complete || '',
+        numeroCni:       prev.numeroCni       || data.numero_cni || '',
+        sexe:            prev.sexe            || data.sexe || '',
+        nationalite:     prev.nationalite     || data.nationalite || '',
+        profession:      prev.profession      || data.profession || '',
+      }));
+      setOcrStatus('success');
+      setActiveStep(3);
+    } catch (err) {
+      console.warn('[Acquisition] OCR indisponible, saisie manuelle requise :', err);
+      setOcrStatus('failed');
+      setActiveStep(3);
     }
   };
 
@@ -132,12 +245,25 @@ export function AcquisitionScreenPro({ navigation }: any) {
     if (!v.valid) return `Numéro invalide : ${v.error}`;
     if (!photos.recto) return 'Capturez le recto du CNI';
     if (!photos.verso) return 'Capturez le verso du CNI';
+    // Infos titulaire requises pour l'enregistrement SIM (réglementation KYC)
+    if (!idInfo.nomTitulaire.trim())    return 'Renseignez le nom du titulaire';
+    if (!idInfo.prenomTitulaire.trim()) return 'Renseignez le prénom du titulaire';
+    if (!idInfo.dateNaissance.trim())   return 'Renseignez la date de naissance';
+    if (!idInfo.lieuNaissance.trim())   return 'Renseignez le lieu de naissance';
+    if (!idInfo.numeroCni.trim())       return 'Renseignez le numéro de la pièce d’identité';
+    if (!idInfo.sexe.trim())            return 'Renseignez le sexe';
+    if (!idInfo.nationalite.trim())    return 'Renseignez la nationalité';
+    if (!idInfo.profession.trim())     return 'Renseignez la profession';
+    if (!idInfo.adresseComplete.trim()) return 'Renseignez l’adresse complète';
+    if (!idInfo.nomPere.trim())         return 'Renseignez le nom du père';
+    if (!idInfo.nomMere.trim())         return 'Renseignez le nom de la mère';
     return null;
   };
 
   const handleSubmit = async () => {
     const err = validate();
     if (err) { setError(err); shake(); return; }
+    setActiveStep(4);
     setLoading(true); setError(''); setProgress(0);
     try {
       const fd = new FormData();
@@ -147,10 +273,27 @@ export function AcquisitionScreenPro({ navigation }: any) {
       fd.append('username_agent', agent.numeroAgent || '');
       fd.append('fonction_agent', agent.fonctionAgent);
       fd.append('zone_agent', agent.zoneAgent);
+      // ── Infos titulaire pour l'enregistrement SIM (voir SERVER_SPEC.md) ──
+      fd.append('nom_titulaire', idInfo.nomTitulaire.trim());
+      fd.append('prenom_titulaire', idInfo.prenomTitulaire.trim());
+      fd.append('date_naissance', idInfo.dateNaissance.trim());
+      fd.append('lieu_naissance', idInfo.lieuNaissance.trim());
+      fd.append('autre_numero', idInfo.autreNumero.trim());
+      fd.append('nom_pere', idInfo.nomPere.trim());
+      fd.append('nom_mere', idInfo.nomMere.trim());
+      fd.append('adresse_complete', idInfo.adresseComplete.trim());
+      fd.append('numero_cni', idInfo.numeroCni.trim());
+      fd.append('sexe', idInfo.sexe.trim());
+      fd.append('nationalite', idInfo.nationalite.trim());
+      fd.append('profession', idInfo.profession.trim());
+      // Audit anti-fraude : liste des champs OCR corrigés manuellement par l'agent
+      const overriddenFields = OCR_LOCKED_FIELDS.filter(k => manualOverride[k]);
+      if (overriddenFields.length) fd.append('ocr_overrides', overriddenFields.join(','));
       if (photos.recto?.uri) fd.append('photo_recto', { uri: photos.recto.uri, type: 'image/jpeg', name: 'recto.jpg' } as any);
       if (photos.verso?.uri) fd.append('photo_verso', { uri: photos.verso.uri, type: 'image/jpeg', name: 'verso.jpg' } as any);
 
       const xhr = new XMLHttpRequest();
+      xhr.timeout = 30_000; // réseau terrain instable : ne pas rester bloqué indéfiniment
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
       });
@@ -179,22 +322,40 @@ export function AcquisitionScreenPro({ navigation }: any) {
               });
             }, 2200);
           } catch (err: any) {
+            console.warn('[Acquisition] Réponse serveur inattendue :', err);
             setError(err.message || 'Erreur: ID du dossier invalide');
             shake();
             setLoading(false);
           }
         } else {
           try { setError(JSON.parse(xhr.responseText)?.error || `Erreur ${xhr.status}`); } catch { setError(`Erreur ${xhr.status}`); }
+          console.warn('[Acquisition] Upload refusé par le serveur, statut', xhr.status, xhr.responseText);
           shake();
           setLoading(false);
         }
       });
-      xhr.addEventListener('error', () => { setError('Erreur réseau'); shake(); setLoading(false); });
+      xhr.addEventListener('error', () => {
+        console.warn('[Acquisition] Upload échoué : erreur réseau');
+        setError('Erreur réseau');
+        shake();
+        setLoading(false);
+      });
+      xhr.addEventListener('timeout', () => {
+        console.warn('[Acquisition] Upload échoué : délai dépassé (30s)');
+        setError('Le serveur met trop de temps à répondre. Vérifie ta connexion et réessaie.');
+        shake();
+        setLoading(false);
+      });
       const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
       const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
       xhr.open('POST', `${base}/api/public/dossiers`);
       xhr.send(fd);
-    } catch (e: any) { setError(e.message || 'Erreur'); shake(); setLoading(false); }
+    } catch (e: any) {
+      console.warn('[Acquisition] handleSubmit a échoué :', e);
+      setError(e.message || 'Erreur');
+      shake();
+      setLoading(false);
+    }
   };
 
   // ── Écran caméra ──────────────────────────────────────────────────────────
@@ -271,6 +432,73 @@ export function AcquisitionScreenPro({ navigation }: any) {
 
   const phoneRule = getPhoneRule(agent.country);
   const phoneVal  = validatePhoneNumber(numeroMtn, agent.country);
+
+  // ── Champ identité vérifiable : verrouillé après OCR, éditable sinon ──────
+  const renderVerifiableField = (
+    key: OcrLockedField,
+    label: string,
+    placeholder: string,
+    extraInputProps: Partial<React.ComponentProps<typeof TextInput>> = {},
+  ) => {
+    const locked = isFieldLocked(key);
+    if (locked) {
+      return (
+        <View style={s.lockedField}>
+          <View style={s.lockedFieldTop}>
+            <Text style={s.lockedFieldLabel}>{label}</Text>
+            <TouchableOpacity onPress={() => requestUnlock(key, label)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={s.lockedFieldEdit}>Corriger</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.lockedFieldRow}>
+            <Text style={s.lockedFieldIcon}>🔒</Text>
+            <Text style={s.lockedFieldValue}>{idInfo[key]}</Text>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={s.field}>
+        <View style={s.lockedFieldTop}>
+          <Text style={s.fieldLabel}>{label} <Text style={s.req}>*</Text></Text>
+          {manualOverride[key] && <Text style={s.overrideTag}>Correction signalée</Text>}
+        </View>
+        <TextInput
+          style={[s.input, locked && s.inputLocked]}
+          value={idInfo[key]}
+          onChangeText={(v) => setIdField(key, v)}
+          placeholder={placeholder}
+          placeholderTextColor={C.ink3}
+          editable={!loading}
+          {...extraInputProps}
+        />
+      </View>
+    );
+  };
+
+  const renderNationalityField = () => {
+    const locked = isFieldLocked('nationalite');
+    return (
+      <View style={s.field}>
+        <View style={s.lockedFieldTop}>
+          <Text style={s.fieldLabel}>Nationalité <Text style={s.req}>*</Text></Text>
+          {manualOverride.nationalite && <Text style={s.overrideTag}>Correction signalée</Text>}
+        </View>
+        <TouchableOpacity
+          style={[s.input, s.selectInput, locked && s.inputLocked]}
+          onPress={() => !loading && !locked && setNationalityPickerVisible(true)}
+          disabled={loading || locked}
+          accessibilityRole="button"
+          accessibilityLabel="Sélectionner la nationalité"
+          accessibilityHint="Ouvre la liste des pays avec recherche"
+        >
+          <Text style={[s.selectInputText, !idInfo.nationalite && s.selectInputPlaceholder]}>
+            {idInfo.nationalite || 'Sélectionner'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   // ── Formulaire principal ──────────────────────────────────────────────────
   return (
@@ -356,7 +584,7 @@ export function AcquisitionScreenPro({ navigation }: any) {
                 </Text>
               )}
               <TextInput
-                style={[s.input, s.inputLarge, numeroMtn && phoneVal.valid && s.inputValid]}
+                style={[s.input, s.inputCompact, numeroMtn && phoneVal.valid && s.inputValid]}
                 placeholder={agent.country === 'BJ' ? '01XXXXXXXX' : `${phoneRule?.digitCount || 9} chiffres`}
                 placeholderTextColor={C.ink3}
                 value={numeroMtn}
@@ -413,12 +641,151 @@ export function AcquisitionScreenPro({ navigation }: any) {
                       <View style={s.photoEmpty}>
                         <Text style={s.photoEmptyIcon}>📸</Text>
                         <Text style={s.photoEmptyLabel}>{side === 'recto' ? 'RECTO' : 'VERSO'}</Text>
-                        <Text style={s.photoEmptyHint}>Appuyez pour capturer</Text>
+                        <Text style={s.photoEmptyHint}>Appuyer pour capturer la photo</Text>
                       </View>
                     )}
                   </TouchableOpacity>
                 );
               })}
+            </View>
+          </View>
+
+          {/* ═══════════════════════════════════════════════════════════════
+              SECTION 3 — Identité vérifiée (lecture automatique de la CNI)
+              Ces champs proviennent de l'OCR et sont verrouillés dès qu'ils
+              sont lus avec succès, pour empêcher toute altération frauduleuse
+              de l'identité entre la capture et l'envoi du dossier.
+          ═══════════════════════════════════════════════════════════════ */}
+          <View style={[s.section, s.sectionIdentity]}>
+            <View style={s.sectionHeader}>
+              <View style={[s.sectionNum, s.sectionNumIdentity, { borderWidth: 1, borderColor: C.yellowBorder }]}><Text style={s.sectionNumTxt}>3</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.sectionTitle}>Identité</Text>
+                <Text style={s.sectionSubtitle}>Lecture CNI</Text>
+              </View>
+              {ocrStatus === 'success' && (
+                <View style={s.shieldBadge}><Text style={s.shieldBadgeTxt}>🛡️</Text></View>
+              )}
+            </View>
+
+            {ocrStatus === 'loading' && (
+              <View style={s.ocrBanner}>
+                <ActivityIndicator color={C.blue} size="small" />
+                <Text style={s.ocrBannerTxt}>Lecture automatique du recto en cours…</Text>
+              </View>
+            )}
+            {ocrStatus === 'success' && (
+              <View style={[s.ocrBanner, s.ocrBannerOk]}>
+                <Text style={s.ocrBannerIcon}>✓</Text>
+                <Text style={[s.ocrBannerTxt, { color: C.successText }]}>Champs verrouillés depuis le recto — vérifiez avant envoi</Text>
+              </View>
+            )}
+            {ocrStatus === 'failed' && (
+              <View style={[s.ocrBanner, s.ocrBannerWarn]}>
+                <Text style={s.ocrBannerIcon}>⚠</Text>
+                <Text style={[s.ocrBannerTxt, { color: C.dangerText }]}>Lecture automatique indisponible — saisie manuelle requise</Text>
+              </View>
+            )}
+            {ocrStatus === 'idle' && (
+              <View style={s.ocrBanner}>
+                <Text style={s.ocrBannerIcon}>🪪</Text>
+                <Text style={s.ocrBannerTxt}>Capturer le recto pour remplir</Text>
+              </View>
+            )}
+
+            {renderVerifiableField('nomTitulaire', 'Nom', "Nom tel qu'il figure sur la CNI", { autoCapitalize: 'characters' })}
+            {renderVerifiableField('prenomTitulaire', 'Prénom(s)', 'Prénom(s)', { autoCapitalize: 'words' })}
+
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={{ flex: 1 }}>{renderVerifiableField('dateNaissance', 'Date de naissance', 'JJ/MM/AAAA')}</View>
+              <View style={{ flex: 1 }}>{renderVerifiableField('lieuNaissance', 'Lieu de naissance', 'Ville')}</View>
+            </View>
+
+            {renderVerifiableField('numeroCni', 'Numéro de pièce', 'Numéro de pièce d’identité')}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={{ flex: 1 }}>{renderVerifiableField('sexe', 'Sexe', 'M / F', { autoCapitalize: 'words' })}</View>
+              <View style={{ flex: 1 }}>{renderNationalityField()}</View>
+            </View>
+          </View>
+
+          {/* ═══════════════════════════════════════════════════════════════
+              SECTION 4 — Filiation & informations complémentaires
+          ═══════════════════════════════════════════════════════════════ */}
+          <View style={s.section}>
+            <View style={s.sectionHeader}>
+              <View style={s.sectionNum}><Text style={s.sectionNumTxt}>4</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.sectionTitle}>Filiation & infos</Text>
+                <Text style={s.sectionSubtitle}>Infos obligatoires</Text>
+              </View>
+              <View style={s.requiredPill}><Text style={s.requiredPillTxt}>Obligatoire</Text></View>
+            </View>
+
+            <View style={s.field}>
+              <Text style={s.fieldLabel}>Nom du père <Text style={s.req}>*</Text></Text>
+              <TextInput
+                style={s.input}
+                value={idInfo.nomPere}
+                onChangeText={(v) => setIdField('nomPere', v)}
+                placeholder="Nom complet du père"
+                placeholderTextColor={C.ink3}
+                autoCapitalize="words"
+                editable={!loading}
+              />
+            </View>
+
+            <View style={s.field}>
+              <Text style={s.fieldLabel}>Nom de la mère <Text style={s.req}>*</Text></Text>
+              <TextInput
+                style={s.input}
+                value={idInfo.nomMere}
+                onChangeText={(v) => setIdField('nomMere', v)}
+                placeholder="Nom complet de la mère"
+                placeholderTextColor={C.ink3}
+                autoCapitalize="words"
+                editable={!loading}
+              />
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={[s.field, { flex: 1 }]}> 
+                <Text style={s.fieldLabel}>Autres contact <Text style={s.req}>*</Text></Text>
+                <TextInput
+                  style={s.input}
+                  value={idInfo.autreNumero}
+                  onChangeText={(v) => setIdField('autreNumero', v.replace(/\D/g, ''))}
+                  placeholder="Numéro secondaire"
+                  placeholderTextColor={C.ink3}
+                  keyboardType="numeric"
+                  editable={!loading}
+                />
+              </View>
+
+              <View style={[s.field, { flex: 1 }]}> 
+                <Text style={s.fieldLabel}>Profession <Text style={s.req}>*</Text></Text>
+                <TextInput
+                  style={s.input}
+                  value={idInfo.profession}
+                  onChangeText={(v) => setIdField('profession', v)}
+                  placeholder="Profession"
+                  placeholderTextColor={C.ink3}
+                  autoCapitalize="words"
+                  editable={!loading}
+                />
+              </View>
+            </View>
+
+            <View style={s.field}>
+              <Text style={s.fieldLabel}>Adresse complète <Text style={s.req}>*</Text></Text>
+              <TextInput
+                style={[s.input, { minHeight: 84, textAlignVertical: 'top' }]}
+                value={idInfo.adresseComplete}
+                onChangeText={(v) => setIdField('adresseComplete', v)}
+                placeholder="Adresse complète du titulaire"
+                placeholderTextColor={C.ink3}
+                multiline
+                editable={!loading}
+              />
             </View>
           </View>
 
@@ -438,6 +805,9 @@ export function AcquisitionScreenPro({ navigation }: any) {
             onPress={handleSubmit}
             disabled={loading}
             activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Soumettre le dossier"
+            accessibilityState={{ disabled: loading, busy: loading }}
           >
             {loading
               ? <ActivityIndicator color={C.blue} />
@@ -450,6 +820,40 @@ export function AcquisitionScreenPro({ navigation }: any) {
           <View style={{ height: 48 }} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <CountryPicker
+        visible={nationalityPickerVisible}
+        onClose={() => setNationalityPickerVisible(false)}
+        onSelect={(country: Country) => {
+          const countryNameValue = (() => {
+            const rawName = country.name;
+            if (typeof rawName === 'string') return rawName;
+            if (typeof rawName === 'object' && rawName !== null) {
+              const nameRecord = rawName as { common?: string; official?: string } | undefined;
+              const candidate = nameRecord?.common;
+              if (typeof candidate === 'string' && candidate.trim()) return candidate;
+              const alt = nameRecord?.official;
+              if (typeof alt === 'string' && alt.trim()) return alt;
+            }
+            return 'Pays';
+          })();
+          setSelectedCountryCode(country.cca2 as CountryCode);
+          setCountryName(countryNameValue);
+          setIdField('nationalite', countryNameValue);
+          setNationalityPickerVisible(false);
+        }}
+        countryCode={selectedCountryCode}
+        withEmoji
+        withFilter
+        withAlphaFilter
+        withCallingCode={false}
+        theme={{
+          backgroundColor: '#fff',
+          primaryColor: C.blue,
+          onBackgroundTextColor: C.ink,
+          filterPlaceholderTextColor: C.ink3,
+        }}
+      />
     </View>
   );
 }
@@ -552,34 +956,128 @@ const s = StyleSheet.create({
   },
   sectionNumTxt: { fontSize: T.sm, fontWeight: '900', color: C.blue },
   sectionTitle:  { fontSize: T.base, fontWeight: '800', color: C.ink, letterSpacing: -0.2 },
+  sectionSubtitle: { fontSize: T.xs, color: C.ink3, marginTop: 2 },
+
+  // Section identité vérifiée (accent visuel distinct — carte "officielle")
+  sectionIdentity: { borderColor: C.blueBorder, borderWidth: 1.5 },
+  sectionNumIdentity: { backgroundColor: C.yellow },
+  shieldBadge: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: C.successSoft, borderWidth: 1, borderColor: C.successBorder,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  shieldBadgeTxt: { fontSize: T.sm },
+
+  // Pastilles obligatoire / optionnel
+  requiredPill: {
+    backgroundColor: C.dangerSoft, borderWidth: 1, borderColor: C.dangerBorder,
+    borderRadius: R.pill, paddingVertical: 4, paddingHorizontal: 10,
+  },
+  requiredPillTxt: { fontSize: T.xs, fontWeight: '800', color: C.dangerText },
+  optionalPill: {
+    backgroundColor: C.bg2, borderWidth: 1, borderColor: C.bgBorder,
+    borderRadius: R.pill, paddingVertical: 4, paddingHorizontal: 10,
+  },
+  optionalPillTxt: { fontSize: T.xs, fontWeight: '800', color: C.ink3 },
+
+  // Champ verrouillé (OCR vérifié)
+  lockedField: {
+    backgroundColor: C.successSoft, borderWidth: 1, borderColor: C.successBorder,
+    borderRadius: R.md, padding: 14, marginBottom: 14,
+  },
+  lockedFieldTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  lockedFieldLabel: { fontSize: T.xs, fontWeight: '700', color: C.ink2, textTransform: 'uppercase', letterSpacing: 0.7 },
+  lockedFieldEdit: { fontSize: T.xs, fontWeight: '800', color: C.blue, textDecorationLine: 'underline' },
+  lockedFieldRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  lockedFieldIcon: { fontSize: T.sm },
+  lockedFieldValue: { fontSize: T.base, fontWeight: '800', color: C.ink },
+  overrideTag: { fontSize: T.xs, fontWeight: '800', color: C.dangerText },
+
+  // Bannière OCR
+  ocrBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: 'rgba(0,75,147,0.08)', borderWidth: 1, borderColor: 'rgba(0,75,147,0.16)',
+    borderRadius: R.md, padding: 12, marginBottom: 14,
+  },
+  ocrBannerOk:   { backgroundColor: C.successSoft, borderColor: C.successBorder },
+  ocrBannerWarn: { backgroundColor: C.dangerSoft, borderColor: C.dangerBorder },
+  ocrBannerIcon: { fontSize: T.base },
+  ocrBannerTxt:  { fontSize: T.xs, fontWeight: '700', color: C.ink2, flex: 1 },
 
   // Champs
   field:      { marginBottom: 14 },
-  fieldLabel: { fontSize: T.xs, fontWeight: '700', color: C.ink2, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 8 },
+  fieldLabel: { fontSize: T.xs, fontWeight: '700', color: C.ink2, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 6 },
   req:        { color: C.danger },
-  hint:       { fontSize: T.xs, color: C.ink3, marginBottom: 8 },
-  hintDynamic:{ fontSize: T.xs, fontWeight: '600', marginTop: 6 },
+  hint:       { fontSize: T.xs, color: C.ink3, marginBottom: 6 },
+  hintDynamic:{ fontSize: T.xs, fontWeight: '600', marginTop: 4 },
 
   inputRow: { position: 'relative', justifyContent: 'center' },
   checkIcon: { position: 'absolute', right: 14, fontSize: T.base, color: C.successText },
+  selectInput: { justifyContent: 'center', minHeight: 40 },
+  selectInputText: { color: C.ink, fontSize: T.sm, fontWeight: '600' },
+  selectInputPlaceholder: { color: C.ink3 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '70%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  modalTitle: { color: C.ink, fontSize: 16, fontWeight: '800' },
+  closeBtnModal: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.bg2, alignItems: 'center', justifyContent: 'center' },
+  closeBtnText: { color: C.ink, fontWeight: '800' },
+  searchInput: {
+    backgroundColor: C.bg2,
+    borderWidth: 1,
+    borderColor: C.bgBorder,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: C.ink,
+    marginBottom: 10,
+  },
+  loadingCountries: { alignItems: 'center', justifyContent: 'center', paddingVertical: 20 },
+  loadingCountriesText: { marginTop: 8, color: C.ink3, fontSize: T.sm },
+  optionList: { maxHeight: 320 },
+  optionListContent: { gap: 8, paddingBottom: 6 },
+  optionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: C.bg2,
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.06)',
+    gap: 10,
+  },
+  optionItemActive: { backgroundColor: C.blue, borderColor: C.blue },
+  flagText: { fontSize: 18 },
+  optionText: { color: C.ink, fontSize: T.sm, fontWeight: '600' },
+  optionTextActive: { color: '#fff' },
 
   input: {
     backgroundColor: C.bg2,
     borderWidth: 1, borderColor: C.bgBorder,
-    borderRadius: R.md, paddingVertical: 14, paddingHorizontal: 16,
+    borderRadius: R.md, paddingVertical: 12, paddingHorizontal: 14,
     fontSize: T.base, color: C.ink,
   },
   inputValid: { borderColor: C.success },
-  inputLarge: {
-    fontSize: T['2xl'], fontWeight: '800', textAlign: 'center',
-    letterSpacing: 6, paddingVertical: 18,
+  inputLocked: {
+    backgroundColor: C.successSoft,
+    borderColor: C.successBorder,
+    color: C.ink,
+  },
+  inputCompact: {
+    fontSize: T.lg,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: 1.5,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     fontVariant: ['tabular-nums'],
   },
 
   // Photos
   photosGrid: { flexDirection: 'row', gap: 12 },
   photoBox: {
-    flex: 1, aspectRatio: 0.65,
+    flex: 1, aspectRatio: 0.72,
     borderRadius: R.lg, overflow: 'hidden',
     borderWidth: 1.5, borderStyle: 'dashed', borderColor: C.yellowBorder,
     backgroundColor: C.yellowSoft,

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
-  ActivityIndicator, StatusBar, SafeAreaView
+  ActivityIndicator, StatusBar, SafeAreaView, RefreshControl, Modal
 } from 'react-native';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
@@ -18,13 +18,59 @@ interface DossierItem {
   score_visage?: number | null;
   visage_match?: number | null;
   visage_motif?: string | null;
+  nom_titulaire?: string | null;
+  prenom_titulaire?: string | null;
+  date_naissance?: string | null;
+  lieu_naissance?: string | null;
+  adresse_complete?: string | null;
+  numero_cni?: string | null;
+  sexe?: string | null;
+  nationalite?: string | null;
+  profession?: string | null;
+  autre_numero?: string | null;
+  nom_pere?: string | null;
+  nom_mere?: string | null;
+}
+
+function getStatusMeta(status: string) {
+  const normalized = String(status || '').toLowerCase();
+
+  if (['accepte', 'accepted', 'valide', 'validé'].includes(normalized)) {
+    return {
+      label: 'Accepté',
+      icon: '✓',
+      textColor: '#047857',
+      chip: { backgroundColor: 'rgba(16,185,129,0.14)', borderColor: 'rgba(16,185,129,0.28)' },
+      accentColor: '#10b981',
+    };
+  }
+
+  if (['rejete', 'rejected', 'refuse', 'refusé'].includes(normalized)) {
+    return {
+      label: 'Rejeté',
+      icon: '✕',
+      textColor: '#dc2626',
+      chip: { backgroundColor: 'rgba(239,68,68,0.14)', borderColor: 'rgba(239,68,68,0.28)' },
+      accentColor: '#ef4444',
+    };
+  }
+
+  return {
+    label: 'En attente',
+    icon: '⏳',
+    textColor: '#b45309',
+    chip: { backgroundColor: 'rgba(245,158,11,0.16)', borderColor: 'rgba(245,158,11,0.30)' },
+    accentColor: '#f59e0b',
+  };
 }
 
 export function DossierListScreen({ navigation }: any) {
   const { numeroAgent, serverUrl } = useAgentStore();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [dossiers, setDossiers] = useState<DossierItem[]>([]);
+  const [selectedDossier, setSelectedDossier] = useState<DossierItem | null>(null);
 
   const agentWa = useMemo(() => numeroAgent.replace(/\D/g, ''), [numeroAgent]);
   const baseUrl = useMemo(() => {
@@ -32,14 +78,14 @@ export function DossierListScreen({ navigation }: any) {
     return url.startsWith('http') ? url : `http://${url}`;
   }, [serverUrl]);
 
-  const fetchDossiers = async () => {
+  const fetchDossiers = async (isRefresh = false) => {
     if (!agentWa) {
       setError('Aucun numéro agent valide disponible pour afficher les dossiers.');
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (isRefresh) setRefreshing(true); else setLoading(true);
     setError('');
     try {
       const ctrl = new AbortController();
@@ -60,6 +106,7 @@ export function DossierListScreen({ navigation }: any) {
       setError(err?.message || 'Erreur de récupération');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -68,81 +115,105 @@ export function DossierListScreen({ navigation }: any) {
   }, [agentWa, baseUrl]);
 
   const renderItem = ({ item }: { item: DossierItem }) => {
-    const status = String(item.statut || '').toLowerCase();
     const score = typeof item.score_visage === 'number' ? item.score_visage : null;
     const matched = item.visage_match === 1;
+    const statusMeta = getStatusMeta(item.statut);
 
-    const statusStyle =
-      status === 'accepte' || status === 'accepted' || status === 'valide' || status === 'validé'
-        ? s.statusOk
-        : status === 'rejete' || status === 'rejected' || status === 'refuse' || status === 'refusé'
-        ? s.statusKo
-        : s.statusPending;
+    const getScoreColor = (value: number | null) => {
+      if (value == null) return '#64748b';
+      if (value >= 90) return '#047857';
+      if (value >= 75) return '#2563eb';
+      if (value >= 60) return '#d97706';
+      return '#dc2626';
+    };
 
-    const statusLabel =
-      status === 'accepte' || status === 'accepted' || status === 'valide' || status === 'validé'
-        ? 'ACCEPTÉ'
-        : status === 'rejete' || status === 'rejected' || status === 'refuse' || status === 'refusé'
-        ? 'REJETÉ'
-        : 'EN ATTENTE';
+    const scoreColor = getScoreColor(score);
+
+    const formatDateTime = (value?: string | null) => {
+      if (!value) return '—';
+      const text = String(value).trim();
+      if (!text) return '—';
+      const cleaned = text.replace(/T/g, ' ').replace(/\s+/g, ' ').trim();
+
+      if (cleaned.includes(' ')) {
+        const [datePart, timePart] = cleaned.split(' ');
+        if (timePart && timePart.includes(':')) {
+          const [hour = '00', minute = '00'] = timePart.split(':');
+          const hh = String(hour).padStart(2, '0');
+          const mm = String(minute).padStart(2, '0');
+          return `${datePart} ${hh}:${mm}`;
+        }
+      }
+
+      if (cleaned.includes(':')) {
+        const [hour = '00', minute = '00'] = cleaned.split(':');
+        const hh = String(hour).padStart(2, '0');
+        const mm = String(minute).padStart(2, '0');
+        return `${hh}:${mm}`;
+      }
+
+      return cleaned;
+    };
+
+    const displayDate = formatDateTime(item.date);
+    const displayTime = formatDateTime(item.heure_reception);
 
     return (
-      <View style={s.card}>
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => setSelectedDossier(item)}
+        style={[s.card, { borderLeftColor: statusMeta.accentColor, borderLeftWidth: 4 }]}
+      >
         <View style={s.cardHeader}>
-          <View style={s.avatarWrap}>
-            <Text style={s.avatarTxt}>{String(item.id).slice(0,2).toUpperCase()}</Text>
+          <View style={s.cardIdentity}>
+            <View style={s.avatarWrap}>
+              <Text style={s.avatarTxt}>{String(item.id).slice(0, 2).toUpperCase()}</Text>
+            </View>
+            <View style={s.cardTitleWrap}>
+              <Text style={s.cardId}>Dossier {item.id}</Text>
+              <Text style={s.cardSub}>{item.numero_mtn}</Text>
+            </View>
           </View>
-          <View style={s.cardTitleWrap}>
-            <Text style={s.cardId}>{item.id}</Text>
-            <Text style={s.cardSub}>{item.numero_mtn}</Text>
-          </View>
-          <View style={[s.badge, statusStyle]}>
-            <Text style={[s.badgeText, statusStyle]}>{statusLabel}</Text>
-          </View>
-        </View>
-
-        <View style={s.scoreBox}>
-          <View style={s.scoreLeft}>
-            <Text style={s.scoreLabel}>Similarité faciale</Text>
-            <Text style={s.scoreValue}>{score != null ? `${score.toFixed(1)}%` : '—'}</Text>
-          </View>
-          <View style={[s.matchPill, matched ? s.matchOk : s.matchWarn]}>
-            <Text style={[s.matchText, matched ? s.matchTextOk : s.matchTextWarn]}>{matched ? 'MATCH' : 'À VALIDER'}</Text>
+          <View style={[s.badge, statusMeta.chip]}>
+            <Text style={s.badgeIcon}>{statusMeta.icon}</Text>
+            <Text style={[s.badgeText, { color: statusMeta.textColor }]}>{statusMeta.label}</Text>
           </View>
         </View>
 
-        <View style={s.metaGrid}>
-          <View style={s.metaCell}>
-            <Text style={s.metaLabel}>Date</Text>
-            <Text style={s.metaValue}>{item.date}</Text>
+        <View style={s.metaRow}>
+          <Text style={s.metaText}>{displayDate}</Text>
+          <Text style={s.metaDivider}>•</Text>
+          <Text style={s.metaText}>{displayTime}</Text>
+        </View>
+
+        <View style={s.bottomRow}>
+          <View style={s.scoreBox}>
+            <Text style={s.scoreLabel}>Match visage</Text>
+            <Text style={[s.scoreValue, { color: scoreColor }]}>{score != null ? `${score.toFixed(1)}%` : '—'}</Text>
           </View>
-          <View style={s.metaCell}>
-            <Text style={s.metaLabel}>Heure</Text>
-            <Text style={s.metaValue}>{item.heure_reception}</Text>
+
+          <View style={s.aiBox}>
+            <Text style={s.aiLabel}>Titulaire</Text>
+            <Text style={s.aiValue}>{[item.nom_titulaire, item.prenom_titulaire].filter(Boolean).join(' ') || '—'}</Text>
           </View>
         </View>
 
-        {item.heure_cloture ? (
-          <View style={s.noteBox}>
-            <Text style={s.noteLabel}>Clôturé</Text>
-            <Text style={s.noteValue}>{item.heure_cloture}</Text>
-          </View>
-        ) : null}
+        <View style={s.footerRow}>
+          {item.heure_cloture ? (
+            <View style={s.noteBox}>
+              <Text style={s.noteLabel}>Clôturé</Text>
+              <Text style={s.noteValue}>{item.heure_cloture}</Text>
+            </View>
+          ) : null}
 
-        {item.raison_rejet ? (
-          <View style={s.noteBox}>
-            <Text style={s.noteLabel}>Motif de rejet</Text>
-            <Text style={s.noteValue}>{item.raison_rejet}</Text>
-          </View>
-        ) : null}
-
-        {item.visage_motif ? (
-          <View style={s.noteBox}>
-            <Text style={s.noteLabel}>Analyse IA</Text>
-            <Text style={s.noteValue}>{item.visage_motif}</Text>
-          </View>
-        ) : null}
-      </View>
+          {item.raison_rejet ? (
+            <View style={s.noteBox}>
+              <Text style={s.noteLabel}>Motif</Text>
+              <Text style={s.noteValue}>{item.raison_rejet}</Text>
+            </View>
+          ) : null}
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -159,14 +230,14 @@ export function DossierListScreen({ navigation }: any) {
       ) : error ? (
         <View style={s.messageBox}>
           <Text style={s.errorTxt}>{error}</Text>
-          <TouchableOpacity style={s.refreshBtn} onPress={fetchDossiers}>
+          <TouchableOpacity style={s.refreshBtn} onPress={() => { void fetchDossiers(false); }}>
             <Text style={s.refreshTxt}>Réessayer</Text>
           </TouchableOpacity>
         </View>
       ) : dossiers.length === 0 ? (
         <View style={s.messageBox}>
           <Text style={s.emptyTxt}>Aucun dossier trouvé pour ce numéro.</Text>
-          <TouchableOpacity style={s.refreshBtn} onPress={fetchDossiers}>
+          <TouchableOpacity style={s.refreshBtn} onPress={() => { void fetchDossiers(false); }}>
             <Text style={s.refreshTxt}>Rafraîchir</Text>
           </TouchableOpacity>
         </View>
@@ -177,8 +248,96 @@ export function DossierListScreen({ navigation }: any) {
           renderItem={renderItem}
           contentContainerStyle={s.list}
           ItemSeparatorComponent={() => <View style={s.separator} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={() => { void fetchDossiers(true); }} tintColor={C.yellow} colors={[C.blue]} />
+          }
         />
       )}
+
+      <Modal visible={!!selectedDossier} transparent animationType="fade" onRequestClose={() => setSelectedDossier(null)}>
+        <View style={s.modalBackdrop}>
+          <View style={s.modalCard}>
+            <View style={s.modalHeader}>
+              <View>
+                <Text style={s.modalTitle}>Détail du dossier</Text>
+                <Text style={s.modalSubtitle}>Informations du titulaire</Text>
+              </View>
+              <TouchableOpacity onPress={() => setSelectedDossier(null)} style={s.closeBtnModal}>
+                <Text style={s.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {selectedDossier ? (
+              <View style={s.modalBody}>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Nom / ID</Text>
+                  <Text style={s.detailValue}>{selectedDossier.id}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Numéro</Text>
+                  <Text style={s.detailValue}>{selectedDossier.numero_mtn}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Titulaire</Text>
+                  <Text style={s.detailValue}>{[selectedDossier.nom_titulaire, selectedDossier.prenom_titulaire].filter(Boolean).join(' ') || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Date naissance</Text>
+                  <Text style={s.detailValue}>{selectedDossier.date_naissance || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Lieu naissance</Text>
+                  <Text style={s.detailValue}>{selectedDossier.lieu_naissance || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Adresse</Text>
+                  <Text style={s.detailValue}>{selectedDossier.adresse_complete || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>CNI / pièce</Text>
+                  <Text style={s.detailValue}>{selectedDossier.numero_cni || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Sexe / nationalité / profession</Text>
+                  <Text style={s.detailValue}>{[selectedDossier.sexe, selectedDossier.nationalite, selectedDossier.profession].filter(Boolean).join(' · ') || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Père / mère</Text>
+                  <Text style={s.detailValue}>{[selectedDossier.nom_pere, selectedDossier.nom_mere].filter(Boolean).join(' / ') || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Statut</Text>
+                  <Text style={s.detailValue}>{selectedDossier.statut || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Date</Text>
+                  <Text style={s.detailValue}>{selectedDossier.date || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Heure</Text>
+                  <Text style={s.detailValue}>{selectedDossier.heure_reception || '—'}</Text>
+                </View>
+                <View style={s.detailRow}>
+                  <Text style={s.detailLabel}>Score visage</Text>
+                  <Text style={s.detailValue}>{selectedDossier.score_visage != null ? `${selectedDossier.score_visage.toFixed(1)}%` : '—'}</Text>
+                </View>
+                {selectedDossier.visage_motif ? (
+                  <View style={s.detailRow}>
+                    <Text style={s.detailLabel}>Analyse IA</Text>
+                    <Text style={s.detailValue}>{selectedDossier.visage_motif}</Text>
+                  </View>
+                ) : null}
+                {selectedDossier.raison_rejet ? (
+                  <View style={s.detailRow}>
+                    <Text style={s.detailLabel}>Motif</Text>
+                    <Text style={s.detailValue}>{selectedDossier.raison_rejet}</Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -199,8 +358,8 @@ const s = StyleSheet.create({
     elevation: 2,
   },
   closeTxt: { fontSize: T.base, color: C.ink2, fontWeight: '700' },
-  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingTxt: { marginTop: 12, color: C.ink3 },
+  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  loadingTxt: { marginTop: 12, color: C.ink3, fontSize: T.sm },
   messageBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   errorTxt: { color: C.dangerText, fontSize: T.base, textAlign: 'center' },
   emptyTxt: { color: C.ink3, fontSize: T.base, textAlign: 'center' },
@@ -211,44 +370,58 @@ const s = StyleSheet.create({
     elevation: 4,
   },
   refreshTxt: { color: C.blue, fontWeight: '800' },
-  list: { paddingHorizontal: 20, paddingBottom: 24 },
-  separator: { height: 12 },
+  list: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
+  separator: { height: 4 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)',
-    borderRadius: R.xl, padding: 16, flexDirection: 'column', gap: 10,
-    shadowColor: '#0F1720', shadowOpacity: 0.05, shadowRadius: 16, shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
+    borderRadius: 10, padding: 8, flexDirection: 'column', gap: 4,
+    shadowColor: '#0F1720', shadowOpacity: 0.03, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  avatarWrap: { width: 42, height: 42, borderRadius: 21, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  avatarTxt: { color: C.yellow, fontWeight: '800' },
-  cardTitleWrap: { flex: 1, marginRight: 12 },
-  cardId: { color: C.ink, fontSize: T.sm, fontWeight: '800' },
-  cardSub: { marginTop: 2, color: C.ink3, fontSize: T.xs },
-  badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
-  badgeText: { fontSize: T.xs, fontWeight: '800', textTransform: 'uppercase' },
+  cardIdentity: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 4 },
+  avatarWrap: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center', marginRight: 6 },
+  avatarTxt: { color: C.yellow, fontWeight: '800', fontSize: 9 },
+  cardTitleWrap: { flex: 1 },
+  cardId: { color: C.ink, fontSize: 10, fontWeight: '800' },
+  cardSub: { marginTop: 1, color: C.ink3, fontSize: 9 },
+  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 999, borderWidth: 1, gap: 2 },
+  badgeIcon: { fontSize: 8, fontWeight: '800' },
+  badgeText: { fontSize: 8, fontWeight: '800', textTransform: 'uppercase' },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 1,
+    paddingHorizontal: 2,
+  },
+  metaText: { color: '#64748b', fontSize: 9, fontWeight: '600' },
+  metaDivider: { color: '#94a3b8', fontSize: 9 },
+  bottomRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
   scoreBox: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 10, paddingHorizontal: 12, borderRadius: R.lg,
+    flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 5, paddingHorizontal: 7, borderRadius: 8,
     backgroundColor: 'rgba(15,23,42,0.03)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)',
   },
-  scoreLeft: { flex: 1 },
-  scoreLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
-  scoreValue: { marginTop: 2, color: C.ink, fontSize: T.lg, fontWeight: '900' },
-  matchPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
-  matchOk: { backgroundColor: 'rgba(76,175,80,0.12)', borderColor: 'rgba(76,175,80,0.24)' },
-  matchWarn: { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.24)' },
-  matchText: { fontSize: T.xs, fontWeight: '800' },
-  matchTextOk: { color: C.success },
-  matchTextWarn: { color: C.yellow },
-  metaGrid: { flexDirection: 'row', gap: 10 },
-  metaCell: { flex: 1, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: R.md, padding: 10, borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
-  metaLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
-  metaValue: { marginTop: 2, color: C.ink, fontSize: T.sm, fontWeight: '700' },
-  noteBox: { padding: 10, borderRadius: R.md, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
-  noteLabel: { color: C.ink3, fontSize: T.xs, textTransform: 'uppercase', letterSpacing: 0.6 },
-  noteValue: { marginTop: 2, color: C.ink, fontSize: T.sm },
-  statusOk: { backgroundColor: 'rgba(76,175,80,0.12)', borderColor: 'rgba(76,175,80,0.24)' },
-  statusKo: { backgroundColor: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.24)' },
-  statusPending: { backgroundColor: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.24)' },
+  scoreLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
+  scoreValue: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  aiBox: { flex: 1, paddingVertical: 5, paddingHorizontal: 7, borderRadius: 8, backgroundColor: 'rgba(15,23,42,0.03)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)' },
+  aiLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
+  aiValue: { marginTop: 1, color: C.ink, fontSize: 9 },
+  footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  noteBox: { flex: 1, minWidth: 88, padding: 5, borderRadius: 7, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  noteLabel: { color: C.ink3, fontSize: 7, textTransform: 'uppercase', letterSpacing: 0.3 },
+  noteValue: { marginTop: 1, color: C.ink, fontSize: 9 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
+  modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '85%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  modalTitle: { color: C.ink, fontSize: 16, fontWeight: '800' },
+  modalSubtitle: { color: C.ink3, fontSize: 12, marginTop: 2 },
+  closeBtnModal: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.bg2, alignItems: 'center', justifyContent: 'center' },
+  closeBtnText: { color: C.ink, fontWeight: '800' },
+  modalBody: { gap: 8 },
+  detailRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(15,23,42,0.06)' },
+  detailLabel: { color: C.ink3, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
+  detailValue: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 2 },
 });

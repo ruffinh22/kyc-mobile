@@ -12,7 +12,7 @@ import { create } from 'zustand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export type CallStatus =
-  | 'idle' | 'incoming' | 'connecting' | 'active'
+  | 'idle' | 'incoming' | 'outgoing' | 'connecting' | 'active'
   | 'reconnecting' | 'declined' | 'failed' | 'ended';
 
 interface CallState {
@@ -26,6 +26,7 @@ interface CallState {
   lastError:    string | null;
 
   setIncomingCall: (numeroMtn: string, uuid?: string) => void;
+  setOutgoingCall: (numeroMtn: string) => void;
   setConnecting:   () => void;
   setCallActive:   (active: boolean) => void;
   setReconnecting: () => void;
@@ -50,6 +51,10 @@ export const useCallStore = create<CallState>((set) => ({
   // uuid est optionnel : absent sur le chemin WebSocket, présent sur le chemin FCM
   setIncomingCall: (numeroMtn, uuid = '') =>
     set({ status: 'incoming', numeroMtn, callUuid: uuid, lastError: null }),
+
+  // Appel initié par l'agent terrain lui-même (sonnerie sortante)
+  setOutgoingCall: (numeroMtn) =>
+    set({ status: 'outgoing', numeroMtn, callUuid: `out-${Date.now()}`, lastError: null }),
 
   setConnecting: () => set({ status: 'connecting', lastError: null }),
 
@@ -76,6 +81,13 @@ export const useCallStore = create<CallState>((set) => ({
 }));
 
 // ── Store de session agent ────────────────────────────────────────────────────
+type CameraFacing = 'front' | 'back';
+
+type AgentProfile = {
+  numeroAgent: string; serverUrl: string; country?: string;
+  fonctionAgent?: string; zoneAgent?: string;
+};
+
 interface AgentState {
   numeroAgent: string;
   serverUrl:   string;
@@ -83,9 +95,14 @@ interface AgentState {
   fonctionAgent?: string | null;
   zoneAgent?:    string | null;
   isConnected: boolean;
-  setAgent:    (numOrProfile: string | {
-    numeroAgent: string; serverUrl: string; country?: string; fonctionAgent?: string; zoneAgent?: string
-  }, url?: string) => void;
+  // Caméra retenue entre deux sessions (Acquisition/FaceVerify) pour éviter à
+  // l'agent de re-sélectionner avant/arrière à chaque dossier.
+  preferredCamera: CameraFacing | null;
+  setAgent: {
+    (numero: string, url?: string): void;
+    (profile: AgentProfile): void;
+  };
+  setPreferredCamera: (facing: CameraFacing) => void;
   setConnected:(v: boolean) => void;
   logout:      () => void;
 }
@@ -97,12 +114,13 @@ export const useAgentStore = create<AgentState>((set) => ({
   fonctionAgent: null,
   zoneAgent:    null,
   isConnected: false,
-  setAgent:    (numOrProfile: any, url?: string) => {
+  preferredCamera: null,
+  setAgent:    ((numOrProfile: string | AgentProfile, url?: string) => {
     if (typeof numOrProfile === 'string') {
       return set({ numeroAgent: numOrProfile, serverUrl: url ?? '' });
     }
     // object form
-    const p = numOrProfile || {};
+    const p = numOrProfile;
     return set({
       numeroAgent: p.numeroAgent ?? '',
       serverUrl:   p.serverUrl ?? '',
@@ -110,7 +128,8 @@ export const useAgentStore = create<AgentState>((set) => ({
       fonctionAgent: p.fonctionAgent ?? null,
       zoneAgent:    p.zoneAgent ?? null,
     });
-  },
+  }) as AgentState['setAgent'],
+  setPreferredCamera: (facing) => set({ preferredCamera: facing }),
   setConnected:(v)        => set({ isConnected: v }),
   logout:      ()         => set({ numeroAgent: '', serverUrl: '', country: null, fonctionAgent: null, zoneAgent: null, isConnected: false }),
 }));

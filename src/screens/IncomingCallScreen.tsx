@@ -15,6 +15,7 @@ import { signalingService }     from '../services/SignalingService';
 import { callSessionService }   from '../services/CallSessionService';
 import { useCallStore }          from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
+import { callHistoryService } from '../services/CallHistoryService';
 
 const CALL_TIMEOUT_MS = 45_000;
 
@@ -102,6 +103,8 @@ function ActionButton({
         onPressOut={() => press(1)}
         onPress={onPress}
         hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel={label}
       >
         <Animated.View
           style={[
@@ -165,6 +168,7 @@ export function IncomingCallScreen({ route, navigation }: any) {
       stopAll();
       notificationService.endNativeCall(callUuid);
       signalingService.refuseCall();
+      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'missed' });
       callStore.resetCall();
       navigation.replace('Idle');
     }, CALL_TIMEOUT_MS);
@@ -184,9 +188,16 @@ export function IncomingCallScreen({ route, navigation }: any) {
     notificationService.answerNativeCall(callUuid);
     callStore.setConnecting();
     try {
+      // acceptCall() ouvre la caméra/micro ici, avant même que CallScreen ne
+      // soit monté. C'est volontaire (démarrage perçu plus rapide) et sans
+      // danger : SignalingService rejoue l'état (local/remote/phase) à tout
+      // abonné qui arrive après coup, donc CallScreen ne perd aucun événement
+      // même si la négociation WebRTC se termine avant qu'il ne soit monté.
       await signalingService.acceptCall();
+      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'accepted' });
       navigation.replace('Call', { callUuid, numeroMtn });
-    } catch {
+    } catch (e) {
+      console.warn('[IncomingCall] acceptCall a échoué, repli sur refus :', e);
       notificationService.endNativeCall(callUuid);
       signalingService.refuseCall();
       callStore.resetCall();
@@ -198,6 +209,7 @@ export function IncomingCallScreen({ route, navigation }: any) {
     stopAll();
     notificationService.endNativeCall(callUuid);
     signalingService.refuseCall();
+    void callHistoryService.upsert({ callUuid, numeroMtn, status: 'declined' });
     callStore.resetCall();
     navigation.replace('Idle');
   };

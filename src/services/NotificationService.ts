@@ -12,6 +12,22 @@ import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { callSessionService } from './CallSessionService';
 
+// ── Typage du module natif Android (KycCallModule.java/.kt) ─────────────────
+// Toutes les méthodes sont optionnelles côté JS : sur iOS ce module n'existe
+// pas, et selon la version native déployée certaines méthodes peuvent manquer
+// (ex : startForegroundWithCallData ajoutée après startForeground). On centralise
+// le typage ici plutôt que de disperser des `as any` à chaque appel.
+interface KycCallNativeModule {
+  isIgnoringBatteryOptimizations?: () => Promise<boolean>;
+  requestIgnoreBatteryOptimizations?: () => void;
+  startForegroundWithCallData?: (numeroMtn: string, callUuid: string) => void;
+  startForeground?: (numeroMtn: string) => void;
+  answerCall?: () => void;
+  stopForeground?: () => void;
+}
+const KycCallModule = (): KycCallNativeModule | undefined =>
+  (NativeModules as unknown as { KycCallModule?: KycCallNativeModule }).KycCallModule;
+
 // ── Config CallKeep ──────────────────────────────────────────────────────────
 const CALLKEEP_OPTIONS = {
   ios: {
@@ -85,11 +101,11 @@ class NotificationService {
   async ensureBatteryOptimizationExemption (): Promise<boolean> {
     if (Platform.OS !== 'android') return true;
     try {
-      const isIgnoring = await NativeModules.KycCallModule?.isIgnoringBatteryOptimizations?.();
+      const isIgnoring = await KycCallModule()?.isIgnoringBatteryOptimizations?.();
       if (isIgnoring) return true;
 
       await AsyncStorage.setItem('battery_exemption_requested', '1');
-      NativeModules.KycCallModule?.requestIgnoreBatteryOptimizations?.();
+      KycCallModule()?.requestIgnoreBatteryOptimizations?.();
       return false; // la demande est lancée, l'utilisateur doit valider dans la boîte système
     } catch (e) {
       console.warn('[Notif] Vérification exemption batterie indisponible:', e);
@@ -100,9 +116,12 @@ class NotificationService {
   // ── Permission notifications (Android 13+ / POST_NOTIFICATIONS) ─────────
   private async requestNotificationPermission (): Promise<void> {
     if (Platform.OS !== 'android' || Platform.Version < 33) return;
+    // Cast nécessaire : POST_NOTIFICATIONS (API 33+) manque encore des
+    // typings PermissionsAndroid.PERMISSIONS de plusieurs versions de RN.
+    const POST_NOTIFICATIONS = 'android.permission.POST_NOTIFICATIONS' as unknown as Parameters<typeof PermissionsAndroid.request>[0];
     try {
       await PermissionsAndroid.request(
-        'android.permission.POST_NOTIFICATIONS' as any,
+        POST_NOTIFICATIONS,
         {
           title:                 'Notifications d\'appel',
           message:               'Nécessaire pour vous alerter des appels vidéo entrants, même écran verrouillé.',
@@ -292,7 +311,7 @@ class NotificationService {
     callSessionService.startIncomingCallExperience();
 
     try {
-      const nativeCallModule = (NativeModules.KycCallModule as any);
+      const nativeCallModule = KycCallModule();
       // Sur Android, démarre le service foreground natif qui joue lui-même
       // la sonnerie (sonneriekyc.mp3 ou repli système) + vibration, en boucle,
       // indépendamment de l'état du moteur JS — voir KycForegroundCallService.
@@ -326,8 +345,7 @@ class NotificationService {
     }
     await this.clearPendingIncomingCall();
     try {
-      const nativeCallModule = (NativeModules.KycCallModule as any);
-      nativeCallModule?.answerCall?.();
+      KycCallModule()?.answerCall?.();
     } catch (e) {
       console.warn('[Notif] answerCall natif indisponible:', e);
     }
@@ -345,8 +363,7 @@ class NotificationService {
     callSessionService.stopIncomingCallExperience();
 
     try {
-      const nativeCallModule = (NativeModules.KycCallModule as any);
-      nativeCallModule?.stopForeground?.();
+      KycCallModule()?.stopForeground?.();
     } catch (e) {
       console.warn('[Notif] stopForeground failed:', e);
     }

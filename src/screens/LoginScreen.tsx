@@ -60,19 +60,31 @@ function buildProbeUrls(serverUrl: string): string[] {
 async function registerAgentProfile(baseUrl: string, profile: {
   numero_agent: string; country: string; fonction_agent: string; zone_agent: string;
 }) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), 6000);
   try {
-    await fetch(`${baseUrl}/api/public/agents/register`, {
+    const res = await fetch(`${baseUrl}/api/public/agents/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(profile),
+      signal: ctrl.signal,
     });
-  } catch {
+    if (!res.ok) {
+      console.warn('[Login] Enregistrement du profil agent refusé par le serveur :', res.status);
+    }
+  } catch (e) {
     // Non bloquant : si l'enregistrement DB échoue, l'agent reste utilisable
-    // en local ; le prochain login/submit pourra retenter.
+    // en local ; le prochain login/submit pourra retenter. On logue quand
+    // même pour ne pas perdre ce signal en support/debug.
+    console.warn('[Login] Enregistrement du profil agent échoué (non bloquant) :', e);
+  } finally {
+    clearTimeout(tid);
   }
 }
 
-export function LoginScreen({ navigation }: any) {
+type LoginScreenProps = { navigation: { replace: (screen: string, params?: object) => void } };
+
+export function LoginScreen({ navigation }: LoginScreenProps) {
   const [countryCode,    setCountryCode]    = useState(DEFAULT_COUNTRY);
   const [numero,         setNumero]         = useState('');
   const [fonctionAgent,  setFonctionAgent]  = useState('');
@@ -112,13 +124,14 @@ export function LoginScreen({ navigation }: any) {
             resolvedServer = url.replace(/\/api\/health$/i, '').replace(/\/health$/i, '');
             break;
           }
-        } catch {
-          // ignore et tente le suivant
+        } catch (e) {
+          console.warn(`[Login] Sonde serveur injoignable, tentative suivante : ${url}`, e);
         }
       }
       clearTimeout(tid);
-      if (!res || !res.ok) throw new Error();
-    } catch {
+      if (!res || !res.ok) throw new Error('Aucune URL de sonde n\'a répondu OK');
+    } catch (e) {
+      console.warn('[Login] Impossible de joindre un serveur KYC :', e);
       setError('Impossible de joindre le serveur. Vérifie l\'IP de ton PC ou utilise adb reverse.');
       shake(); setLoading(false); return;
     }
@@ -274,6 +287,9 @@ export function LoginScreen({ navigation }: any) {
                 onPress={handleConnect}
                 disabled={!canSubmit || loading}
                 activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel="Créer mon accès"
+                accessibilityState={{ disabled: !canSubmit || loading }}
               >
                 {loading
                   ? <ActivityIndicator color={C.blue} />

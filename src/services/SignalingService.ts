@@ -3,7 +3,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Connexion WebSocket au serveur KYC et signalisation WebRTC.
  *
- * Protocole serveur réel (video-signal.js) :
+ * Protocole serveur réel (implémentation active du backend) :
  *   ENVOI   : register { role:'terrain', numero, fcmToken? }
  *   ENVOI   : webrtc   { payload: { kind:'answer'|'ice', sdp?, candidate? } }
  *   ENVOI   : refus
@@ -18,6 +18,20 @@
  *   REÇOIT  : pong
  *
  * NOTE : le serveur route par `numero` (pas de from/to dans les messages webrtc).
+ *
+ * ── EXTENSION APPEL SORTANT (terrain → back-office/numéro) ─────────────────
+ * NON ENCORE IMPLÉMENTÉE CÔTÉ SERVEUR — voir SERVER_SPEC.md pour le contrat
+ * exact à ajouter dans video-signal.js. Résumé :
+ *   ENVOI   : call-request { numero: string }   // le terrain demande à joindre `numero`
+ *   ENVOI   : call-cancel  {}                   // annule pendant la sonnerie sortante
+ *
+ *   REÇOIT  : call-ringing     {}                        // la cible sonne
+ *   REÇOIT  : call-accepted    {}                         // la cible a décroché,
+ *             un message webrtc/offer suit immédiatement (même flux que l'appel
+ *             entrant existant : on réutilise handleOffer()/acceptCall() tel quel,
+ *             c'est TOUJOURS le back-office qui crée l'offer SDP, jamais le terrain)
+ *   REÇOIT  : call-rejected    {}                         // la cible a refusé
+ *   REÇOIT  : call-unavailable { reason?: string }        // numéro injoignable/hors ligne
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -45,7 +59,21 @@ type SignalMsg =
   | { type: 'webrtc';        payload: WebRTCPayload }
   | { type: 'refus' }
   | { type: 'hangup' }
-  | { type: 'pong' };
+  | { type: 'pong' }
+  // ── Extension appel sortant (voir SERVER_SPEC.md) ─────────────────────────
+  | { type: 'call-ringing' }
+  | { type: 'call-accepted' }
+  | { type: 'call-rejected' }
+  | { type: 'call-unavailable'; reason?: string };
+
+// ── Événements d'appel sortant (pour OutgoingCallScreen) ────────────────────
+export type OutgoingCallEvent =
+  | { type: 'ringing' }
+  | { type: 'accepted' }
+  | { type: 'rejected' }
+  | { type: 'unavailable'; reason?: string }
+  | { type: 'cancelled' };
+type OutgoingCallListener = (event: OutgoingCallEvent) => void;
 
 type WebRTCPayload =
   | { kind: 'offer';  sdp: string }
@@ -80,6 +108,12 @@ class SignalingService {
   private fcmToken      = '';
   private callbacks: SignalingCallbacks | null = null;
   private streamListeners: StreamListener[] = [];
+  // Écouteurs dédiés à l'appel SORTANT (OutgoingCallScreen s'y abonne). Séparés
+  // de `callbacks` qui est unique et déjà occupé par IdleScreen pour toute la
+  // durée de vie de l'app — un écran ne peut pas se substituer à ces callbacks
+  // globaux sans casser la réception des appels entrants pendant qu'il est monté.
+  private outgoingCallListeners: OutgoingCallListener[] = [];
+  private isOutgoingRinging = false;
 
   private reconnectTimer: ReturnType<typeof setTimeout>  | null = null;
   private pingTimer:      ReturnType<typeof setTimeout>  | null = null;
@@ -95,9 +129,20 @@ class SignalingService {
   private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_GRACE_MS = 10_000;
 
-  private pendingCandidates: any[] = [];
+  private pendingCandidates: Array<{ candidate?: string; sdpMid?: string | null; sdpMLineIndex?: number | null }> = [];
   private localStream: MediaStream | null = null;
   private facingMode: 'user' | 'environment' = 'environment'; // Caméra arrière par défaut (terrain)
+
+  // ── État "rejouable" pour abonnés tardifs ────────────────────────────────
+  // La négociation WebRTC (offer reçue, réponse, ICE) est pilotée par ce
+  // service, pas par l'écran affiché. Elle peut donc démarrer ET se terminer
+  // pendant qu'aucun écran n'est encore abonné à addStreamListener (ex :
+  // l'offer arrive pendant que IncomingCallScreen sonne encore, avant que
+  // CallScreen ne soit monté). Sans état rejouable, l'événement 'remote' est
+  // perdu et l'appel reste bloqué sur "connexion en cours" indéfiniment côté
+  // UI alors que le flux existe déjà bel et bien côté PeerConnection.
+  private lastRemoteStream: MediaStream | null = null;
+  private lastConnectionPhase: 'idle' | 'connecting' | 'reconnecting' | 'connected' | 'ended' = 'idle';
 
   // ── Initialisation ──────────────────────────────────────────────────────────
   init (serverUrl: string, numeroAgent: string, fcmToken: string, cbs: SignalingCallbacks) {
@@ -113,12 +158,35 @@ class SignalingService {
   // ── Abonnement aux événements stream (pour CallScreen) ──────────────────────
   addStreamListener (listener: StreamListener): () => void {
     this.streamListeners.push(listener);
+
+    // Rejoue immédiatement l'état déjà connu pour cet abonné : s'il arrive
+    // après coup (voir commentaire sur lastRemoteStream), il doit recevoir
+    // tout de suite ce qu'il aurait manqué au lieu de rester bloqué.
+    if (this.localStream)     listener({ type: 'local',  stream: this.localStream });
+    if (this.lastRemoteStream) listener({ type: 'remote', stream: this.lastRemoteStream });
+    if (this.lastConnectionPhase === 'reconnecting') listener({ type: 'reconnecting' });
+
     return () => {
       this.streamListeners = this.streamListeners.filter(l => l !== listener);
     };
   }
 
+  addOutgoingCallListener (listener: OutgoingCallListener): () => void {
+    this.outgoingCallListeners.push(listener);
+    return () => {
+      this.outgoingCallListeners = this.outgoingCallListeners.filter(l => l !== listener);
+    };
+  }
+
+  private emitOutgoingCall (event: OutgoingCallEvent) {
+    this.outgoingCallListeners.forEach(l => l(event));
+  }
+
   private emitStream (event: StreamEvent) {
+    if (event.type === 'remote')       this.lastRemoteStream = event.stream;
+    if (event.type === 'reconnecting') this.lastConnectionPhase = 'reconnecting';
+    if (event.type === 'reconnected')  this.lastConnectionPhase = 'connected';
+    if (event.type === 'ended')        { this.lastConnectionPhase = 'ended'; this.lastRemoteStream = null; }
     this.streamListeners.forEach(l => l(event));
   }
 
@@ -207,7 +275,49 @@ class SignalingService {
         this.awaitingPong = false;
         this.missedPongs = 0;
         break;
+
+      // ── Extension appel sortant ─────────────────────────────────────────
+      case 'call-ringing':
+        this.emitOutgoingCall({ type: 'ringing' });
+        break;
+
+      case 'call-accepted':
+        // La cible a décroché. Comme pour l'appel entrant, c'est le
+        // back-office qui va créer l'offer SDP — on prépare juste le flux
+        // local (caméra/micro) dès maintenant pour que l'answer puisse
+        // partir avec le média dès que l'offer arrive (voir handleOffer).
+        this.isOutgoingRinging = false;
+        this.emitOutgoingCall({ type: 'accepted' });
+        break;
+
+      case 'call-rejected':
+        this.isOutgoingRinging = false;
+        this.emitOutgoingCall({ type: 'rejected' });
+        break;
+
+      case 'call-unavailable':
+        this.isOutgoingRinging = false;
+        this.emitOutgoingCall({ type: 'unavailable', reason: msg.reason });
+        break;
     }
+  }
+
+  // ── Lancer un appel sortant (terrain → numéro/back-office) ────────────────
+  // NÉCESSITE le support serveur décrit dans SERVER_SPEC.md (message
+  // 'call-request' non géré par video-signal.js actuellement). Tant que le
+  // serveur ne répond pas, l'appelant restera en 'ringing' indéfiniment —
+  // OutgoingCallScreen doit donc garder un timeout local (voir cet écran).
+  startOutgoingCall (numero: string) {
+    this.isOutgoingRinging = true;
+    this.sendRaw({ type: 'call-request', numero });
+  }
+
+  // ── Annuler un appel sortant en cours de sonnerie ──────────────────────────
+  cancelOutgoingCall () {
+    if (!this.isOutgoingRinging) return;
+    this.isOutgoingRinging = false;
+    this.sendRaw({ type: 'call-cancel' });
+    this.emitOutgoingCall({ type: 'cancelled' });
   }
 
   // ── Dispatch WebRTC payload ──────────────────────────────────────────────────
@@ -237,7 +347,9 @@ class SignalingService {
           try {
             const { RTCIceCandidate } = getWebRTC();
             await this.pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
-          } catch {}
+          } catch (e) {
+            console.warn('[Signal] addIceCandidate a échoué (candidat ignoré) :', e);
+          }
         } else {
           this.pendingCandidates.push(payload.candidate);
         }
@@ -338,7 +450,11 @@ class SignalingService {
     if (!this.pc) return;
     const { RTCIceCandidate } = getWebRTC();
     for (const c of this.pendingCandidates) {
-      try { await this.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch (e) {
+        console.warn('[Signal] flushPendingCandidates: candidat en attente rejeté :', e);
+      }
     }
     this.pendingCandidates = [];
   }
@@ -486,12 +602,21 @@ class SignalingService {
   // ── Retourner la caméra ──────────────────────────────────────────────────
   async switchCamera () {
     const track = this.localStream?.getVideoTracks()[0] as any;
-    if (!track) return;
+    if (!track) {
+      console.warn('[Signal] switchCamera: aucune piste vidéo locale disponible');
+      return;
+    }
     if (typeof track._switchCamera === 'function') {
       track._switchCamera();
       this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    } else {
+      console.warn('[Signal] switchCamera: non supporté sur ce module natif react-native-webrtc');
     }
   }
+
+  // ── Lecture d'état synchrone (utile pour un écran qui monte tardivement) ──
+  getLocalStream ():  MediaStream | null { return this.localStream; }
+  getRemoteStream (): MediaStream | null { return this.lastRemoteStream; }
 
   // ── Nettoyage fin d'appel ─────────────────────────────────────────────────
   private endCallCleanup () {
@@ -505,6 +630,8 @@ class SignalingService {
       this.pc = null;
     }
     this.pendingCandidates = [];
+    this.lastRemoteStream = null;
+    this.lastConnectionPhase = 'idle';
     useCallStore.getState().resetCall();
   }
 

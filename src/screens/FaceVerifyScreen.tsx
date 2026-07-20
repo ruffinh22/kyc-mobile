@@ -40,7 +40,27 @@ const TICK_MS = 50;
 // Nombre d'échecs de capture live avant de proposer la caméra de secours
 const MAX_LIVE_FAILURES = 2;
 
-export function FaceVerifyScreen({ route, navigation }: any) {
+type FaceVerifyParams = {
+  dossierId: string;
+  serverUrl: string;
+  rectoPath: string;
+  versoPath: string;
+  numeroMtn: string;
+  waAgent: string;
+  country: string;
+  fonctionAgent: string;
+  zoneAgent: string;
+};
+type FaceVerifyScreenProps = {
+  route: { params: FaceVerifyParams };
+  navigation: {
+    goBack: () => void;
+    navigate: (screen: string, params?: object) => void;
+    replace: (screen: string, params?: object) => void;
+  };
+};
+
+export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
   const {
     dossierId,
     serverUrl,
@@ -219,6 +239,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
       }, 2200);
     } catch (err: any) {
       liveFailuresRef.current += 1;
+      console.warn('[FaceVerify] handleCapturedPhoto a échoué :', err);
       setErrMsg(err.message || "Erreur d'analyse faciale");
       setPhase('error');
     }
@@ -326,6 +347,8 @@ export function FaceVerifyScreen({ route, navigation }: any) {
             <TouchableOpacity
               style={s.closeBtn}
               onPress={() => navigation.goBack()}
+              accessibilityRole="button"
+              accessibilityLabel="Retour"
             >
               <Text style={s.closeTxt}>✕</Text>
             </TouchableOpacity>
@@ -417,6 +440,9 @@ export function FaceVerifyScreen({ route, navigation }: any) {
               onPress={startHold}
               onLongPress={startHold}
               disabled={!cameraReady}
+              accessibilityRole="button"
+              accessibilityLabel={cameraReady ? 'Maintenir pour capturer en live' : 'Préparation caméra'}
+              accessibilityState={{ disabled: !cameraReady }}
             >
               <Text style={s.captureTxt}>
                 {cameraReady ? 'Maintenir pour capturer en live' : 'Préparation caméra…'}
@@ -438,7 +464,7 @@ export function FaceVerifyScreen({ route, navigation }: any) {
         <View style={s.messageBox}>
           <Text style={s.instrTitle}>{instrTitle}</Text>
           <Text style={[s.instrSub, { marginBottom: 24, textAlign: 'center' }]}>{instrSub}</Text>
-          <TouchableOpacity style={s.retryBtn} onPress={captureFallback}>
+          <TouchableOpacity style={s.retryBtn} onPress={captureFallback} accessibilityRole="button" accessibilityLabel="Ouvrir l'appareil photo">
             <Text style={s.retryTxt}>Ouvrir l'appareil photo</Text>
           </TouchableOpacity>
           <TouchableOpacity

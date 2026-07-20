@@ -24,6 +24,7 @@ interface CallState {
   errorMessage: string | null;
 
   setIncomingCall: (numeroMtn: string, uuid?: string) => void;
+  setOutgoingCall: (numeroMtn: string, uuid?: string) => void;
   setConnecting:   () => void;
   setCallActive:   (active: boolean) => void;
   setMicOn:        (on: boolean) => void;
@@ -46,6 +47,9 @@ export const useCallStore = create<CallState>((set) => ({
   // uuid est optionnel : absent sur le chemin WebSocket, présent sur le chemin FCM
   setIncomingCall: (numeroMtn, uuid = '') =>
     set({ status: 'incoming', numeroMtn, callUuid: uuid, errorMessage: null }),
+
+  setOutgoingCall: (numeroMtn, uuid = '') =>
+    set({ status: 'connecting', numeroMtn, callUuid: uuid, isCallActive: false, errorMessage: null }),
 
   setConnecting: () => set({ status: 'connecting', errorMessage: null }),
 

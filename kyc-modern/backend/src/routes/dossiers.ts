@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { Dossier } from '../types';
@@ -38,10 +38,10 @@ function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
 }
 
 export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
-  app.addHook('preHandler', requireAuth);
+  (app as unknown as { addHook: (name: string, hook: typeof requireAuth) => void }).addHook('preHandler', requireAuth);
 
   // GET /api/dossiers
-  app.get('/api/dossiers', async (req, reply) => {
+  app.get('/api/dossiers', async (req: FastifyRequest, reply: FastifyReply) => {
     const { matricule, role } = req.user;
     const q = req.query as Record<string,string>;
     const agentFilter = role === 'agent' ? matricule : (q.agent || null);
@@ -55,97 +55,105 @@ export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/dossiers/stats
-  app.get('/api/dossiers/stats', async (req, reply) => {
+  app.get('/api/dossiers/stats', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string,string>;
     const stats = await db.getDossierStats(q.date || nowDate());
     return reply.send({ success: true, ...stats });
   });
 
   // GET /api/dossiers/:id
-  app.get<{ Params: { id: string } }>('/api/dossiers/:id', async (req, reply) => {
-    const d = await db.getDossierById(req.params.id);
+  app.get('/api/dossiers/:id', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     return reply.send({ success: true, dossier: maskDossier(normalizeDossier(d), req.user.matricule, req.user.role) });
   });
 
   // GET /api/dossiers/:id/photo/:type
-  app.get<{ Params: { id: string; type: string } }>('/api/dossiers/:id/photo/:type', async (req, reply) => {
+  app.get('/api/dossiers/:id/photo/:type', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string; type: string };
     const { matricule, role } = req.user;
-    if (!['recto','verso','live'].includes(req.params.type)) return reply.code(400).send({ error: 'Type invalide' });
-    const d = await db.getDossierById(req.params.id);
+    const log = req.log as unknown as { info: (payload: Record<string, unknown>, msg?: string) => void };
+    if (!['recto','verso','live'].includes(params.type)) return reply.code(400).send({ error: 'Type invalide' });
+    const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
-    req.log.info({ event: 'photo-access', dossierId: req.params.id, type: req.params.type, user: req.user, agent_saisie: d.agent_saisie, statut: d.statut }, 'photo access check');
+    log.info({ event: 'photo-access', dossierId: params.id, type: params.type, user: req.user, agent_saisie: d.agent_saisie, statut: d.statut }, 'photo access check');
     if (role === 'agent' && d.statut !== 'en_attente' && d.agent_saisie !== matricule) {
-      req.log.info({ reason: 'access_rejected', expectedMatricule: matricule, actualAgentSaisie: d.agent_saisie, statut: d.statut }, 'photo access denied');
+      log.info({ reason: 'access_rejected', expectedMatricule: matricule, actualAgentSaisie: d.agent_saisie, statut: d.statut }, 'photo access denied');
       return reply.code(403).send({ error: 'Accès refusé' });
     }
-    const field = `photo_${req.params.type}` as 'photo_recto'|'photo_verso'|'photo_live';
+    const field = `photo_${params.type}` as 'photo_recto'|'photo_verso'|'photo_live';
     if (!d[field]) return reply.code(404).send({ error: 'Photo non disponible' });
     const safeRoot = path.resolve(UPLOAD_CNI);
     const fullPath = path.resolve(safeRoot, d[field]!);
     const relative = path.relative(safeRoot, fullPath);
-    req.log.info({ field, safeRoot, fullPath, relative }, 'photo path debug');
+    log.info({ field, safeRoot, fullPath, relative }, 'photo path debug');
     if (relative.startsWith('..') || path.isAbsolute(relative)) return reply.code(403).send({ error: 'Chemin interdit' });
     if (!fs.existsSync(fullPath)) return reply.code(404).send({ error: 'Fichier introuvable' });
     const ext = path.extname(fullPath).toLowerCase();
     const mimes: Record<string,string> = { '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.png':'image/png', '.webp':'image/webp' };
-    reply.header('Content-Type', mimes[ext]||'application/octet-stream');
-    reply.header('Cache-Control','private,max-age=3600');
+    const replyWithHeaders = reply as unknown as { raw: { setHeader: (name: string, value: string) => void } };
+    replyWithHeaders.raw.setHeader('Content-Type', mimes[ext]||'application/octet-stream');
+    replyWithHeaders.raw.setHeader('Cache-Control','private,max-age=3600');
     return reply.send(fs.createReadStream(fullPath));
   });
 
   // POST /api/dossiers/:id/prendre
-  app.post<{ Params: { id: string } }>('/api/dossiers/:id/prendre', async (req, reply) => {
+  app.post('/api/dossiers/:id/prendre', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
-    const d = await db.getDossierById(req.params.id);
+    const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     if (d.statut !== 'en_attente') return reply.code(409).send({ error: `Statut: ${d.statut}` });
-    await db.updateDossier(req.params.id, { statut: 'en_cours', agent_saisie: req.user.matricule, assigne_a: req.user.matricule, assigne_le: nowSec(), heure_prise: nowTime() });
+    await db.updateDossier(params.id, { statut: 'en_cours', agent_saisie: req.user.matricule, assigne_a: req.user.matricule, assigne_le: nowSec(), heure_prise: nowTime() });
     await db.upsertPresence(req.user.matricule, 'online');
-    db.audit(req.user.matricule,'DOSSIER_PRIS',`id=${req.params.id}`,req.ip);
+    db.audit(req.user.matricule,'DOSSIER_PRIS',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
   });
 
   // POST /api/dossiers/:id/accepter
-  app.post<{ Params: { id: string } }>('/api/dossiers/:id/accepter', async (req, reply) => {
+  app.post('/api/dossiers/:id/accepter', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
-    const d = await db.getDossierById(req.params.id);
+    const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     if (d.statut !== 'en_cours') return reply.code(409).send({ error: 'Dossier non en cours' });
     if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
     const body = req.body as { resultat_crm?: string }|null;
-    await db.updateDossier(req.params.id, { statut: 'accepte', heure_cloture: nowTime(), closed_at: nowSec(), resultat_crm: body?.resultat_crm??null });
-    db.audit(req.user.matricule,'DOSSIER_ACCEPTE',`id=${req.params.id}`,req.ip);
+    await db.updateDossier(params.id, { statut: 'accepte', heure_cloture: nowTime(), closed_at: nowSec(), resultat_crm: body?.resultat_crm??null });
+    db.audit(req.user.matricule,'DOSSIER_ACCEPTE',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
   });
 
   // POST /api/dossiers/:id/rejeter
-  app.post<{ Params: { id: string } }>('/api/dossiers/:id/rejeter', async (req, reply) => {
+  app.post('/api/dossiers/:id/rejeter', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
-    const d = await db.getDossierById(req.params.id);
+    const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     if (d.statut !== 'en_cours') return reply.code(409).send({ error: 'Dossier non en cours' });
     if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
     const body = req.body as { raison?: string }|null;
     if (!body?.raison?.trim()) return reply.code(400).send({ error: 'Raison obligatoire' });
-    await db.updateDossier(req.params.id, { statut: 'rejete', heure_cloture: nowTime(), closed_at: nowSec(), raison_rejet: body.raison.trim() });
-    db.audit(req.user.matricule,'DOSSIER_REJETE',`id=${req.params.id} raison=${body.raison}`,req.ip);
+    await db.updateDossier(params.id, { statut: 'rejete', heure_cloture: nowTime(), closed_at: nowSec(), raison_rejet: body.raison.trim() });
+    db.audit(req.user.matricule,'DOSSIER_REJETE',`id=${params.id} raison=${body.raison}`,req.ip);
     return reply.send({ success: true });
   });
 
   // POST /api/dossiers/:id/transferer (sup/admin)
-  app.post<{ Params: { id: string } }>('/api/dossiers/:id/transferer',
+  app.post('/api/dossiers/:id/transferer',
     { preHandler: requireRole(['superviseur','admin']) },
-    async (req, reply) => {
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const params = req.params as { id: string };
       const body = req.body as { cible?: string; message?: string }|null;
       if (!body?.cible?.trim()) return reply.code(400).send({ error: 'Agent cible obligatoire' });
       const cible = body.cible.trim().toUpperCase();
       const cibleCompte = await db.getCompteByMatricule(cible);
       if (!cibleCompte || !cibleCompte.actif) return reply.code(400).send({ error: 'Agent cible introuvable ou inactif' });
-      const d = await db.getDossierById(req.params.id);
+      const d = await db.getDossierById(params.id);
       if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
-      await db.updateDossier(req.params.id, { statut: 'en_cours', agent_saisie: cible, assigne_a: cible, assigne_le: nowSec(), heure_prise: nowTime(), transfert_message: body.message??null, transfert_par: req.user.matricule });
-      db.audit(req.user.matricule,'DOSSIER_TRANSFERE',`id=${req.params.id} vers=${cible}`,req.ip);
+      await db.updateDossier(params.id, { statut: 'en_cours', agent_saisie: cible, assigne_a: cible, assigne_le: nowSec(), heure_prise: nowTime(), transfert_message: body.message??null, transfert_par: req.user.matricule });
+      db.audit(req.user.matricule,'DOSSIER_TRANSFERE',`id=${params.id} vers=${cible}`,req.ip);
       return reply.send({ success: true });
     }
   );
@@ -153,7 +161,7 @@ export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/dossiers/historique (admin)
   app.get('/api/dossiers/historique',
     { preHandler: requireRole(['superviseur','admin']) },
-    async (req, reply) => {
+    async (req: FastifyRequest, reply: FastifyReply) => {
       const q = req.query as Record<string,string>;
       const { rows, total } = await db.getDossiers({
         debut: q.debut||null, fin: q.fin||null, statut: q.statut||null,

@@ -170,8 +170,12 @@ export async function ocrRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const fields = extractFields(lines);
+      const log = req.log as unknown as {
+        info: (payload: Record<string, unknown>, msg?: string) => void;
+        error: (err: unknown, msg?: string) => void;
+      };
 
-      req.log.info({ event: 'ocr-id-card', country, linesCount: lines.length, fields }, 'OCR CNI traité');
+      log.info({ event: 'ocr-id-card', country, linesCount: lines.length, fields }, 'OCR CNI traité');
 
       return reply.send({
         success: true,
@@ -186,7 +190,11 @@ export async function ocrRoutes(app: FastifyInstance): Promise<void> {
         profession: fields.profession,
       });
     } catch (err) {
-      req.log.error(err, '[OCR] Textract a échoué');
+      const log = req.log as unknown as {
+        info: (payload: Record<string, unknown>, msg?: string) => void;
+        error: (err: unknown, msg?: string) => void;
+      };
+      log.error(err, '[OCR] Textract a échoué');
       return reply.send({ success: false, error: err instanceof Error ? err.message : 'Erreur OCR' });
     }
   });

@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authRoutes }        from './auth';
 import { dossiersRoutes }    from './dossiers';
 import { gsmRoutes }         from './gsm';
@@ -13,7 +13,7 @@ import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/health', async (_req, reply) =>
+  app.get('/api/health', async (_req: FastifyRequest, reply: FastifyReply) =>
     reply.send({ success: true, status: 'ok', version: '4.0.0', ts: new Date().toISOString() })
   );
 

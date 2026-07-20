@@ -270,10 +270,10 @@ export async function getDossierStats(date: string): Promise<{
 }
 
 export async function createDossier(data: {
-  id: string; numero_mtn: string; wa_agent?: string; username_agent?: string;
-  fonction_agent?: string; zone_agent?: string; date: string;
-  heure_reception: string; photo_recto?: string; photo_verso?: string; photo_live?: string;
-  score_visage?: number | null; visage_match?: number | null; visage_motif?: string;
+  id: string; numero_mtn: string; wa_agent?: string | null; username_agent?: string | null;
+  fonction_agent?: string | null; zone_agent?: string | null; date: string;
+  heure_reception: string; photo_recto?: string | null; photo_verso?: string | null; photo_live?: string | null;
+  score_visage?: number | null; visage_match?: number | null; visage_motif?: string | null;
   visage_verifie_le?: number | null; nom_titulaire?: string | null;
   prenom_titulaire?: string | null; date_naissance?: string | null;
   lieu_naissance?: string | null; autre_numero?: string | null; nom_pere?: string | null;

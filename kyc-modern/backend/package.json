@@ -11,6 +11,7 @@
     "create-admin": "ts-node ./src/scripts/create-admin.ts",
     "create-agent": "ts-node ./src/scripts/create-agent.ts",
     "create-superviseur": "ts-node ./src/scripts/create-superviseur.ts",
+    "create-migration": "ts-node ./src/db/createMigrationCli.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

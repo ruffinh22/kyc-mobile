@@ -37,7 +37,7 @@ function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
   };
 }
 
-export async function dossiersRoutes(app: FastifyInstance): Promise<void> {
+export async function dossiersRoutes(app: any): Promise<void> {
   (app as unknown as { addHook: (name: string, hook: typeof requireAuth) => void }).addHook('preHandler', requireAuth);
 
   // GET /api/dossiers

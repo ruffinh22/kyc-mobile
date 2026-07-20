@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 
-export async function supFileRoutes(app: FastifyInstance): Promise<void> {
+export async function supFileRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
   app.addHook('preHandler', requireRole(['superviseur', 'admin']));
 

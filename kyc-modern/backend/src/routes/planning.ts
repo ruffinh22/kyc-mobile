@@ -3,7 +3,7 @@ import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { PlanningEntry } from '../types';
 
-export async function planningRoutes(app: FastifyInstance): Promise<void> {
+export async function planningRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
   // GET /api/planning/mon?debut=&fin=

@@ -104,7 +104,7 @@ function extractFields(lines: string[]) {
   return out;
 }
 
-export async function ocrRoutes(app: FastifyInstance): Promise<void> {
+export async function ocrRoutes(app: any): Promise<void> {
   // ==========================================================================
   // POST /api/ocr/id-card
   // Body (multipart) : country (field), photo_recto (file)

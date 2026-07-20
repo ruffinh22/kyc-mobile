@@ -3,7 +3,7 @@ import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { NoteQualite } from '../types';
 
-export async function notesQualiteRoutes(app: FastifyInstance): Promise<void> {
+export async function notesQualiteRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
   // GET /api/notes-qualite/mes

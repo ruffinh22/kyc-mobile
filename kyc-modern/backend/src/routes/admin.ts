@@ -21,7 +21,7 @@ const UpdateCompteSchema = z.object({
   must_change_password: z.boolean().optional(),
 });
 
-export async function adminRoutes(app: FastifyInstance): Promise<void> {
+export async function adminRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
   app.addHook('preHandler', requireRole(['admin']));
 
@@ -55,7 +55,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ success: true, id, matricule: matricule.toUpperCase(), password_initial: password ? undefined : plain });
   });
 
-  app.put<{ Params: { matricule: string } }>('/api/admin/comptes/:matricule', async (req, reply) => {
+  app.put('/api/admin/comptes/:matricule', async (req, reply) => {
     const p = UpdateCompteSchema.safeParse(req.body);
     if (!p.success) return reply.code(400).send({ error: 'Données invalides' });
     const target = req.params.matricule.toUpperCase();
@@ -70,7 +70,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ success: true });
   });
 
-  app.post<{ Params: { matricule: string } }>('/api/admin/comptes/:matricule/reset-password', async (req, reply) => {
+  app.post('/api/admin/comptes/:matricule/reset-password', async (req, reply) => {
     const target = req.params.matricule.toUpperCase();
     if (!await db.getCompteByMatricule(target)) return reply.code(404).send({ error: 'Compte introuvable' });
     const body  = req.body as { new_password?: string } | null;
@@ -90,7 +90,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ success: true, count: sessions.length, sessions });
   });
 
-  app.post<{ Params: { jti: string } }>('/api/admin/sessions/:jti/revoquer', async (req, reply) => {
+  app.post('/api/admin/sessions/:jti/revoquer', async (req, reply) => {
     await db.revokeSession(req.params.jti);
     db.audit(req.user.matricule, 'SESSION_REVOQUEE', `jti=${req.params.jti}`, req.ip);
     return reply.send({ success: true });

@@ -206,10 +206,3 @@ export interface AuthenticatedUser {
   jti: string;
 }
 
-// ── Augmentation Fastify ──────────────────────────────────────────────────────
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    user: AuthenticatedUser;
-  }
-}

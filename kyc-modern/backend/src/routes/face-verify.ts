@@ -142,14 +142,14 @@ const verifySessions = new Map<string, VerifySession>();
 
 // ── Plugin Fastify ────────────────────────────────────────────────────────────
 
-export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
+export async function faceVerifyRoutes(app: any): Promise<void> {
 
   // ==========================================================================
   // POST /api/dossiers/verify-face-realtime
   // Compare le frame live capturé vs la photo recto CNI (déjà sur disque).
   // Auth : pas requise (appelé depuis la page terrain HTML publique).
   // ==========================================================================
-  app.post('/api/dossiers/verify-face-realtime', async (req, reply) => {
+  app.post('/api/dossiers/verify-face-realtime', async (req: any, reply: any) => {
     if (!req.isMultipart()) {
       return reply.code(400).send({ error: 'Format multipart attendu' });
     }
@@ -246,7 +246,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
   // Génère une session et retourne les paramètres pour la redirection.
   // Auth : pas requise.
   // ==========================================================================
-  app.post('/api/dossiers/prepare-verify-session', async (req, reply) => {
+  app.post('/api/dossiers/prepare-verify-session', async (req: any, reply: any) => {
     const body = req.body as {
       numero_mtn?:    string;
       country?:       string;
@@ -292,9 +292,9 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
   // ==========================================================================
   // GET /api/dossiers/verify-session/:id
   // ==========================================================================
-  app.get<{ Params: { id: string } }>(
+  app.get(
     '/api/dossiers/verify-session/:id',
-    async (req, reply) => {
+    async (req: any, reply: any) => {
       const session = verifySessions.get(req.params.id);
       if (!session) {
         return reply.code(404).send({ error: 'Session expirée ou introuvable' });
@@ -316,7 +316,7 @@ export async function faceVerifyRoutes(app: FastifyInstance): Promise<void> {
   //   fonction_agent, zone_agent, recto_path, verso_path,
   //   score_visage, visage_match, visage_motif
   // ==========================================================================
-  app.post('/api/dossiers/complete-with-face-verify', async (req, reply) => {
+  app.post('/api/dossiers/complete-with-face-verify', async (req: any, reply: any) => {
     if (!req.isMultipart()) {
       return reply.code(400).send({ error: 'Format multipart attendu' });
     }

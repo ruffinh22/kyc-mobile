@@ -12,7 +12,7 @@ import { faceVerifyRoutes }  from './face-verify';
 import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
 
-export async function registerRoutes(app: FastifyInstance): Promise<void> {
+export async function registerRoutes(app: any): Promise<void> {
   app.get('/api/health', async (_req: FastifyRequest, reply: FastifyReply) =>
     reply.send({ success: true, status: 'ok', version: '4.0.0', ts: new Date().toISOString() })
   );

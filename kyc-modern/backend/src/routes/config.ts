@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 
-export async function configRoutes(app: FastifyInstance): Promise<void> {
+export async function configRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
   // GET /api/config/distribution-mode

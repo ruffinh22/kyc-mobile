@@ -7,7 +7,7 @@ import { requireAuth } from '../middleware/auth';
 const LOCK_FAILS = parseInt(process.env.ACCOUNT_LOCK_AFTER_FAILS || '5', 10);
 const LOCK_DUR   = parseInt(process.env.ACCOUNT_LOCK_DURATION    || '900', 10);
 
-export async function authRoutes(app: FastifyInstance): Promise<void> {
+export async function authRoutes(app: any): Promise<void> {
 
   // POST /api/auth/login
   app.post('/api/auth/login', {

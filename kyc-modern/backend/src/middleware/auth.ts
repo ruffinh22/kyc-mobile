@@ -4,8 +4,9 @@ import * as db from '../db';
 import { Role } from '../types';
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const header = req.headers.authorization ?? '';
-  let token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const authorization = req.headers?.authorization;
+  const header = Array.isArray(authorization) ? authorization[0] ?? '' : authorization ?? '';
+  let token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) {
     token = (req.cookies as Record<string, string> | undefined)?.kyc_token ?? null;
   }
@@ -34,7 +35,7 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
     reply.code(401).send({ error: 'Compte introuvable ou désactivé' }); return;
   }
 
-  if (compte.must_change_password === 1 && req.url !== '/api/auth/change-password') {
+  if (compte.must_change_password === 1 && (req as any).url !== '/api/auth/change-password') {
     reply.code(403).send({ error: 'Changement de mot de passe obligatoire', must_change_password: true });
     return;
   }

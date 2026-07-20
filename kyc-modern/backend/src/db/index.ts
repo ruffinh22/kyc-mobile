@@ -7,6 +7,7 @@ import {
   Compte, Session, Dossier, GsmRecord, PlanningEntry, PlanningManager,
   NoteQualite, PresenceRow, ConfigRow, AuditLog, Role
 } from '../types';
+import { runMigrations } from './migrations';
 
 let pool: Pool;
 
@@ -30,34 +31,8 @@ export async function initDb(): Promise<void> {
   const conn = await pool.getConnection();
   await conn.ping();
   conn.release();
-  await ensureDossierColumns();
+  await runMigrations(pool);
   console.log('[DB] MySQL connecté :', process.env.DB_NAME);
-}
-
-async function ensureDossierColumns(): Promise<void> {
-  if (!pool) return;
-
-  const statements = [
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS adresse_complete VARCHAR(500) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS numero_cni VARCHAR(50) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS sexe VARCHAR(20) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS nationalite VARCHAR(100) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS profession VARCHAR(100) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS country VARCHAR(5) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS ocr_overrides VARCHAR(200) DEFAULT NULL",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS flow_step TINYINT(1) DEFAULT 4",
-    "ALTER TABLE dossiers ADD COLUMN IF NOT EXISTS acquisition_status VARCHAR(30) DEFAULT 'submitted'",
-  ];
-
-  for (const statement of statements) {
-    try {
-      await pool.execute(statement);
-    } catch (err: any) {
-      if (err?.code !== 'ER_DUP_FIELDNAME' && err?.code !== 'ER_PARSE_ERROR') {
-        console.warn('[DB] impossible d’ajouter la colonne dossier', statement, err);
-      }
-    }
-  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

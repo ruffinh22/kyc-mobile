@@ -11,7 +11,7 @@ const UPLOAD_CNI  = process.env.UPLOAD_CNI  || path.join(process.cwd(),'uploads'
 const MAX_FILE    = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(['image/jpeg','image/png','image/webp']);
 
-export async function gsmRoutes(app: FastifyInstance): Promise<void> {
+export async function gsmRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
   // GET /api/gsm/referentiels
@@ -83,7 +83,7 @@ export async function gsmRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT /api/gsm/:id – modifier saisie
-  app.put<{ Params: { id: string } }>('/api/gsm/:id', async (req, reply) => {
+  app.put('/api/gsm/:id', async (req, reply) => {
     const id = parseInt(req.params.id, 10);
     const gsm = await db.getGsmById(id);
     if (!gsm) return reply.code(404).send({ error: 'Saisie introuvable' });
@@ -96,7 +96,7 @@ export async function gsmRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE /api/gsm/:id
-  app.delete<{ Params: { id: string } }>('/api/gsm/:id', async (req, reply) => {
+  app.delete('/api/gsm/:id', async (req, reply) => {
     const id = parseInt(req.params.id, 10);
     const gsm = await db.getGsmById(id);
     if (!gsm) return reply.code(404).send({ error: 'Saisie introuvable' });
@@ -108,7 +108,7 @@ export async function gsmRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST /api/gsm/:id/captures
-  app.post<{ Params: { id: string } }>('/api/gsm/:id/captures', async (req, reply) => {
+  app.post('/api/gsm/:id/captures', async (req, reply) => {
     if (!req.isMultipart()) return reply.code(400).send({ error: 'Multipart attendu' });
     const id = parseInt(req.params.id, 10);
     const gsm = await db.getGsmById(id);
@@ -144,7 +144,7 @@ export async function gsmRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/gsm/captures/:fname – servir image GSM sécurisée
-  app.get<{ Params: { fname: string } }>('/api/gsm/captures/:fname', async (req, reply) => {
+  app.get('/api/gsm/captures/:fname', async (req, reply) => {
     const fname = path.basename(req.params.fname);
     const fpath = path.join(UPLOAD_GSM, fname);
     if (!fs.existsSync(fpath)) return reply.code(404).send({ error: 'Fichier introuvable' });

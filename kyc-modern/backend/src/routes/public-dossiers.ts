@@ -289,7 +289,7 @@ function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
 function nowSec()  { return Math.floor(Date.now() / 1000); }
 
-export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
+export async function publicDossierRoutes(app: any): Promise<void> {
 
   app.get('/api/turn-credentials', async (req: FastifyRequest, reply: any) => {
     const query = (req.query ?? {}) as { numero?: string };
@@ -471,7 +471,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
   //
   // Réponse : { success, id, photo_live, score_visage, visage_match, visage_motif }
   // ==========================================================================
-  app.post<{ Params: { id: string } }>(
+  app.post(
     '/api/public/dossiers/:id/live',
     { config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
     async (req: FastifyRequest, reply: any) => {
@@ -747,7 +747,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
   // WS /api/signaling — WebRTC signaling terrain ↔ back-office
   // ==========================================================================
-  app.get('/api/signaling', { websocket: true }, (socket: WsSocket, _req: FastifyRequest) => {
+  app.get('/api/signaling', { websocket: true }, (socket: WsSocket, _req: any) => {
     let room: string | null = null;
     let role: string | null = null;
     let numero: string | null = null;

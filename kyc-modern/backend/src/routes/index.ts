@@ -10,6 +10,7 @@ import { supFileRoutes }     from './sup-file';
 import { publicDossierRoutes } from './public-dossiers';
 import { faceVerifyRoutes }  from './face-verify';
 import { adminRoutes }       from './admin';
+import { ocrRoutes }         from './ocr';
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/health', async (_req, reply) =>
@@ -27,4 +28,5 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(publicDossierRoutes);
   await app.register(faceVerifyRoutes);
   await app.register(adminRoutes);
+  await app.register(ocrRoutes);
 }

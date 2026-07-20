@@ -36,6 +36,9 @@ const signalingPeers = new Map<string, Set<WsSocket>>();
 const terrainSockets = new Map<string, WsSocket>();
 const backofficeSockets = new Map<string, WsSocket>();
 const terrainTokens = new Map<string, string>();
+const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket; numeroMtn: string; timer: NodeJS.Timeout }>();
+
+const CALL_RING_TIMEOUT_MS = 45_000;
 
 const fcmServerKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || '';
 const turnSecret = process.env.TURN_SHARED_SECRET || '';
@@ -186,9 +189,34 @@ function normalizeNumero(value: string | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 
+function sendSocketPayload(socket: WsSocket | null | undefined, payload: unknown) {
+  if (!socket) return;
+  try {
+    socket.send(JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+}
+
+function clearPendingCall(numero: string) {
+  const pending = pendingCalls.get(numero);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCalls.delete(numero);
+  }
+}
+
 function generateTurnCredentials(identity: string) {
   if (!turnSecret) {
-    throw new Error('TURN_SHARED_SECRET manquant côté serveur (.env)');
+    return {
+      username: '',
+      password: '',
+      ttl: turnTtlSeconds,
+      uris: [
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+      ],
+    };
   }
 
   const timestamp = Math.floor(Date.now() / 1000) + turnTtlSeconds;
@@ -272,19 +300,22 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const creds = generateTurnCredentials(numero);
+      const iceServers = creds.uris.map((urls: string) => {
+        const server: Record<string, unknown> = { urls };
+        if (creds.username) server.username = creds.username;
+        if (creds.password) server.credential = creds.password;
+        return server;
+      });
+
       return reply.send({
         success: true,
         numero,
-        username: creds.username,
-        password: creds.password,
+        username: creds.username || undefined,
+        password: creds.password || undefined,
         ttl: creds.ttl,
         uris: creds.uris,
-        iceServers: creds.uris.map((urls: string) => ({
-          urls,
-          username: creds.username,
-          credential: creds.password,
-        })),
-        message: 'TURN prêt',
+        iceServers,
+        message: turnSecret ? 'TURN prêt' : 'TURN non configuré, repli STUN seulement',
       });
     } catch (err) {
       req.log.error(err, '[TURN] génération credentials échouée');
@@ -345,12 +376,22 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       }
     } catch { return reply.code(400).send({ error: 'Erreur lecture multipart' }); }
 
-    const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country } = fields;
+    const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country,
+            nom_titulaire, prenom_titulaire, date_naissance, lieu_naissance,
+            autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
+            sexe, nationalite, profession } = fields;
     const normalizedWaAgent = String(wa_agent ?? '').replace(/\D/g, '');
     if (!numero_mtn?.trim()) return reply.code(400).send({ error: 'Numéro MTN requis' });
     if (!country?.trim())    return reply.code(400).send({ error: 'Pays requis' });
     if (!photos.photo_recto || !photos.photo_verso)
       return reply.code(400).send({ error: 'Photos recto et verso obligatoires' });
+    // Infos titulaire — requises pour l'enregistrement SIM (réglementation KYC)
+    if (!nom_titulaire?.trim())    return reply.code(400).send({ error: 'Nom du titulaire requis' });
+    if (!prenom_titulaire?.trim()) return reply.code(400).send({ error: 'Prénom du titulaire requis' });
+    if (!date_naissance?.trim())   return reply.code(400).send({ error: 'Date de naissance requise' });
+    if (!lieu_naissance?.trim())   return reply.code(400).send({ error: 'Lieu de naissance requis' });
+    if (!nom_pere?.trim())         return reply.code(400).send({ error: 'Nom du père requis' });
+    if (!nom_mere?.trim())         return reply.code(400).send({ error: 'Nom de la mère requis' });
 
     const date    = nowDate();
     const destDir = path.join(UPLOAD_CNI, date);
@@ -380,6 +421,19 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       photo_recto:    photoPaths.photo_recto,
       photo_verso:    photoPaths.photo_verso,
       photo_live:     photoPaths.photo_live, // null si non fourni ici
+      // ── Infos titulaire pour l'enregistrement SIM ─────────────────────────
+      nom_titulaire:    nom_titulaire.trim(),
+      prenom_titulaire: prenom_titulaire.trim(),
+      date_naissance:   date_naissance.trim(),
+      lieu_naissance:   lieu_naissance.trim(),
+      autre_numero:     (autre_numero ?? '').trim().replace(/\D/g, '') || undefined,
+      nom_pere:         nom_pere.trim(),
+      nom_mere:         nom_mere.trim(),
+      adresse_complete: (adresse_complete ?? '').trim() || undefined,
+      numero_cni:       (numero_cni ?? '').trim() || undefined,
+      sexe:             (sexe ?? '').trim() || undefined,
+      nationalite:      (nationalite ?? '').trim() || undefined,
+      profession:       (profession ?? '').trim() || undefined,
     });
 
     db.audit(null, 'DOSSIER_PUBLIC_CREE', `id=${id} wa=${wa_agent ?? ''}`, req.ip);
@@ -543,6 +597,18 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
       raison_rejet: d.raison_rejet,
       score_visage: d.score_visage != null ? parseFloat(String(d.score_visage)) : null,
       visage_match: d.visage_match ?? null, visage_motif: d.visage_motif ?? null,
+      nom_titulaire: d.nom_titulaire ?? null,
+      prenom_titulaire: d.prenom_titulaire ?? null,
+      date_naissance: d.date_naissance ?? null,
+      lieu_naissance: d.lieu_naissance ?? null,
+      adresse_complete: d.adresse_complete ?? null,
+      numero_cni: d.numero_cni ?? null,
+      sexe: d.sexe ?? null,
+      nationalite: d.nationalite ?? null,
+      profession: d.profession ?? null,
+      autre_numero: d.autre_numero ?? null,
+      nom_pere: d.nom_pere ?? null,
+      nom_mere: d.nom_mere ?? null,
     }));
     const stats = { total: 0, en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
     for (const d of filtered) {
@@ -574,6 +640,18 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
         raison_rejet: d.raison_rejet,
         score_visage: d.score_visage != null ? parseFloat(String(d.score_visage)) : null,
         visage_match: d.visage_match ?? null, visage_motif: d.visage_motif ?? null,
+        nom_titulaire: d.nom_titulaire ?? null,
+        prenom_titulaire: d.prenom_titulaire ?? null,
+        date_naissance: d.date_naissance ?? null,
+        lieu_naissance: d.lieu_naissance ?? null,
+        adresse_complete: d.adresse_complete ?? null,
+        numero_cni: d.numero_cni ?? null,
+        sexe: d.sexe ?? null,
+        nationalite: d.nationalite ?? null,
+        profession: d.profession ?? null,
+        autre_numero: d.autre_numero ?? null,
+        nom_pere: d.nom_pere ?? null,
+        nom_mere: d.nom_mere ?? null,
       })),
     });
   });
@@ -648,7 +726,7 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/test/webrtc', async (_req: FastifyRequest, reply: any) => {
     reply.type('text/html');
-    return '<!doctype html><html lang="fr"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Test WebRTC KYC</title><style>body{font-family:Arial,sans-serif;margin:24px;background:#0f172a;color:#f8fafc}.panel{background:#111827;padding:16px;border-radius:12px;margin-bottom:12px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}button,input{padding:10px 12px;border-radius:8px;border:1px solid #334155}button{cursor:pointer;background:#2563eb;color:white;border:0}video{width:100%;max-width:480px;border-radius:12px;background:#020617;min-height:220px;margin-top:8px}.status{margin-top:8px;color:#93c5fd;white-space:pre-wrap}</style></head><body><div class="panel"><h2>Test WebRTC KYC</h2><p>Validation de bout en bout de la session vidéo entre l’app mobile et le backend.</p><label>Numéro terrain</label><input id="numero" value="0167376539" /><div class="row"><button id="connectBtn">Connecter</button><button id="callBtn">Lancer l’appel test</button></div><div id="status" class="status">Prêt</div></div><div class="panel"><h3>Local</h3><video id="localVideo" autoplay muted playsinline></video></div><div class="panel"><h3>Distant</h3><video id="remoteVideo" autoplay playsinline></video></div><script>const numeroInput=document.getElementById("numero");const statusEl=document.getElementById("status");const connectBtn=document.getElementById("connectBtn");const callBtn=document.getElementById("callBtn");const localVideo=document.getElementById("localVideo");const remoteVideo=document.getElementById("remoteVideo");let ws=null;let pc=null;let localStream=null;const logs=[];function log(message){const line=new Date().toLocaleTimeString()+" "+message;logs.push(line);console.log("[TEST]", message);statusEl.textContent=logs.slice(-8).join("\\n");}function wsUrl(){const loc=window.location;const protocol=loc.protocol==="https:"?"wss":"ws";return protocol+"://"+loc.host+"/api/signaling";}async function createLocalStream(){try{return await navigator.mediaDevices.getUserMedia({video:true,audio:true});}catch(err){log("Caméra indisponible, génération d’un flux vidéo synthétique");const canvas=document.createElement("canvas");canvas.width=640;canvas.height=480;const ctx=canvas.getContext("2d");let frame=0;const draw=()=>{if(!ctx)return;const gradient=ctx.createLinearGradient(0,0,canvas.width,canvas.height);gradient.addColorStop(0,"#020617");gradient.addColorStop(1,"#2563eb");ctx.fillStyle=gradient;ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle="#f8fafc";ctx.font="bold 36px Arial";ctx.fillText("Test WebRTC KYC",70,120);ctx.font="24px Arial";ctx.fillText("Flux synthétique",70,180);ctx.beginPath();ctx.arc(500,140,70,0,Math.PI*2);ctx.fillStyle="rgba(255,255,255,0.25)";ctx.fill();ctx.beginPath();ctx.arc(500+Math.sin(frame/15)*20,140+Math.cos(frame/12)*20,35,0,Math.PI*2);ctx.fillStyle="#fbbf24";ctx.fill();frame+=1;};const animate=()=>{draw();requestAnimationFrame(animate);};animate();return canvas.captureStream(15);} }async function initPeer(){if(pc)return pc;pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});pc.onicecandidate=(e)=>{if(e.candidate&&ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:"webrtc",payload:{kind:"ice",candidate:e.candidate.toJSON()},numero:numeroInput.value}));log("ICE candidat envoyé");}};pc.ontrack=(e)=>{const stream=e.streams&&e.streams[0];if(stream){remoteVideo.srcObject=stream;log("Flux distant visible");}};localStream=await createLocalStream();localVideo.srcObject=localStream;localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));log("Flux local prêt");return pc;}async function connect(){if(ws&&ws.readyState===WebSocket.OPEN)return;ws=new WebSocket(wsUrl());ws.onopen=()=>{log("WebSocket connecté");ws.send(JSON.stringify({type:"register",role:"backoffice",numero:numeroInput.value}));};ws.onmessage=async(event)=>{const msg=JSON.parse(event.data);log("Message reçu: "+msg.type);if(msg.type==="registered"){log("Back-office enregistré");return;}if(msg.type==="incoming-call"){log("Appel entrant reçu, génération de l’offre…");await initPeer();const offer=await pc.createOffer();await pc.setLocalDescription(offer);ws.send(JSON.stringify({type:"webrtc",payload:{kind:"offer",sdp:pc.localDescription.sdp},numero:numeroInput.value}));log("Offer envoyée");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="answer"){await pc.setRemoteDescription(new RTCSessionDescription({type:"answer",sdp:msg.payload.sdp}));log("Answer reçue");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="ice"&&pc&&pc.remoteDescription){await pc.addIceCandidate(new RTCIceCandidate(msg.payload.candidate));log("ICE ajouté");}};}connectBtn.onclick=()=>connect();callBtn.onclick=async()=>{await connect();const response=await fetch("/api/call/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({numero:numeroInput.value,numeroMtn:"0700000000"})});const data=await response.json();log("Réponse appel test: "+(data.message||JSON.stringify(data)));};</script></body></html>';
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Test WebRTC KYC</title><style>body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#0f172a;color:#f8fafc;min-height:100vh;box-sizing:border-box}.panel{background:#111827;padding:16px;border-radius:12px;margin-bottom:12px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}button,input{padding:10px 12px;border-radius:8px;border:1px solid #334155}button{cursor:pointer;background:#2563eb;color:white;border:0}.video-shell{width:100%;max-width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#020617;margin-top:8px;display:flex;align-items:center;justify-content:center;min-height:280px}.video-shell video{display:block;width:100%;height:100%;object-fit:contain;background:#020617}.status{margin-top:8px;color:#93c5fd;white-space:pre-wrap}</style></head><body><div class="panel"><h2>Test WebRTC KYC</h2><p>Validation de bout en bout de la session vidéo entre l’app mobile et le backend.</p><label>Numéro terrain</label><input id="numero" value="0167376539" /><div class="row"><button id="connectBtn">Connecter</button><button id="callBtn">Lancer l’appel test</button></div><div id="status" class="status">Prêt</div></div><div class="panel"><h3>Local</h3><div class="video-shell"><video id="localVideo" autoplay muted playsinline></video></div></div><div class="panel"><h3>Distant</h3><div class="video-shell"><video id="remoteVideo" autoplay playsinline></video></div></div><script>const numeroInput=document.getElementById("numero");const statusEl=document.getElementById("status");const connectBtn=document.getElementById("connectBtn");const callBtn=document.getElementById("callBtn");const localVideo=document.getElementById("localVideo");const remoteVideo=document.getElementById("remoteVideo");let ws=null;let pc=null;let localStream=null;const logs=[];function log(message){const line=new Date().toLocaleTimeString()+" "+message;logs.push(line);console.log("[TEST]", message);statusEl.textContent=logs.slice(-8).join("\\n");}function wsUrl(){const loc=window.location;const protocol=loc.protocol==="https:"?"wss":"ws";return protocol+"://"+loc.host+"/api/signaling";}async function createLocalStream(){try{return await navigator.mediaDevices.getUserMedia({video:true,audio:true});}catch(err){log("Caméra indisponible, génération d’un flux vidéo synthétique");const canvas=document.createElement("canvas");canvas.width=640;canvas.height=480;const ctx=canvas.getContext("2d");let frame=0;const draw=()=>{if(!ctx)return;const gradient=ctx.createLinearGradient(0,0,canvas.width,canvas.height);gradient.addColorStop(0,"#020617");gradient.addColorStop(1,"#2563eb");ctx.fillStyle=gradient;ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle="#f8fafc";ctx.font="bold 36px Arial";ctx.fillText("Test WebRTC KYC",70,120);ctx.font="24px Arial";ctx.fillText("Flux synthétique",70,180);ctx.beginPath();ctx.arc(500,140,70,0,Math.PI*2);ctx.fillStyle="rgba(255,255,255,0.25)";ctx.fill();ctx.beginPath();ctx.arc(500+Math.sin(frame/15)*20,140+Math.cos(frame/12)*20,35,0,Math.PI*2);ctx.fillStyle="#fbbf24";ctx.fill();frame+=1;};const animate=()=>{draw();requestAnimationFrame(animate);};animate();return canvas.captureStream(15);} }async function initPeer(){if(pc)return pc;pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});pc.onicecandidate=(e)=>{if(e.candidate&&ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:"webrtc",payload:{kind:"ice",candidate:e.candidate.toJSON()},numero:numeroInput.value}));log("ICE candidat envoyé");}};pc.ontrack=(e)=>{const stream=e.streams&&e.streams[0];if(stream){remoteVideo.srcObject=stream;log("Flux distant visible");}};localStream=await createLocalStream();localVideo.srcObject=localStream;localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));log("Flux local prêt");return pc;}async function connect(){if(ws&&ws.readyState===WebSocket.OPEN)return;ws=new WebSocket(wsUrl());ws.onopen=()=>{log("WebSocket connecté");ws.send(JSON.stringify({type:"register",role:"backoffice",numero:numeroInput.value}));};ws.onmessage=async(event)=>{const msg=JSON.parse(event.data);log("Message reçu: "+msg.type);if(msg.type==="registered"){log("Back-office enregistré");return;}if(msg.type==="incoming-call"){log("Appel entrant reçu, génération de l’offre…");await initPeer();const offer=await pc.createOffer();await pc.setLocalDescription(offer);ws.send(JSON.stringify({type:"webrtc",payload:{kind:"offer",sdp:pc.localDescription.sdp},numero:numeroInput.value}));log("Offer envoyée");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="answer"){await pc.setRemoteDescription(new RTCSessionDescription({type:"answer",sdp:msg.payload.sdp}));log("Answer reçue");return;}if(msg.type==="webrtc"&&msg.payload&&msg.payload.kind==="ice"&&pc&&pc.remoteDescription){await pc.addIceCandidate(new RTCIceCandidate(msg.payload.candidate));log("ICE ajouté");}};}connectBtn.onclick=()=>connect();callBtn.onclick=async()=>{await connect();const response=await fetch("/api/call/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({numero:numeroInput.value,numeroMtn:"0700000000"})});const data=await response.json();log("Réponse appel test: "+(data.message||JSON.stringify(data)));};</script></body></html>';
   });
 
   // WS /api/signaling — WebRTC signaling terrain ↔ back-office
@@ -697,9 +775,14 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
             terrainSockets.set(numero, socket);
             if (msg.fcmToken) terrainTokens.set(numero, String(msg.fcmToken));
             send({ type: 'registered', role: 'terrain', numero });
+            const boSocket = backofficeSockets.get(numero);
+            if (boSocket) {
+              sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: true, numero });
+            }
           } else if (role === 'backoffice') {
             backofficeSockets.set(numero, socket);
             send({ type: 'registered', role: 'backoffice', numero });
+            sendSocketPayload(socket, { type: 'terrain-presence', enLigne: terrainSockets.has(numero), numero });
           }
           return;
         }
@@ -707,18 +790,87 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
         if (msg.type === 'call' && role === 'backoffice' && numero) {
           const target = normalizeNumero(msg.numero);
           const targetSocket = terrainSockets.get(target);
-          if (targetSocket) {
-            try {
-              targetSocket.send(JSON.stringify({ type: 'incoming-call', numeroMtn: String(msg.numeroMtn ?? ''), numero: target }));
-            } catch { /* fermé */ }
+          const numeroMtn = String(msg.numeroMtn ?? '');
+          const callUuid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+          if (!targetSocket) {
+            send({ type: 'terrain-absent', numero: target });
+            return;
           }
-          send({ type: targetSocket ? 'call-delivered' : 'terrain-absent', numero: target });
+
+          clearPendingCall(target);
+          sendSocketPayload(targetSocket, { type: 'incoming-call', numeroMtn, numero: target });
+          send({ type: 'call-delivered', numero: target, callUuid });
+
+          const timer = setTimeout(() => {
+            pendingCalls.delete(target);
+            sendSocketPayload(socket, { type: 'no-answer', numero: target, callUuid });
+            sendSocketPayload(targetSocket, { type: 'hangup' });
+            console.log('[SIGNAL] no-answer timeout', { target, callUuid });
+          }, CALL_RING_TIMEOUT_MS);
+
+          pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer });
+          return;
+        }
+
+        // ── Appel SORTANT initié par le terrain ─────────────────────────────
+        // Le terrain demande à joindre le back-office rattaché à `numero`
+        // (par défaut son propre numero, ou un autre numero enregistré si
+        // fourni). Le back-office reste l'offerer SDP — une fois qu'il
+        // accepte, il doit créer l'offer et l'envoyer via 'webrtc' comme pour
+        // un appel entrant classique (voir /api/call/test pour le même flux).
+        if (msg.type === 'call-request' && role === 'terrain' && numero) {
+          const target = normalizeNumero(msg.numero) || numero;
+          const boSocket = backofficeSockets.get(target);
+          if (!boSocket) {
+            send({ type: 'call-unavailable', reason: 'Aucun back-office connecté pour ce numéro' });
+            return;
+          }
+          try {
+            boSocket.send(JSON.stringify({ type: 'outgoing-call-request', from: numero, numero: target }));
+            send({ type: 'call-ringing' });
+          } catch {
+            send({ type: 'call-unavailable', reason: 'Back-office injoignable' });
+          }
+          return;
+        }
+
+        if (msg.type === 'call-cancel' && role === 'terrain' && numero) {
+          const boSocket = backofficeSockets.get(numero);
+          if (boSocket) {
+            try { boSocket.send(JSON.stringify({ type: 'outgoing-call-cancelled', numero })); } catch { /* fermé */ }
+          }
+          clearPendingCall(numero);
+          return;
+        }
+
+        // Réponse du back-office à un appel sortant terrain (voir ci-dessus).
+        // `msg.numero` = numero du terrain qui a initié l'appel (celui reçu
+        // dans 'outgoing-call-request' / champ `from`).
+        if (msg.type === 'call-accept' && role === 'backoffice') {
+          const target = normalizeNumero(msg.numero);
+          const terrainSocket = terrainSockets.get(target);
+          if (terrainSocket) {
+            try { terrainSocket.send(JSON.stringify({ type: 'call-accepted' })); } catch { /* fermé */ }
+          }
+          clearPendingCall(target);
+          return;
+        }
+
+        if (msg.type === 'call-reject' && role === 'backoffice') {
+          const target = normalizeNumero(msg.numero);
+          const terrainSocket = terrainSockets.get(target);
+          if (terrainSocket) {
+            try { terrainSocket.send(JSON.stringify({ type: 'call-rejected' })); } catch { /* fermé */ }
+          }
+          clearPendingCall(target);
           return;
         }
 
         if (msg.type === 'webrtc' && role && numero) {
           const payload = msg.payload as { kind?: string } | undefined;
           console.log('[SIGNAL] relay webrtc', { role, numero, kind: payload?.kind, hasPayload: Boolean(msg.payload) });
+          clearPendingCall(numero);
           if (role === 'terrain') {
             const boSocket = backofficeSockets.get(numero);
             if (boSocket) {
@@ -758,11 +910,27 @@ export async function publicDossierRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       if (role === 'terrain' && numero) {
-        terrainSockets.delete(numero);
+        const previous = terrainSockets.get(numero);
+        if (previous === socket) {
+          terrainSockets.delete(numero);
+        }
+        const boSocket = backofficeSockets.get(numero);
+        if (boSocket) {
+          sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: false, numero });
+        }
       }
       if (role === 'backoffice' && numero) {
-        backofficeSockets.delete(numero);
+        if (backofficeSockets.get(numero) === socket) {
+          backofficeSockets.delete(numero);
+        }
       }
     });
   });
+
+  app.get('/api/signaling/stats', async () => ({
+    terrainConnectes: terrainSockets.size,
+    backofficeConnectes: backofficeSockets.size,
+    tokensConnus: terrainTokens.size,
+    appelsEnAttente: pendingCalls.size,
+  }));
 }

@@ -25,7 +25,16 @@ function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
   if (role === 'superviseur' || role === 'admin') return d;
   const canSee = role === 'agent' && (d.agent_saisie === matricule || d.statut === 'en_attente');
   if (canSee) return d;
-  return { ...d, numero_mtn: '***', wa_agent: '***', photo_recto: null, photo_verso: null, photo_live: null, masque: true };
+  return {
+    ...d,
+    numero_mtn: '***', wa_agent: '***',
+    photo_recto: null, photo_verso: null, photo_live: null,
+    // Infos titulaire/SIM — mêmes règles de confidentialité que numero_mtn/photos
+    nom_titulaire: '***', prenom_titulaire: '***',
+    date_naissance: '***', lieu_naissance: '***',
+    autre_numero: '***', nom_pere: '***', nom_mere: '***',
+    masque: true,
+  };
 }
 
 export async function dossiersRoutes(app: FastifyInstance): Promise<void> {

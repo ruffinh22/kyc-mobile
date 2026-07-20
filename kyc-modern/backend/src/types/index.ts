@@ -65,6 +65,14 @@ export interface Dossier {
   gsm_complete: number;
   transfert_message: string | null;
   transfert_par: string | null;
+  // ── Infos titulaire pour l'enregistrement SIM (agent terrain + OCR CNI) ───
+  nom_titulaire: string | null;
+  prenom_titulaire: string | null;
+  date_naissance: string | null;
+  lieu_naissance: string | null;
+  autre_numero: string | null;
+  nom_pere: string | null;
+  nom_mere: string | null;
   created_at: number;
   updated_at: number;
   closed_at: number | null;

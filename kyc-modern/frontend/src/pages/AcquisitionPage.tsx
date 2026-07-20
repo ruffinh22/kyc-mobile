@@ -10,6 +10,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createWorker, OEM, PSM } from 'tesseract.js';
 import { getPublicDossiers } from '../services/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ interface AgentInfo {
 }
 
 interface QualityResult { ok: boolean; cls: 'ok' | 'warn' | 'bad'; label: string }
+type OcrStatus = 'idle' | 'running' | 'done' | 'error';
 
 // ── Analyse qualité photo ──────────────────────────────────────────────────────
 
@@ -79,6 +81,159 @@ const PAYS_CONFIG: Record<string, { digitCount: number; prefix: string; placehol
   GN: { digitCount: 8,  prefix: '6',  placeholder: '61 XX XX XX',     hint: '8 chiffres, commence par 6'  },
 };
 
+// ── OCR recto ───────────────────────────────────────────────────────────────
+
+function scoreCandidateText(text: string) {
+  let score = 0;
+  const lines = text.split('\n').filter(Boolean);
+  for (const line of lines) {
+    const letters = (line.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
+    const digits = (line.match(/\d/g) ?? []).length;
+    const spaceCount = (line.match(/\s/g) ?? []).length;
+    if (/date|expiration|valide|naissance|sexe|nation|civ|cni|carte|ident/i.test(line)) score -= 24;
+    if (letters >= 4) score += letters * 2;
+    if (digits > 0) score += digits * 3;
+    if (spaceCount <= 2 && letters >= 4) score += 8;
+  }
+  return score;
+}
+
+function normalizeOcrText(raw: string) {
+  const lines = raw
+    .replace(/[|{}\[\]<>]/g, '')
+    .replace(/[^A-Za-zÀ-ÿ0-9/().,'-\s]/g, ' ')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => line.length >= 3)
+    .filter(line => {
+      const letters = (line.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
+      const digits = (line.match(/\d/g) ?? []).length;
+      const weird = (line.match(/[^A-Za-zÀ-ÿ0-9/().,'-\s]/g) ?? []).length;
+      return letters >= 2 && (digits > 0 || letters >= 4) && weird <= 1;
+    });
+
+  const keep = lines.filter(line => {
+    const clean = line.replace(/\s+/g, ' ').trim();
+    if (!clean) return false;
+    if (/date|expiration|valide|naissance|sexe|nation|civ|cni|carte|ident/i.test(clean)) return false;
+    if (/^[0-9\s./-]+$/.test(clean)) return false;
+    const alpha = (clean.match(/[A-Za-zÀ-ÿ]/g) ?? []).length;
+    const spaceCount = (clean.match(/\s/g) ?? []).length;
+    return alpha >= 4 && (spaceCount <= 2 || clean.length <= 22);
+  });
+
+  const ranked = keep
+    .map(line => ({ line, score: (line.match(/[A-ZÀ-Ö]/g) ?? []).length * 3 + line.length }))
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.line);
+
+  return ranked.slice(0, 4).join('\n');
+}
+
+function preprocessForOcr(imageDataUrl: string): Promise<{ imageDataUrl: string; rectangle: { left: number; top: number; width: number; height: number } }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('canvas unavailable')); return; }
+
+      const srcW = img.naturalWidth;
+      const srcH = img.naturalHeight;
+      const scale = Math.min(2.4, Math.max(1.6, 2000 / Math.max(srcW, srcH)));
+      const w = Math.round(srcW * scale);
+      const h = Math.round(srcH * scale);
+      canvas.width = w;
+      canvas.height = h;
+
+      const cropW = Math.round(w * 0.84);
+      const cropH = Math.round(h * 0.84);
+      const sx = Math.round((w - cropW) / 2);
+      const sy = Math.round((h - cropH) / 2);
+
+      ctx.filter = 'grayscale(1) contrast(1.25) brightness(1.04)';
+      ctx.drawImage(img, 0, 0, srcW, srcH, sx, sy, cropW, cropH);
+
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const { data } = imageData;
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        data[i] = avg;
+        data[i + 1] = avg;
+        data[i + 2] = avg;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      resolve({
+        imageDataUrl: canvas.toDataURL('image/png'),
+        rectangle: {
+          left: Math.round(w * 0.08),
+          top: Math.round(h * 0.08),
+          width: Math.round(w * 0.84),
+          height: Math.round(h * 0.84),
+        },
+      });
+    };
+    img.onerror = () => reject(new Error('image loading failed'));
+    img.src = imageDataUrl;
+  });
+}
+
+async function extractRectoText(imageDataUrl: string, onProgress: (progress: number, status: OcrStatus) => void) {
+  const worker = await createWorker('eng+fra', OEM.LSTM_ONLY, {
+    logger: (m) => {
+      if (m.status === 'loading language data') onProgress(8, 'running');
+      else if (m.status === 'initializing tesseract') onProgress(15, 'running');
+      else if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+        onProgress(Math.max(20, Math.min(95, Math.round(m.progress * 100))), 'running');
+      }
+    },
+  });
+  try {
+    await worker.load();
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.AUTO,
+      preserve_interword_spaces: '1',
+      tessedit_ocr_engine_mode: '1',
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÆŒ0123456789/.-,()\' ',
+    });
+    const preparedImage = await preprocessForOcr(imageDataUrl);
+    const attempts = [
+      { pageseg: PSM.AUTO, label: 'auto' },
+      { pageseg: PSM.SINGLE_BLOCK, label: 'single-block' },
+      { pageseg: PSM.SINGLE_LINE, label: 'single-line' },
+    ] as const;
+
+    let bestText = '';
+    let bestScore = -1;
+    for (const attempt of attempts) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: attempt.pageseg,
+        preserve_interword_spaces: '1',
+        tessedit_ocr_engine_mode: '1',
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÆŒ0123456789/.-,()\' ',
+      });
+      const { data } = await worker.recognize(preparedImage.imageDataUrl, {
+        rectangle: preparedImage.rectangle,
+        rotateAuto: true,
+      });
+      const text = normalizeOcrText(data?.text ?? '');
+      const score = scoreCandidateText(text);
+      if (text && score > bestScore) {
+        bestText = text;
+        bestScore = score;
+      }
+    }
+
+    return { text: bestText, status: bestText ? 'done' as OcrStatus : 'error' as OcrStatus, progress: 100 };
+  } catch (err) {
+    console.error('OCR recto impossible', err);
+    return { text: '', status: 'error' as OcrStatus, progress: 0 };
+  } finally {
+    await worker.terminate();
+  }
+}
+
 // ── Composant principal ────────────────────────────────────────────────────────
 
 export function AcquisitionPage() {
@@ -112,6 +267,7 @@ export function AcquisitionPage() {
   const [preview, setPreview] = useState<{
     open: boolean; type: 'recto' | 'verso'; url: string;
     blob: Blob | null; quality: QualityResult;
+    ocrText: string; ocrStatus: OcrStatus; ocrProgress: number;
   } | null>(null);
 
   // Dashboard
@@ -282,7 +438,31 @@ export function AcquisitionPage() {
     const quality = analyzeQuality(fc);
     const t = camType;
     fermerCamera();
-    setPreview({ open: true, type: t, url: dataUrl, blob, quality });
+    const previewState = {
+      open: true,
+      type: t,
+      url: dataUrl,
+      blob,
+      quality,
+      ocrText: '',
+      ocrStatus: t === 'recto' ? 'running' as OcrStatus : 'idle' as OcrStatus,
+      ocrProgress: 0,
+    };
+    setPreview(previewState);
+
+    if (t === 'recto') {
+      void (async () => {
+        const result = await extractRectoText(dataUrl, (progress, status) => {
+          setPreview(prev => prev && prev.type === 'recto' ? { ...prev, ocrStatus: status, ocrProgress: progress } : prev);
+        });
+        setPreview(prev => prev && prev.type === 'recto' ? {
+          ...prev,
+          ocrText: result.text,
+          ocrStatus: result.status,
+          ocrProgress: result.progress,
+        } : prev);
+      })();
+    }
   };
 
   const validerPhoto = () => {
@@ -771,6 +951,28 @@ export function AcquisitionPage() {
             {preview.quality.ok ? '✓ Photo nette et lisible — vous pouvez valider' : preview.quality.cls === 'warn' ? '⚠ Qualité moyenne — vérifiez que le texte est lisible' : '✗ Photo insuffisante — veuillez reprendre'}
           </div>
           <img src={preview.url} alt="Aperçu" style={{ width: '100%', maxWidth: 400, borderRadius: 14, border: '1px solid rgba(255,255,255,.15)', boxShadow: '0 8px 32px rgba(0,48,135,.14)' }} />
+          {preview.type === 'recto' && (
+            <div style={{ width: '100%', maxWidth: 400, background: 'rgba(255,255,255,.08)', border: '1px solid rgba(255,255,255,.15)', borderRadius: 14, padding: 12, color: '#fff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                <strong style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>OCR recto</strong>
+                <span style={{ fontSize: 11, color: preview.ocrStatus === 'done' ? '#86EFAC' : preview.ocrStatus === 'error' ? '#FCA5A5' : '#FFCC00' }}>
+                  {preview.ocrStatus === 'running' ? 'Analyse…' : preview.ocrStatus === 'done' ? '✓ Texte reconnu' : preview.ocrStatus === 'error' ? '⚠ Échec' : 'Prêt'}
+                </span>
+              </div>
+              {preview.ocrStatus === 'running' && (
+                <div style={{ height: 7, background: 'rgba(255,255,255,.2)', borderRadius: 999, overflow: 'hidden', marginBottom: 8 }}>
+                  <div style={{ height: '100%', width: `${Math.max(8, preview.ocrProgress)}%`, background: '#FFCC00', transition: 'width .2s' }} />
+                </div>
+              )}
+              {preview.ocrText ? (
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 11, lineHeight: 1.5, color: '#E2E8F0', fontFamily: 'monospace' }}>{preview.ocrText}</pre>
+              ) : preview.ocrStatus === 'error' ? (
+                <div style={{ fontSize: 11, color: '#FCA5A5' }}>Impossible d’extraire le texte depuis cette photo. Veuillez reprendre.</div>
+              ) : (
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,.7)' }}>Le texte du recto est analysé automatiquement après la prise de vue.</div>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 400 }}>
             <button onClick={rejeterPhoto} style={{ flex: 1, background: '#fff', border: '1.5px solid rgba(0,48,135,.18)', color: '#475569', fontSize: 14, fontWeight: 600, borderRadius: 10, padding: 14, cursor: 'pointer' }}>↺ Reprendre</button>
             <button onClick={validerPhoto} style={{ flex: 1, background: '#16A34A', color: '#fff', fontSize: 14, fontWeight: 700, border: 'none', borderRadius: 10, padding: 14, cursor: 'pointer', boxShadow: '0 4px 14px rgba(22,163,74,.35)' }}>✓ Valider</button>

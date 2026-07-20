@@ -58,7 +58,7 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
   }, [preview]);
   const canSeePhoto = user?.role !== 'agent'
     || dossier.statut === 'en_attente'
-    || (dossier.agent_saisie === user?.matricule && dossier.statut !== 'en_attente');
+    || (dossier.agent_saisie === user?.matricule && ['en_cours', 'accepte', 'rejete'].includes(dossier.statut));
 
   return (
     <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions}>

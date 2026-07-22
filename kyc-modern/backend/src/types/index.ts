@@ -57,6 +57,9 @@ export interface Dossier {
   visage_match: number | null;
   visage_motif: string | null;
   visage_verifie_le: number | null;
+  liveness_status: string | null;
+  liveness_confidence: number | null;
+  liveness_verifie_le: number | null;
   agent_saisie: string | null;
   heure_prise: string | null;
   heure_cloture: string | null;

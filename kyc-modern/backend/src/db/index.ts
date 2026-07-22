@@ -308,31 +308,8 @@ export async function createDossier(data: {
   const placeholders = columns.map(() => '?').join(', ');
 
   await exec(
-<<<<<<< HEAD
-    `INSERT INTO dossiers (id, numero_mtn, wa_agent, username_agent, fonction_agent, zone_agent,
-      date, heure_reception, photo_recto, photo_verso, photo_live, score_visage, visage_match,
-      visage_motif, visage_verifie_le, nom_titulaire, prenom_titulaire, date_naissance,
-      lieu_naissance, autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
-      sexe, nationalite, profession, country, ocr_overrides, flow_step, acquisition_status,
-      created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [
-      data.id, data.numero_mtn, data.wa_agent ?? null, data.username_agent ?? null,
-      data.fonction_agent ?? null, data.zone_agent ?? null,
-      data.date, data.heure_reception,
-      data.photo_recto ?? null, data.photo_verso ?? null, data.photo_live ?? null,
-      data.score_visage ?? null, data.visage_match ?? null, data.visage_motif ?? null,
-      data.visage_verifie_le ?? null, data.nom_titulaire ?? null, data.prenom_titulaire ?? null,
-      data.date_naissance ?? null, data.lieu_naissance ?? null, data.autre_numero ?? null,
-      data.nom_pere ?? null, data.nom_mere ?? null, data.adresse_complete ?? null,
-      data.numero_cni ?? null, data.sexe ?? null, data.nationalite ?? null,
-      data.profession ?? null, data.country ?? null, data.ocr_overrides ?? null,
-      data.flow_step ?? null, data.acquisition_status ?? null, now, now,
-    ]
-=======
     `INSERT INTO dossiers (${columns.join(', ')}) VALUES (${placeholders})`,
     values
->>>>>>> 9281074 (Mise à jour de Modern)
   );
 }
 

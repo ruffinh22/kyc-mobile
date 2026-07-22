@@ -64,6 +64,7 @@ export async function getDossier(id: string) { return apiFetch<{ dossier: Dossie
 export async function prendreEnCharge(id: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/prendre`, { method: 'POST' }); }
 export async function accepterDossier(id: string, resultat_crm?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/accepter`, { method: 'POST', json: { resultat_crm } }); }
 export async function rejeterDossier(id: string, raison: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/rejeter`, { method: 'POST', json: { raison } }); }
+export async function reprendreFaceVerify(id: string) { return apiFetch<{ success: boolean; message: string }>(`/api/dossiers/${id}/reprendre-face-verify`, { method: 'POST' }); }
 export async function transfererDossier(id: string, cible: string, message?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/transferer`, { method: 'POST', json: { cible, message } }); }
 export async function verifierVisage(id: string) { return apiFetch<{ score: number; match: boolean; motif: string }>(`/api/dossiers/${id}/verifier-visage`, { method: 'POST' }); }
 export function photoUrl(id: string, type: 'recto' | 'verso' | 'live') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }

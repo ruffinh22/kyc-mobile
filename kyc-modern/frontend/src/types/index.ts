@@ -9,6 +9,7 @@ export interface Dossier {
   date: string; heure_reception: string | null; statut: DossierStatut;
   photo_recto: string | null; photo_verso: string | null; photo_live: string | null;
   score_visage: number | null; visage_match: number | null; visage_motif: string | null;
+  acquisition_status: string | null;
   agent_saisie: string | null; heure_prise: string | null; heure_cloture: string | null;
   raison_rejet: string | null; resultat_crm: string | null;
   note: string | null; note_superviseur: string | null;

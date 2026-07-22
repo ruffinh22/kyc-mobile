@@ -331,6 +331,9 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
+                        {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
+                        )}
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                           localStorage.setItem('gsm_dossier_id', d.id);
@@ -380,6 +383,9 @@ export function AgentFileAttente() {
             </button>
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
+              {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
+                <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
+              )}
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
               <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
                 localStorage.setItem('gsm_dossier_id', selected.id);

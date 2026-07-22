@@ -68,6 +68,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const [selectedCountryCode, setSelectedCountryCode] = useState<CountryCode>('CG');
   const [countryName, setCountryName] = useState('Congo (Brazzaville)');
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const cameraOverlayAnim = useRef(new Animated.Value(1)).current;
 
   // ── Infos titulaire (pré-remplies par OCR sur le recto + saisie agent) ────
   // nomTitulaire / prenomTitulaire / dateNaissance / lieuNaissance : lus par
@@ -374,7 +375,8 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     }
 
     return (
-      <View style={cs.root}>
+      <SafeAreaView style={cs.root}>
+        <StatusBar barStyle="light-content" backgroundColor="#05070C" />
         {camPerm !== false ? (
           <View style={cs.camera}>
             <Camera
@@ -395,29 +397,6 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               <View style={{ width: 44 }} />
             </SafeAreaView>
 
-            <View style={cs.cameraSelectorRow}>
-              <TouchableOpacity
-                style={[cs.cameraOption, selectedCamera === 'back' && cs.cameraOptionActive]}
-                onPress={() => {
-                  setCameraReady(false);
-                  setSelectedCamera('back');
-                  setPreferredCamera('back');
-                }}
-              >
-                <Text style={[cs.cameraOptionTxt, selectedCamera === 'back' && cs.cameraOptionTxtActive]}>Arrière</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[cs.cameraOption, selectedCamera === 'front' && cs.cameraOptionActive]}
-                onPress={() => {
-                  setCameraReady(false);
-                  setSelectedCamera('front');
-                  setPreferredCamera('front');
-                }}
-              >
-                <Text style={[cs.cameraOptionTxt, selectedCamera === 'front' && cs.cameraOptionTxtActive]}>Avant</Text>
-              </TouchableOpacity>
-            </View>
-
             <View style={cs.frameOuter} pointerEvents="none">
               <View style={cs.frame}>
                 {(['TL','TR','BL','BR'] as const).map(pos => (
@@ -428,6 +407,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             </View>
 
             <View style={cs.camFooter}>
+              <View style={cs.footerSpacer} />
               <TouchableOpacity
                 style={cs.captureBtn}
                 onPress={() => capturePhoto(cameraMode!)}
@@ -438,6 +418,19 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
                 <View style={[cs.captureRing, !cameraReady && { opacity: 0.4 }]}>
                   <View style={cs.captureCore} />
                 </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={cs.switchCameraBtn}
+                onPress={() => {
+                  const nextCamera = selectedCamera === 'front' ? 'back' : 'front';
+                  setCameraReady(false);
+                  setSelectedCamera(nextCamera);
+                  setPreferredCamera(nextCamera);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={selectedCamera === 'front' ? 'Basculer vers la caméra arrière' : 'Basculer vers la caméra avant'}
+              >
+                <Text style={cs.switchCameraTxt}>{selectedCamera === 'front' ? '📸' : '📷'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -453,7 +446,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             </TouchableOpacity>
           </View>
         )}
-      </View>
+      </SafeAreaView>
     );
   }
 
@@ -1152,13 +1145,20 @@ const s = StyleSheet.create({
 
 // ── Styles caméra (plein écran, reste sombre pour le viseur) ───────────────
 const cs = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: '#000' },
-  camera: { flex: 1 },
+  root: {
+    flex: 1,
+    backgroundColor: '#05070C',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 12) : 0,
+    paddingBottom: Platform.OS === 'android' ? 10 : 0,
+  },
+  camera: { flex: 1, backgroundColor: '#000' },
 
   camHeader: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    zIndex: 2,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: 'rgba(15,23,32,0.60)',
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
+    backgroundColor: 'rgba(15,23,32,0.72)',
   },
   closeBtn: {
     width: 44, height: 44, borderRadius: 22,
@@ -1169,20 +1169,33 @@ const cs = StyleSheet.create({
   camTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   camDot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: C.yellow },
   camTitle:     { fontSize: T.md, fontWeight: '800', color: '#fff', letterSpacing: -0.2 },
-  cameraSelectorRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, paddingTop: 10, paddingBottom: 4 },
-  cameraOption: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-  cameraOptionActive: { backgroundColor: C.blue, borderColor: C.blue },
-  cameraOptionTxt: { color: C.ink, fontWeight: '700' },
-  cameraOptionTxtActive: { color: '#fff' },
 
-  frameOuter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  frameOuter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 96,
+    paddingBottom: 112,
+    paddingHorizontal: 24,
+  },
+  cameraSelectOverlay: {
+    display: 'none',
+  },
+  footerSpacer: { width: 56 },
+  switchCameraBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.20)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchCameraTxt: {
+    fontSize: 22,
+    color: '#fff',
+  },
   frame: {
     width: '80%', aspectRatio: 1.6,
     alignItems: 'center', justifyContent: 'center',
@@ -1198,8 +1211,14 @@ const cs = StyleSheet.create({
   frameLabel: { fontSize: T.xs, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
 
   camFooter: {
-    paddingVertical: 24, alignItems: 'center',
-    backgroundColor: 'rgba(15,23,32,0.60)',
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 20,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(15,23,32,0.72)',
   },
   captureBtn:  {},
   captureRing: {

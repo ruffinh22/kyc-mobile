@@ -63,6 +63,7 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
     numeroMtn,
   } = route.params;
   const agentServerUrl = useAgentStore((s) => s.serverUrl);
+  const preferredCamera = useAgentStore((s) => s.preferredCamera);
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'done' | 'error'>('loading');
   const [message, setMessage] = useState<string>('Préparation de la vérification…');
@@ -102,8 +103,14 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
 
   const livenessUrl = useMemo(() => {
     if (!baseServerUrl || !dossierId) return null;
-    return `${baseServerUrl}/liveness-check?dossierId=${encodeURIComponent(dossierId)}`;
-  }, [baseServerUrl, dossierId]);
+
+    const query: string[] = [`dossierId=${encodeURIComponent(dossierId)}`];
+    if (preferredCamera === 'front' || preferredCamera === 'back') {
+      query.push(`preferredCamera=${encodeURIComponent(preferredCamera)}`);
+    }
+
+    return `${baseServerUrl}/liveness-check?${query.join('&')}`;
+  }, [baseServerUrl, dossierId, preferredCamera]);
 
   const handleWebMessage = useCallback((event: any) => {
     try {

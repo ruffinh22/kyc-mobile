@@ -34,10 +34,30 @@ if (isLivenessConfigValid) {
 
 type Phase = 'loading' | 'ready' | 'analyzing' | 'done' | 'error';
 
+type PreferredCamera = 'front' | 'back' | null;
+
 function getDossierId(): string | null {
   const params = new URLSearchParams(window.location.search);
   const dossierId = params.get('dossierId');
   return dossierId ? dossierId.trim() : null;
+}
+
+function getPreferredCameraFromQuery(): PreferredCamera {
+  const params = new URLSearchParams(window.location.search);
+  const camera = params.get('preferredCamera');
+  if (camera === 'front' || camera === 'back') return camera;
+  return null;
+}
+
+function findPreferredDeviceId(preferredCamera: PreferredCamera, devices: MediaDeviceInfo[]): string | null {
+  if (!preferredCamera) return null;
+  const matcher = preferredCamera === 'front'
+    ? /front|user|selfie|avant|face/i
+    : /back|rear|environment|arrière|arriere/i;
+  return devices
+    .filter((device) => device.kind === 'videoinput')
+    .find((device) => matcher.test(device.label || ''))
+    ?.deviceId ?? null;
 }
 
 function notifyNative(payload: unknown) {
@@ -51,7 +71,9 @@ export function FaceLivenessCheck() {
   const [region, setRegion] = useState<string>(REGION);
   const [errorMsg, setErrorMsg] = useState('');
   const [resultMsg, setResultMsg] = useState('');
+  const [preferredDeviceId, setPreferredDeviceId] = useState<string | null>(null);
   const dossierId = getDossierId();
+  const preferredCamera = getPreferredCameraFromQuery();
 
   useEffect(() => {
     if (!dossierId) {
@@ -59,6 +81,19 @@ export function FaceLivenessCheck() {
       setPhase('error');
       return;
     }
+
+    const resolvePreferredCamera = async () => {
+      if (!preferredCamera || !navigator?.mediaDevices?.enumerateDevices) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const deviceId = findPreferredDeviceId(preferredCamera, devices);
+        if (deviceId) setPreferredDeviceId(deviceId);
+      } catch {
+        // Ignore enumeration failure and continue with default camera selection.
+      }
+    };
+
+    resolvePreferredCamera();
 
     const init = async () => {
       try {
@@ -86,7 +121,7 @@ export function FaceLivenessCheck() {
     };
 
     init();
-  }, [dossierId]);
+  }, [dossierId, preferredCamera]);
 
   const handleAnalysisComplete = useCallback(async () => {
     if (!dossierId || !sessionId) return;
@@ -147,6 +182,7 @@ export function FaceLivenessCheck() {
           region={region}
           onAnalysisComplete={handleAnalysisComplete}
           onError={handleError}
+          config={preferredDeviceId ? { deviceId: preferredDeviceId } : undefined}
         />
       </div>
     </ThemeProvider>

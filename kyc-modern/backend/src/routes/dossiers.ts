@@ -140,6 +140,29 @@ export async function dossiersRoutes(app: any): Promise<void> {
     return reply.send({ success: true });
   });
 
+  // POST /api/dossiers/:id/reprendre-face-verify
+  app.post('/api/dossiers/:id/reprendre-face-verify', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
+    const d = await db.getDossierById(params.id);
+    if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
+    if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
+
+    await db.updateDossier(params.id, {
+      statut: 'en_cours',
+      acquisition_status: 'face_verify_retry',
+      flow_step: 4,
+      score_visage: null,
+      visage_match: null,
+      visage_motif: null,
+      visage_verifie_le: null,
+      raison_rejet: null,
+    });
+
+    db.audit(req.user.matricule, 'DOSSIER_FACE_VERIFY_REPRISE', `id=${params.id}`, req.ip);
+    return reply.send({ success: true, message: 'La vérification faciale peut être relancée.' });
+  });
+
   // POST /api/dossiers/:id/transferer (sup/admin)
   app.post('/api/dossiers/:id/transferer',
     { preHandler: requireRole(['superviseur','admin']) },

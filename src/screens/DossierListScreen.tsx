@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
   ActivityIndicator, StatusBar, SafeAreaView, RefreshControl, Modal,
-  TextInput, Animated, Easing,
+  TextInput, Animated, Easing, ScrollView,
 } from 'react-native';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
@@ -10,7 +10,7 @@ import { AppHeader } from '../components/AppHeader';
 
 type SortKey = 'statut' | 'date' | 'score' | 'numero';
 
-type FilterStatus = 'all' | 'accepted' | 'rejected' | 'pending';
+type FilterStatus = 'all' | 'accepted' | 'rejected' | 'pending' | 'draft';
 
 interface DossierItem {
   id: string;
@@ -46,6 +46,11 @@ function normalizeStatus(value: string) {
   return 'pending';
 }
 
+function isDraftStatus(value: string) {
+  const normalized = String(value || '').toLowerCase();
+  return ['brouillon', 'draft', 'incomplete', 'incomplet'].includes(normalized);
+}
+
 function getStatusMeta(status: string) {
   const normalized = String(status || '').toLowerCase();
 
@@ -66,6 +71,16 @@ function getStatusMeta(status: string) {
       textColor: '#dc2626',
       chip: { backgroundColor: 'rgba(239,68,68,0.14)', borderColor: 'rgba(239,68,68,0.28)' },
       accentColor: '#ef4444',
+    };
+  }
+
+  if (['brouillon', 'draft', 'incomplete', 'incomplet'].includes(normalized)) {
+    return {
+      label: 'Brouillon',
+      icon: '📝',
+      textColor: '#1d4ed8',
+      chip: { backgroundColor: 'rgba(59,130,246,0.14)', borderColor: 'rgba(59,130,246,0.28)' },
+      accentColor: '#3b82f6',
     };
   }
 
@@ -90,6 +105,7 @@ export function DossierListScreen({ navigation }: any) {
   const [fieldFilterKey, setFieldFilterKey] = useState<SortKey>('statut');
   const [fieldFilterValue, setFieldFilterValue] = useState('');
   const [statusFilter, setStatusFilter] = useState<FilterStatus>('all');
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const agentWa = useMemo(() => numeroAgent.replace(/\D/g, ''), [numeroAgent]);
   const baseUrl = useMemo(() => {
@@ -101,6 +117,26 @@ export function DossierListScreen({ navigation }: any) {
     setSelectedDossier(item);
     setModalVisible(true);
     modalAnimation.setValue(0);
+  };
+
+  const retryFaceVerification = async (item: DossierItem) => {
+    if (!item.id) return;
+    try {
+      setRetryingId(item.id);
+      const res = await fetch(`${baseUrl}/api/dossiers/${encodeURIComponent(item.id)}/reprendre-face-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || 'Impossible de relancer la vérification faciale');
+      }
+      await fetchDossiers(true);
+    } catch (err: any) {
+      setError(err?.message || 'Erreur de reprise');
+    } finally {
+      setRetryingId(null);
+    }
   };
 
   const closeDossierModal = () => {
@@ -165,7 +201,9 @@ export function DossierListScreen({ navigation }: any) {
   const filteredDossiers = useMemo(() => {
     const normalizedFilter = statusFilter;
     return dossiers.filter((item) => {
-      if (normalizedFilter !== 'all' && normalizeStatus(item.statut) !== normalizedFilter) {
+      if (normalizedFilter === 'draft') {
+        if (!isDraftStatus(item.statut)) return false;
+      } else if (normalizedFilter !== 'all' && normalizeStatus(item.statut) !== normalizedFilter) {
         return false;
       }
 
@@ -226,6 +264,9 @@ export function DossierListScreen({ navigation }: any) {
           const [hour = '00', minute = '00'] = timePart.split(':');
           const hh = String(hour).padStart(2, '0');
           const mm = String(minute).padStart(2, '0');
+          if (hh === '00' && mm === '00') {
+            return datePart;
+          }
           return `${datePart} ${hh}:${mm}`;
         }
       }
@@ -241,7 +282,9 @@ export function DossierListScreen({ navigation }: any) {
     };
 
     const displayDate = formatDateTime(item.date);
-    const displayTime = formatDateTime(item.heure_reception);
+    const displayTime = item.heure_reception && !/^0{1,2}:0{1,2}(:0{1,2})?$/.test(String(item.heure_reception).trim())
+      ? formatDateTime(item.heure_reception)
+      : null;
 
     return (
       <TouchableOpacity
@@ -256,7 +299,7 @@ export function DossierListScreen({ navigation }: any) {
             </View>
             <View style={s.cardTitleWrap}>
               <Text style={s.cardId}>Dossier {item.id}</Text>
-              <Text style={s.cardSub}>{item.numero_mtn}</Text>
+              <Text style={[s.cardSub, s.cardPhone]}>{item.numero_mtn}</Text>
             </View>
           </View>
           <View style={[s.badge, statusMeta.chip]}>
@@ -267,8 +310,12 @@ export function DossierListScreen({ navigation }: any) {
 
         <View style={s.metaRow}>
           <Text style={s.metaText}>{displayDate}</Text>
-          <Text style={s.metaDivider}>•</Text>
-          <Text style={s.metaText}>{displayTime}</Text>
+          {displayTime ? (
+            <>
+              <Text style={s.metaDivider}>•</Text>
+              <Text style={s.metaText}>{displayTime}</Text>
+            </>
+          ) : null}
         </View>
 
         <View style={s.bottomRow}>
@@ -297,6 +344,21 @@ export function DossierListScreen({ navigation }: any) {
               <Text style={s.noteValue}>{item.raison_rejet}</Text>
             </View>
           ) : null}
+
+          {(item.statut === 'en_cours' || item.statut === 'pending' || item.statut === 'face_verify_retry') && (
+            <TouchableOpacity
+              style={s.retryAction}
+              onPress={() => { void retryFaceVerification(item); }}
+              disabled={retryingId === item.id}
+              activeOpacity={0.9}
+            >
+              {retryingId === item.id ? (
+                <ActivityIndicator size="small" color={C.blue} />
+              ) : (
+                <Text style={s.retryActionText}>↺ Reprendre faciale</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       </TouchableOpacity>
     );
@@ -308,9 +370,15 @@ export function DossierListScreen({ navigation }: any) {
       <AppHeader title="Mes dossiers" subtitle={`Liste des dossiers envoyés par ${agentWa || 'votre agent'}`} rightIcon="✕" onRightPress={() => navigation.goBack()} />
 
       <View style={s.controlBar}>
-        <View style={s.filterPills}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.filterPills}
+          keyboardShouldPersistTaps="handled"
+        >
           {[
             { key: 'all', label: 'Tous' },
+            { key: 'draft', label: 'Brouillons' },
             { key: 'accepted', label: 'Acceptés' },
             { key: 'pending', label: 'En attente' },
             { key: 'rejected', label: 'Rejetés' },
@@ -324,7 +392,7 @@ export function DossierListScreen({ navigation }: any) {
               <Text style={[s.filterText, statusFilter === item.key ? s.filterTextActive : undefined]}>{item.label}</Text>
             </TouchableOpacity>
           ))}
-        </View>
+        </ScrollView>
 
         <View style={s.sortBar}>
           {[
@@ -553,6 +621,7 @@ const s = StyleSheet.create({
   cardTitleWrap: { flex: 1 },
   cardId: { color: C.ink, fontSize: 10, fontWeight: '800' },
   cardSub: { marginTop: 1, color: C.ink3, fontSize: 9 },
+  cardPhone: { marginTop: 4, fontSize: 12, color: C.blue, fontWeight: '800' },
   badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 999, borderWidth: 1, gap: 2 },
   badgeIcon: { fontSize: 8, fontWeight: '800' },
   badgeText: { fontSize: 8, fontWeight: '800', textTransform: 'uppercase' },
@@ -578,11 +647,21 @@ const s = StyleSheet.create({
   aiLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   aiValue: { marginTop: 1, color: C.ink, fontSize: 9 },
   footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  retryAction: {
+    marginTop: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.24)',
+  },
+  retryActionText: { color: C.blue, fontSize: 10, fontWeight: '800' },
   noteBox: { flex: 1, minWidth: 88, padding: 8, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
   noteLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   noteValue: { marginTop: 2, color: C.ink, fontSize: 10 },
   controlBar: { flexDirection: 'column', gap: 10, paddingHorizontal: 12, paddingBottom: 12 },
-  filterPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  filterPills: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center', paddingVertical: 4 },
   filterChip: {
     paddingVertical: 8,
     paddingHorizontal: 14,

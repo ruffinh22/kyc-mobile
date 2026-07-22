@@ -300,7 +300,7 @@ const s = StyleSheet.create({
     flex: 1,
     backgroundColor: '#05070C',
     paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 12) : 0,
-    paddingBottom: Platform.OS === 'android' ? 8 : 0,
+    paddingBottom: Platform.OS === 'android' ? 10 : 0,
   },
 
   // Header overlay

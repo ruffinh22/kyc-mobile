@@ -1,0 +1,19 @@
+[Unit]
+Description=KYC Modern Backend
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=kyc
+WorkingDirectory=/home/kyc/kyc-modern/backend
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=HOST=0.0.0.0
+ExecStart=/usr/bin/node /home/kyc/kyc-modern/backend/dist/index.js
+Restart=always
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

@@ -97,3 +97,9 @@ coverage/
 
 # local-only Firebase credentials
 kyc-modern/backend/kyc-congo-399bc93f01c9.json
+
+deploy.sh
+
+
+GIT_DEPLOYMENT.md
+

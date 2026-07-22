@@ -298,30 +298,23 @@ export function DossierListScreen({ navigation }: any) {
               <Text style={s.avatarTxt}>{String(item.id).slice(0, 2).toUpperCase()}</Text>
             </View>
             <View style={s.cardTitleWrap}>
-              <Text style={s.cardId}>Dossier {item.id}</Text>
-              <Text style={[s.cardSub, s.cardPhone]}>{item.numero_mtn}</Text>
+              <Text style={s.cardId} numberOfLines={1} ellipsizeMode="tail">Dossier {item.id}</Text>
+              <Text style={[s.cardSub, s.cardPhone]} numberOfLines={1} ellipsizeMode="tail">{item.numero_mtn}</Text>
             </View>
           </View>
-          <View style={[s.badge, statusMeta.chip]}>
+          <View style={[s.badge, statusMeta.chip, s.cardStatusBadge]}>
             <Text style={s.badgeIcon}>{statusMeta.icon}</Text>
             <Text style={[s.badgeText, { color: statusMeta.textColor }]}>{statusMeta.label}</Text>
           </View>
         </View>
 
-        <View style={s.metaRow}>
-          <Text style={s.metaText}>{displayDate}</Text>
-          {displayTime ? (
-            <>
-              <Text style={s.metaDivider}>•</Text>
-              <Text style={s.metaText}>{displayTime}</Text>
-            </>
-          ) : null}
-        </View>
-
         <View style={s.bottomRow}>
           <View style={s.scoreBox}>
-            <Text style={s.scoreLabel}>Match visage</Text>
-            <Text style={[s.scoreValue, { color: scoreColor }]}>{score != null ? `${score.toFixed(1)}%` : '—'}</Text>
+            <View style={s.scoreLabelRow}>
+              <Text style={s.scoreLabel}>Match visage</Text>
+              <Text style={[s.scoreValue, { color: scoreColor }]}>{score != null ? `${score.toFixed(1)}%` : '—'}</Text>
+            </View>
+            <Text style={s.dateText}>{displayTime ? `${displayDate} • ${displayTime}` : displayDate}</Text>
           </View>
 
           <View style={s.aiBox}>
@@ -394,46 +387,53 @@ export function DossierListScreen({ navigation }: any) {
           ))}
         </ScrollView>
 
-        <View style={s.sortBar}>
-          {[
-            { key: 'date', label: 'Date' },
-            { key: 'score', label: 'Score' },
-            { key: 'numero', label: 'Numéro' },
-          ].map((item) => (
-            <TouchableOpacity
-              key={item.key}
-              onPress={() => {
-                setFieldFilterKey(item.key as SortKey);
-                setFieldFilterValue('');
-              }}
-              style={[s.sortButton, fieldFilterKey === item.key ? s.sortButtonActive : undefined]}
-              activeOpacity={0.8}
-            >
-              <Text style={[s.sortButtonText, fieldFilterKey === item.key ? s.sortButtonTextActive : undefined]}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <View style={s.searchRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.sortBar}
+            keyboardShouldPersistTaps="handled"
+          >
+            {[
+              { key: 'date', label: 'Date' },
+              { key: 'score', label: 'Score' },
+              { key: 'numero', label: 'Numéro' },
+            ].map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                onPress={() => {
+                  setFieldFilterKey(item.key as SortKey);
+                  setFieldFilterValue('');
+                }}
+                style={[s.sortButton, fieldFilterKey === item.key ? s.sortButtonActive : undefined]}
+                activeOpacity={0.8}
+              >
+                <Text style={[s.sortButtonText, fieldFilterKey === item.key ? s.sortButtonTextActive : undefined]}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-        <View style={s.filterInputRow}>
-          <TextInput
-            value={fieldFilterValue}
-            onChangeText={setFieldFilterValue}
-            placeholder={
-              fieldFilterKey === 'date'
-                ? 'YYYY-MM-DD ou partie de date'
-                : fieldFilterKey === 'score'
-                  ? 'Score minimum'
-                  : 'Numéro dossier ou MTN'
-            }
-            placeholderTextColor={C.ink3}
-            keyboardType={fieldFilterKey === 'score' ? 'numeric' : 'default'}
-            style={s.filterInput}
-          />
-          {fieldFilterValue ? (
-            <TouchableOpacity style={s.clearButton} onPress={() => setFieldFilterValue('')}>
-              <Text style={s.clearButtonText}>Effacer</Text>
-            </TouchableOpacity>
-          ) : null}
+          <View style={s.searchInputRow}>
+            <TextInput
+              value={fieldFilterValue}
+              onChangeText={setFieldFilterValue}
+              placeholder={
+                fieldFilterKey === 'date'
+                  ? 'YYYY-MM-DD ou partie de date'
+                  : fieldFilterKey === 'score'
+                    ? 'Score minimum'
+                    : 'Numéro dossier ou MTN'
+              }
+              placeholderTextColor={C.ink3}
+              keyboardType={fieldFilterKey === 'score' ? 'numeric' : 'default'}
+              style={s.searchInput}
+            />
+            {fieldFilterValue ? (
+              <TouchableOpacity style={s.clearButton} onPress={() => setFieldFilterValue('')}>
+                <Text style={s.clearButtonText}>Effacer</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
       </View>
 
@@ -607,10 +607,10 @@ const s = StyleSheet.create({
   },
   refreshTxt: { color: C.blue, fontWeight: '800' },
   list: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
-  separator: { height: 4 },
+  separator: { height: 2 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)',
-    borderRadius: 10, padding: 8, flexDirection: 'column', gap: 4,
+    borderRadius: 10, padding: 6, flexDirection: 'column', gap: 2,
     shadowColor: '#0F1720', shadowOpacity: 0.03, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
@@ -618,13 +618,20 @@ const s = StyleSheet.create({
   cardIdentity: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 4 },
   avatarWrap: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center', marginRight: 6 },
   avatarTxt: { color: C.yellow, fontWeight: '800', fontSize: 9 },
-  cardTitleWrap: { flex: 1 },
+  cardTitleWrap: { flex: 1, minWidth: 0 },
   cardId: { color: C.ink, fontSize: 10, fontWeight: '800' },
   cardSub: { marginTop: 1, color: C.ink3, fontSize: 9 },
-  cardPhone: { marginTop: 4, fontSize: 12, color: C.blue, fontWeight: '800' },
-  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 999, borderWidth: 1, gap: 2 },
-  badgeIcon: { fontSize: 8, fontWeight: '800' },
-  badgeText: { fontSize: 8, fontWeight: '800', textTransform: 'uppercase' },
+  cardPhone: { marginTop: 3, fontSize: 11, color: C.blue, fontWeight: '700', maxWidth: '100%' },
+  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1, gap: 4 },
+  badgeIcon: { fontSize: 10, fontWeight: '900' },
+  badgeText: { fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
+  cardStatusBadge: { alignSelf: 'flex-start', minWidth: 0 },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 0,
+    paddingHorizontal: 0,
+  },
   metaRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -635,18 +642,20 @@ const s = StyleSheet.create({
   },
   metaText: { color: '#64748b', fontSize: 9, fontWeight: '600' },
   metaDivider: { color: '#94a3b8', fontSize: 9 },
-  bottomRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  bottomRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 1, marginBottom: 0 },
   scoreBox: {
-    flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 5, paddingHorizontal: 7, borderRadius: 8,
+    flex: 1, flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'flex-start',
+    paddingVertical: 6, paddingHorizontal: 8, borderRadius: 8,
     backgroundColor: 'rgba(15,23,42,0.03)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)',
   },
+  scoreLabelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' },
   scoreLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   scoreValue: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  dateText: { color: '#475569', fontSize: 10, fontWeight: '600', marginTop: 4 },
   aiBox: { flex: 1, paddingVertical: 5, paddingHorizontal: 7, borderRadius: 8, backgroundColor: 'rgba(15,23,42,0.03)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.06)' },
   aiLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   aiValue: { marginTop: 1, color: C.ink, fontSize: 9 },
-  footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, marginTop: 2 },
   retryAction: {
     marginTop: 2,
     paddingVertical: 8,
@@ -657,14 +666,14 @@ const s = StyleSheet.create({
     borderColor: 'rgba(59,130,246,0.24)',
   },
   retryActionText: { color: C.blue, fontSize: 10, fontWeight: '800' },
-  noteBox: { flex: 1, minWidth: 88, padding: 8, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  noteBox: { flex: 1, minWidth: 88, padding: 6, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
   noteLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   noteValue: { marginTop: 2, color: C.ink, fontSize: 10 },
-  controlBar: { flexDirection: 'column', gap: 10, paddingHorizontal: 12, paddingBottom: 12 },
-  filterPills: { flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center', paddingVertical: 4 },
+  controlBar: { flexDirection: 'column', gap: 8, paddingHorizontal: 10, paddingBottom: 8 },
+  filterPills: { flexDirection: 'row', gap: 6, marginBottom: 8, alignItems: 'center', paddingVertical: 2 },
   filterChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(15,23,42,0.08)',
@@ -676,10 +685,24 @@ const s = StyleSheet.create({
   },
   filterText: { color: C.ink3, fontSize: 11, fontWeight: '700' },
   filterTextActive: { color: C.blue },
-  sortBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  sortBar: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  searchInputRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 110 },
+  searchInput: {
+    flex: 1,
+    minHeight: 32,
+    maxWidth: 200,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    paddingHorizontal: 10,
+    color: C.ink,
+    fontSize: 12,
+  },
   sortButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderRadius: 999,
     backgroundColor: 'rgba(15,23,42,0.05)',
   },

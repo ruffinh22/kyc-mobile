@@ -4,6 +4,13 @@ import { FaceLivenessDetector } from '@aws-amplify/ui-react-liveness';
 import { ThemeProvider } from '@aws-amplify/ui-react';
 import '@aws-amplify/ui-react/styles.css';
 
+interface FaceLivenessCheckProps {
+  dossierId?: string | null;
+  onComplete?: (payload: unknown) => void;
+  onClose?: () => void;
+  compact?: boolean;
+}
+
 const REGION = import.meta.env.VITE_AWS_REGION as string;
 const API_BASE = (() => {
   const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
@@ -65,19 +72,19 @@ function notifyNative(payload: unknown) {
   win.ReactNativeWebView?.postMessage(JSON.stringify(payload));
 }
 
-export function FaceLivenessCheck() {
+export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClose, compact = false }: FaceLivenessCheckProps) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [region, setRegion] = useState<string>(REGION);
   const [errorMsg, setErrorMsg] = useState('');
   const [resultMsg, setResultMsg] = useState('');
   const [preferredDeviceId, setPreferredDeviceId] = useState<string | null>(null);
-  const dossierId = getDossierId();
+  const dossierId = propDossierId ?? getDossierId();
   const preferredCamera = getPreferredCameraFromQuery();
 
   useEffect(() => {
     if (!dossierId) {
-      setErrorMsg('Identifiant de dossier manquant dans l’URL');
+      setErrorMsg('Identifiant de dossier manquant');
       setPhase('error');
       return;
     }
@@ -134,6 +141,7 @@ export function FaceLivenessCheck() {
       }
       setResultMsg(data.message || 'Vérification terminée');
       setPhase('done');
+      onComplete?.(data);
       notifyNative({ type: 'liveness-result', ...data });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur de vérification';
@@ -151,52 +159,60 @@ export function FaceLivenessCheck() {
   }, []);
 
   if (phase === 'loading') {
-    return <CenterMessage text="Préparation de la vérification…" />;
+    return <CenterMessage text="Préparation de la vérification…" compact={compact} />;
   }
 
   if (phase === 'error') {
-    return <CenterMessage text={`Erreur : ${errorMsg}`} isError />;
+    return <CenterMessage text={`Erreur : ${errorMsg}`} isError compact={compact} />;
   }
 
   if (phase === 'analyzing') {
-    return <CenterMessage text="Analyse en cours…" />;
+    return <CenterMessage text="Analyse en cours…" compact={compact} />;
   }
 
   if (phase === 'done') {
-    return <CenterMessage text={resultMsg} />;
+    return <CenterMessage text={resultMsg} compact={compact} />;
   }
 
   if (!isLivenessConfigValid) {
-    return <CenterMessage text="Configuration client manquante : VITE_AWS_REGION ou VITE_COGNITO_IDENTITY_POOL_ID" isError />;
+    return <CenterMessage text="Configuration client manquante : VITE_AWS_REGION ou VITE_COGNITO_IDENTITY_POOL_ID" isError compact={compact} />;
   }
 
   if (!sessionId) {
-    return <CenterMessage text="Session non disponible" isError />;
+    return <CenterMessage text="Session non disponible" isError compact={compact} />;
   }
 
   return (
     <ThemeProvider>
-      <div style={{ width: '100%', height: '100vh', backgroundColor: '#0f172a' }}>
-        <FaceLivenessDetector
-          sessionId={sessionId}
-          region={region}
-          onAnalysisComplete={handleAnalysisComplete}
-          onError={handleError}
-          config={preferredDeviceId ? { deviceId: preferredDeviceId } : undefined}
-        />
+      <div style={{ width: '100%', minHeight: compact ? 440 : '100vh', backgroundColor: '#0f172a', borderRadius: compact ? 16 : 0, overflow: 'hidden' }}>
+        {compact && onClose && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 16px 0' }}>
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>Fermer</button>
+          </div>
+        )}
+        <div style={{ width: '100%', height: compact ? 'calc(100% - 48px)' : '100vh', minHeight: compact ? 400 : '100vh', backgroundColor: '#0f172a' }}>
+          <FaceLivenessDetector
+            sessionId={sessionId}
+            region={region}
+            onAnalysisComplete={handleAnalysisComplete}
+            onError={handleError}
+            config={preferredDeviceId ? { deviceId: preferredDeviceId } : undefined}
+          />
+        </div>
       </div>
     </ThemeProvider>
   );
 }
 
-function CenterMessage({ text, isError }: { text: string; isError?: boolean }) {
+function CenterMessage({ text, isError, compact }: { text: string; isError?: boolean; compact?: boolean }) {
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        height: '100vh',
+        height: compact ? 'auto' : '100vh',
+        minHeight: compact ? 260 : '100vh',
         padding: 24,
         textAlign: 'center',
         color: isError ? '#F87171' : '#F8FAFC',

@@ -78,7 +78,8 @@ kyc-modern/backend/uploads/
 uploads/
 tmp/
 temp/
-
+kyc-modern/backend/.env
+kyc-modernfrontend/.env
 # OS files
 .DS_Store
 .AppleDouble

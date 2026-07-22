@@ -298,6 +298,7 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
 const s = StyleSheet.create({
   root: {
     flex: 1,
+    justifyContent: 'space-between',
     backgroundColor: '#05070C',
     paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 12) : 0,
     paddingBottom: Platform.OS === 'android' ? 10 : 0,
@@ -330,7 +331,7 @@ const s = StyleSheet.create({
   // Stepper
   stepper: {
     flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center',
-    paddingVertical: 16, paddingHorizontal: 28,
+    paddingVertical: 10, paddingHorizontal: 20,
   },
   stepItem: { alignItems: 'center', gap: 6, width: 74 },
   stepDot: {
@@ -353,14 +354,15 @@ const s = StyleSheet.create({
   webviewCard: {
     flex: 1,
     marginHorizontal: 14,
-    marginBottom: 12,
+    marginBottom: 10,
     borderRadius: R.xl,
     overflow: 'hidden',
     backgroundColor: '#000',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.10)',
-    minHeight: 260,
-    marginTop: 8,
+    minHeight: 220,
+    maxHeight: '62%',
+    marginTop: 6,
   },
   webview: { flex: 1, backgroundColor: '#000' },
 
@@ -385,7 +387,9 @@ const s = StyleSheet.create({
   },
 
   footer: {
-    paddingHorizontal: 24, paddingBottom: 18, paddingTop: 2,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'android' ? 14 : 20,
+    paddingTop: 8,
     alignItems: 'center',
   },
   footerHint: {

@@ -10,11 +10,10 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image,
-  StatusBar, SafeAreaView, Animated, PermissionsAndroid,
+  StatusBar, SafeAreaView, Animated,
   Modal, FlatList, Alert,
 } from 'react-native';
-import { launchCamera, CameraOptions } from 'react-native-image-picker';
-import { NativeModules } from 'react-native';
+import { Camera, CameraType } from 'expo-camera';
 import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { useAgentStore }  from '../store/callStore';
 import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
@@ -57,6 +56,9 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const [cameraMode, setCameraMode]   = useState<'recto'|'verso'|null>(null);
   const [camPerm, setCamPerm]         = useState<boolean|null>(null);
   const [selectedCamera, setSelectedCamera] = useState<'front'|'back'>(preferredCamera === 'front' ? 'front' : 'back');
+  const [cameraReady, setCameraReady] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState<Photo | null>(null);
+  const cameraRef = useRef<any>(null);
   const [loading, setLoading]         = useState(false);
   const [progress, setProgress]       = useState(0);
   const [error, setError]             = useState('');
@@ -115,42 +117,26 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     }
   }, [agent.country]);
 
+  // NOTE : on utilise Camera.requestCameraPermissionsAsync() (expo-camera),
+  // la même API que le composant <Camera> ci-dessous utilise réellement.
+  // L'ancienne version ne demandait la permission système que sur Android
+  // (via PermissionsAndroid) et laissait passer iOS sans jamais afficher
+  // la boîte de dialogue native — la caméra live y échouait donc toujours.
+  // Elle dépendait aussi d'un module natif custom (NativeModules.CameraModule)
+  // qui, s'il n'est pas enregistré dans le build, forçait systématiquement
+  // camPerm à false même quand la caméra du téléphone fonctionnait très bien.
+  const requestCameraAccess = async () => {
+    try {
+      const permission = await Camera.requestCameraPermissionsAsync();
+      setCamPerm(permission.granted === true);
+    } catch (e) {
+      console.warn('[Acquisition] Vérification permission caméra échouée :', e);
+      setCamPerm(false);
+    }
+  };
+
   useEffect(() => {
-    (async () => {
-      try {
-        if (Platform.OS === 'android') {
-          const cameraModule = NativeModules.CameraModule as any;
-          const result = cameraModule?.checkCameraAvailability
-            ? await cameraModule.checkCameraAvailability()
-            : null;
-
-          const nativeAvailable = result?.available === true;
-          const granted = nativeAvailable
-            ? PermissionsAndroid.RESULTS.GRANTED
-            : PermissionsAndroid.RESULTS.DENIED;
-
-          if (nativeAvailable) {
-            const permission = await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.CAMERA,
-              {
-                title: 'Permission caméra',
-                message: 'L’application a besoin d’accéder à la caméra pour capturer les documents.',
-                buttonPositive: 'Autoriser',
-                buttonNegative: 'Refuser',
-              }
-            );
-            setCamPerm(permission === PermissionsAndroid.RESULTS.GRANTED);
-          } else {
-            setCamPerm(false);
-          }
-        } else {
-          setCamPerm(true);
-        }
-      } catch (e) {
-        console.warn('[Acquisition] Vérification permission caméra échouée :', e);
-        setCamPerm(false);
-      }
-    })();
+    void requestCameraAccess();
   }, []);
 
   const shake = () =>
@@ -162,33 +148,37 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     ]).start();
 
   const capturePhoto = async (type: 'recto'|'verso') => {
+    if (!cameraRef.current || !cameraReady) return;
     try {
-      const options: CameraOptions = {
-        mediaType: 'photo',
-        cameraType: selectedCamera,
-        quality: 0.8,
-        saveToPhotos: false,
-      };
-
-      const result = await launchCamera(options);
-      if (result.didCancel) return;
-      if (result.errorCode) {
-        throw new Error(result.errorMessage || `Erreur caméra (${result.errorCode})`);
-      }
-
-      const uri = result.assets?.[0]?.uri;
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85, skipProcessing: false });
+      const uri = photo?.uri;
       if (!uri) throw new Error('Aucun fichier photo renvoyé');
 
-      setPhotos(p => ({ ...p, [type]: { uri, type } }));
-      setCameraMode(null); setError('');
-      if (type === 'recto') {
-        setActiveStep(2);
-        void runOcr(uri);
-      }
+      // On s'arrête sur un aperçu (Reprendre / Valider) plutôt que de
+      // committer directement — comme sur AcquisitionPage.tsx (web).
+      setPendingPhoto({ uri, type });
+      setError('');
     } catch (err: any) {
       console.warn('[Acquisition] capturePhoto a échoué :', err);
       setError(`Erreur caméra: ${err.message || 'inconnue'}`);
       shake();
+    }
+  };
+
+  const retakePendingPhoto = () => {
+    setPendingPhoto(null);
+    setCameraReady(false);
+  };
+
+  const validatePendingPhoto = () => {
+    if (!pendingPhoto) return;
+    const { uri, type } = pendingPhoto;
+    setPhotos(p => ({ ...p, [type]: { uri, type } }));
+    setPendingPhoto(null);
+    setCameraMode(null); setCameraReady(false); setError('');
+    if (type === 'recto') {
+      setActiveStep(2);
+      void runOcr(uri);
     }
   };
 
@@ -361,12 +351,41 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   // ── Écran caméra ──────────────────────────────────────────────────────────
   if (cameraMode) {
     const sideLabel = cameraMode === 'recto' ? 'RECTO' : 'VERSO';
+
+    if (pendingPhoto) {
+      return (
+        <View style={cs.root}>
+          <SafeAreaView style={cs.previewWrap}>
+            <Text style={cs.previewTitle}>
+              {pendingPhoto.type === 'recto' ? 'Vérifiez le recto CNI' : 'Vérifiez le verso CNI'}
+            </Text>
+            <Image source={{ uri: pendingPhoto.uri }} style={cs.previewImg} resizeMode="cover" />
+            <View style={cs.previewActions}>
+              <TouchableOpacity style={cs.previewRetakeBtn} onPress={retakePendingPhoto}>
+                <Text style={cs.previewRetakeTxt}>↺ Reprendre</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={cs.previewValidateBtn} onPress={validatePendingPhoto}>
+                <Text style={cs.previewValidateTxt}>✓ Valider</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+        </View>
+      );
+    }
+
     return (
       <View style={cs.root}>
-        {camPerm ? (
+        {camPerm !== false ? (
           <View style={cs.camera}>
+            <Camera
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              type={selectedCamera === 'front' ? CameraType.front : CameraType.back}
+              onCameraReady={() => setCameraReady(true)}
+            />
+
             <SafeAreaView style={cs.camHeader}>
-              <TouchableOpacity style={cs.closeBtn} onPress={() => setCameraMode(null)}>
+              <TouchableOpacity style={cs.closeBtn} onPress={() => { setCameraMode(null); setCameraReady(false); }}>
                 <Text style={cs.closeTxt}>✕</Text>
               </TouchableOpacity>
               <View style={cs.camTitleWrap}>
@@ -380,6 +399,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               <TouchableOpacity
                 style={[cs.cameraOption, selectedCamera === 'back' && cs.cameraOptionActive]}
                 onPress={() => {
+                  setCameraReady(false);
                   setSelectedCamera('back');
                   setPreferredCamera('back');
                 }}
@@ -389,6 +409,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               <TouchableOpacity
                 style={[cs.cameraOption, selectedCamera === 'front' && cs.cameraOptionActive]}
                 onPress={() => {
+                  setCameraReady(false);
                   setSelectedCamera('front');
                   setPreferredCamera('front');
                 }}
@@ -397,18 +418,24 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               </TouchableOpacity>
             </View>
 
-            <View style={cs.frameOuter}>
+            <View style={cs.frameOuter} pointerEvents="none">
               <View style={cs.frame}>
                 {(['TL','TR','BL','BR'] as const).map(pos => (
                   <View key={pos} style={[cs.corner, cs[`corner${pos}`]]} />
                 ))}
-                <Text style={cs.frameLabel}>Placez le document dans le cadre</Text>
+                <Text style={cs.frameLabel}>{cameraReady ? 'Placez le document dans le cadre' : 'Préparation caméra…'}</Text>
               </View>
             </View>
 
             <View style={cs.camFooter}>
-              <TouchableOpacity style={cs.captureBtn} onPress={() => capturePhoto(cameraMode!)}>
-                <View style={cs.captureRing}>
+              <TouchableOpacity
+                style={cs.captureBtn}
+                onPress={() => capturePhoto(cameraMode!)}
+                disabled={!cameraReady}
+                accessibilityRole="button"
+                accessibilityLabel={cameraReady ? 'Capturer la photo' : 'Préparation caméra'}
+              >
+                <View style={[cs.captureRing, !cameraReady && { opacity: 0.4 }]}>
                   <View style={cs.captureCore} />
                 </View>
               </TouchableOpacity>
@@ -417,9 +444,9 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         ) : (
           <View style={cs.permBox}>
             <Text style={cs.permTitle}>Accès caméra requis</Text>
-            <Text style={cs.permSub}>La permission caméra a été refusée.</Text>
-            <TouchableOpacity style={cs.permBtn} onPress={() => capturePhoto(cameraMode!)}>
-              <Text style={cs.permBtnTxt}>Ouvrir la caméra</Text>
+            <Text style={cs.permSub}>La permission caméra a été refusée. Autorise-la pour continuer.</Text>
+            <TouchableOpacity style={cs.permBtn} onPress={() => void requestCameraAccess()}>
+              <Text style={cs.permBtnTxt}>Autoriser la caméra</Text>
             </TouchableOpacity>
             <TouchableOpacity style={cs.permBtnSecondary} onPress={() => setCameraMode(null)}>
               <Text style={cs.permBtnTxtSecondary}>Annuler</Text>
@@ -1184,6 +1211,28 @@ const cs = StyleSheet.create({
     width: 62, height: 62, borderRadius: 31,
     backgroundColor: '#fff',
   },
+
+  previewWrap: {
+    flex: 1, padding: 20, gap: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  previewTitle: { fontSize: T.md, fontWeight: '800', color: '#fff', textAlign: 'center' },
+  previewImg: {
+    width: '100%', flex: 1, maxHeight: '68%',
+    borderRadius: R.lg, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+  },
+  previewActions: { flexDirection: 'row', gap: 10, width: '100%' },
+  previewRetakeBtn: {
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.3)', borderRadius: R.lg,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  previewRetakeTxt: { color: '#fff', fontSize: T.base, fontWeight: '700' },
+  previewValidateBtn: {
+    flex: 1, backgroundColor: C.success, borderRadius: R.lg,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  previewValidateTxt: { color: '#fff', fontSize: T.base, fontWeight: '800' },
 
   permBox: {
     flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32,

@@ -87,6 +87,31 @@ export async function getCompteByMatricule(matricule: string): Promise<Compte | 
   );
 }
 
+export async function getCompteByPhoneNumber(phone_number: string): Promise<Compte | null> {
+  return queryOne<Compte & RowDataPacket>(
+    'SELECT * FROM comptes WHERE phone_number = ?', [phone_number]
+  );
+}
+
+export async function setComptePhoneVerification(
+  matricule: string,
+  phone_number: string,
+  verification_code: string,
+  expires_at: number
+): Promise<void> {
+  await exec(
+    'UPDATE comptes SET phone_number=?, phone_verification_code=?, phone_verification_expires_at=?, phone_verified_at=NULL, updated_at=? WHERE matricule=?',
+    [phone_number, verification_code, expires_at, nowSec(), matricule]
+  );
+}
+
+export async function confirmComptePhoneVerification(matricule: string): Promise<void> {
+  await exec(
+    'UPDATE comptes SET phone_verified_at=?, phone_verification_code=NULL, phone_verification_expires_at=NULL, updated_at=? WHERE matricule=?',
+    [nowSec(), nowSec(), matricule]
+  );
+}
+
 export async function getAllComptes(): Promise<Compte[]> {
   return query<Compte & RowDataPacket>('SELECT * FROM comptes ORDER BY nom, prenom');
 }
@@ -110,7 +135,7 @@ export async function createCompte(data: {
 
 export async function updateCompte(
   matricule: string,
-  fields: Partial<Pick<Compte, 'nom' | 'prenom' | 'role' | 'actif' | 'must_change_password'>>
+  fields: Partial<Pick<Compte, 'nom' | 'prenom' | 'role' | 'actif' | 'must_change_password' | 'phone_number'>>
 ): Promise<void> {
   const sets: string[] = ['updated_at=?'];
   const vals: unknown[] = [nowSec()];
@@ -119,6 +144,7 @@ export async function updateCompte(
   if (fields.role !== undefined)              { sets.push('role=?');                 vals.push(fields.role); }
   if (fields.actif !== undefined)             { sets.push('actif=?');                vals.push(fields.actif); }
   if (fields.must_change_password !== undefined) { sets.push('must_change_password=?'); vals.push(fields.must_change_password); }
+  if (fields.phone_number !== undefined)      { sets.push('phone_number=?');         vals.push(fields.phone_number); }
   vals.push(matricule);
   await exec(`UPDATE comptes SET ${sets.join(',')} WHERE matricule=?`, vals);
 }
@@ -265,7 +291,7 @@ export async function createDossier(data: {
       lieu_naissance, autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
       sexe, nationalite, profession, country, ocr_overrides, flow_step, acquisition_status,
       created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       data.id, data.numero_mtn, data.wa_agent ?? null, data.username_agent ?? null,
       data.fonction_agent ?? null, data.zone_agent ?? null,

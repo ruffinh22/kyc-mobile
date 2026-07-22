@@ -9,6 +9,8 @@ import { configRoutes }      from './config';
 import { supFileRoutes }     from './sup-file';
 import { publicDossierRoutes } from './public-dossiers';
 import { faceVerifyRoutes }  from './face-verify';
+import { faceLivenessRoutes } from './face-liveness';
+import { livenessPageRoutes } from './liveness-page';
 import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
 
@@ -27,6 +29,8 @@ export async function registerRoutes(app: any): Promise<void> {
   await app.register(supFileRoutes);
   await app.register(publicDossierRoutes);
   await app.register(faceVerifyRoutes);
+  await app.register(faceLivenessRoutes);
+  await app.register(livenessPageRoutes);
   await app.register(adminRoutes);
   await app.register(ocrRoutes);
 }

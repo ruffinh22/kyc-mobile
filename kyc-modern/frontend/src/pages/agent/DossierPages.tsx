@@ -404,9 +404,30 @@ export function AgentFileAttente() {
 export function AgentMesDossiers() {
   const [debut, setDebut] = useState(''); const [fin, setFin] = useState('');
   const [statut, setStatut] = useState<DossierStatut|''>(''); const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'date' | 'statut' | 'reference' | 'reception'>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const dSearch = useDebounce(search, 350);
   const [sel, setSel] = useState<Dossier|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300 }), [debut, fin, statut, dSearch]);
+
+  const sortedDossiers = useMemo(() => {
+    const rows = [...(data?.dossiers ?? [])];
+    const weights: Record<string, number> = { en_attente: 0, en_cours: 1, accepte: 2, rejete: 3 };
+    rows.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === 'date') {
+        cmp = String(a.date || '').localeCompare(String(b.date || ''));
+      } else if (sortBy === 'statut') {
+        cmp = (weights[a.statut] ?? 99) - (weights[b.statut] ?? 99);
+      } else if (sortBy === 'reference') {
+        cmp = String(a.id).localeCompare(String(b.id));
+      } else if (sortBy === 'reception') {
+        cmp = String(a.heure_reception || '').localeCompare(String(b.heure_reception || ''));
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return rows;
+  }, [data?.dossiers, sortBy, sortDir]);
 
   const STATUTS: { value: DossierStatut|''; label: string }[] = [
     { value: '', label: 'Tous statuts' }, { value: 'en_cours', label: 'En cours' },
@@ -423,12 +444,22 @@ export function AgentMesDossiers() {
         <div className="filter-bar">
           <div className="field"><label>Recherche</label><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Référence…" /></div>
           <div className="field"><label>Statut</label><select value={statut} onChange={e => setStatut(e.target.value as DossierStatut|'')}>{STATUTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</select></div>
+          <div className="field"><label>Trier par</label><select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}>
+            <option value="date">Date</option>
+            <option value="statut">Statut</option>
+            <option value="reference">Référence</option>
+            <option value="reception">Réception</option>
+          </select></div>
+          <div className="field"><label>Ordre</label><select value={sortDir} onChange={e => setSortDir(e.target.value as typeof sortDir)}>
+            <option value="desc">Descendant</option>
+            <option value="asc">Ascendant</option>
+          </select></div>
           <div className="field"><label>Du</label><input type="date" value={debut} onChange={e => setDebut(e.target.value)} /></div>
           <div className="field"><label>Au</label><input type="date" value={fin} onChange={e => setFin(e.target.value)} /></div>
         </div>
       </div>
       {error && <Alert kind="error">{error}</Alert>}
-      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{data?.total ?? 0} résultat(s)</div><DossiersTable dossiers={data?.dossiers??[]} onSelect={setSel} showAgent={false} /></div>}
+      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} /></div>}
       {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} />}
     </>
   );

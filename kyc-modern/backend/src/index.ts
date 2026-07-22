@@ -1,5 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import fsp from 'fs/promises';
+import fs from 'fs';
 import Fastify from 'fastify';
 import cors       from '@fastify/cors';
 
@@ -56,6 +58,19 @@ async function main(): Promise<void> {
   try {
     await app.register(staticPlugin, { root: uploadsDir, prefix: '/uploads/', decorateReply: false });
   } catch { app.log.warn('[STATIC] uploads dir non trouvé, ignoré'); }
+
+  // Serve frontend build si disponible (doit être généré via `cd ../frontend && npm run build`)
+  const frontendDist = path.join(process.cwd(), '../frontend/dist');
+  if (fs.existsSync(frontendDist)) {
+    try {
+      await app.register(staticPlugin, { root: frontendDist, prefix: '/', decorateReply: false });
+      app.log.info('[STATIC] frontend dist servie depuis', frontendDist);
+    } catch (err) {
+      app.log.warn('[STATIC] impossible de servir frontend dist', err instanceof Error ? err.message : String(err));
+    }
+  } else {
+    app.log.info('[STATIC] frontend dist non trouvé, redirection /liveness-check si FRONTEND_URL défini');
+  }
 
   await registerRoutes(app);
 

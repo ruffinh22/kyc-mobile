@@ -10,3 +10,4 @@ npx react-native start --host 0.0.0.0 --port 8081
 curl -s -X POST http://127.0.0.1:3001/api/call/test -H 'Content-Type: application/json' -d '{"numero":"0167376539","numeroMtn":"0700000000"}'
 
 cd /home/lidruf/kyc-mobile/kyc-modern/backend && echo 'FCM vars:' && env | grep -E 'FCM|GOOGLE' | sed 's/=.*$/=<set>/' || true && echo '---' && curl -s -X POST http://127.0.0.1:3001/api/call/test -H 'Content-Type: application/json' -d '{"numero":"0167376539","numeroMtn":"0700000000"}'
+les espaczmznt so

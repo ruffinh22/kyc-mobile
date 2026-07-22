@@ -101,12 +101,13 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
     return () => keepAwake.deactivate();
   }, []);
 
-  const { callUuid, numeroMtn } = route.params ?? {};
+  const callStore = useCallStore();
+  const { callUuid: routeCallUuid, numeroMtn } = route.params ?? {};
+  const callUuid = routeCallUuid || callStore.callUuid;
   const RTCView = useMemo(() => {
     // Delay loading heavy native WebRTC code until the call screen is actually rendered.
     return require('react-native-webrtc').RTCView;
   }, []);
-  const callStore = useCallStore();
 
   // Initialisés depuis l'état déjà connu du service : si l'offer/answer/ICE
   // s'est terminé pendant que l'agent voyait encore IncomingCallScreen (aucun
@@ -128,6 +129,7 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   const [connectionPhase, setConnectionPhase] = useState<'connecting' | 'reconnecting' | 'fallback' | 'connected' | 'paused'>(initialRemote ? 'connected' : 'connecting');
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callStartAt = useRef<number | null>(null);
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeAnim    = useRef(new Animated.Value(1)).current;
@@ -251,6 +253,7 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
 
   // ── Timer ─────────────────────────────────────────────────────────────────
   const startTimer = () => {
+    callStartAt.current = Date.now();
     setTimerSec(0);
     callStore.setCallDuration(0);
     timerRef.current = setInterval(() => {
@@ -270,7 +273,7 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   // ── Raccrocher ────────────────────────────────────────────────────────────
   const handleEndCall = useCallback((notify = true) => {
     stopTimer();
-    const finalDuration = timerSec || callStore.callDuration;
+    const finalDuration = callStartAt.current ? Math.max(0, Math.round((Date.now() - callStartAt.current) / 1000)) : timerSec || callStore.callDuration;
     notificationService.endNativeCall(callUuid);
     if (notify) signalingService.hangUp();
     if (callUuid) {

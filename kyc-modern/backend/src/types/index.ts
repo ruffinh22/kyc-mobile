@@ -15,6 +15,10 @@ export interface Compte {
   prenom: string;
   role: Role;
   password_hash: string;
+  phone_number: string | null;
+  phone_verified_at: number | null;
+  phone_verification_code: string | null;
+  phone_verification_expires_at: number | null;
   actif: number;
   must_change_password: number;
   failed_login_count: number;

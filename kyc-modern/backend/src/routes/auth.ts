@@ -1,4 +1,3 @@
-import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import * as db from '../db';
 import * as authUtil from '../utils/auth';
@@ -6,6 +5,28 @@ import { requireAuth } from '../middleware/auth';
 
 const LOCK_FAILS = parseInt(process.env.ACCOUNT_LOCK_AFTER_FAILS || '5', 10);
 const LOCK_DUR   = parseInt(process.env.ACCOUNT_LOCK_DURATION    || '900', 10);
+const PHONE_CODE_LIFETIME = parseInt(process.env.PHONE_VERIFICATION_CODE_LIFETIME || '900', 10);
+const PHONE_CODE_LENGTH = parseInt(process.env.PHONE_VERIFICATION_CODE_LENGTH || '6', 10);
+
+function normalizePhone(value: string): string {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function generateVerificationCode(): string {
+  const min = Math.pow(10, PHONE_CODE_LENGTH - 1);
+  const max = Math.pow(10, PHONE_CODE_LENGTH) - 1;
+  return String(Math.floor(Math.random() * (max - min + 1)) + min);
+}
+
+async function sendPhoneVerificationSms(phone_number: string, code: string): Promise<void> {
+  const provider = process.env.PHONE_VERIFICATION_PROVIDER || 'log';
+  if (provider === 'log') {
+    console.log(`[PHONE] verification code ${code} for ${phone_number}`);
+    return;
+  }
+  console.warn('[PHONE] unsupported provider', provider, 'falling back to log');
+  console.log(`[PHONE] verification code ${code} for ${phone_number}`);
+}
 
 export async function authRoutes(app: any): Promise<void> {
 
@@ -42,8 +63,19 @@ export async function authRoutes(app: any): Promise<void> {
     await db.revokeAllSessions(compte.matricule);
     await db.insertSession(jti, compte.matricule, ip, ua, authUtil.getExpiresAt());
     db.audit(compte.matricule,'LOGIN_SUCCESS',`role=${compte.role}`,ip,ua);
-    return reply.send({ success: true, token, must_change_password: compte.must_change_password===1,
-      user: { matricule: compte.matricule, nom: compte.nom, prenom: compte.prenom, role: compte.role } });
+    return reply.send({
+      success: true,
+      token,
+      must_change_password: compte.must_change_password === 1,
+      user: {
+        matricule: compte.matricule,
+        nom: compte.nom,
+        prenom: compte.prenom,
+        role: compte.role,
+        phone_number: compte.phone_number ?? null,
+        phone_verified: !!compte.phone_verified_at,
+      },
+    });
   });
 
   // POST /api/auth/logout
@@ -51,6 +83,47 @@ export async function authRoutes(app: any): Promise<void> {
     const token = (req.headers.authorization??'').replace('Bearer ','');
     if (token) { const d = authUtil.verifyToken(token); if (d?.jti) { await db.revokeSession(d.jti); db.audit(d.matricule,'LOGOUT','',req.ip); } }
     return reply.send({ success: true });
+  });
+
+  app.post('/api/auth/phone/request-verification', { preHandler: requireAuth }, async (req, reply) => {
+    const b = z.object({ phone_number: z.string().min(6).max(20) }).safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'Numéro de téléphone invalide' });
+    const phone_number = normalizePhone(b.data.phone_number);
+    if (!phone_number) return reply.code(400).send({ error: 'Numéro de téléphone invalide' });
+
+    const existing = await db.getCompteByPhoneNumber(phone_number);
+    if (existing && existing.matricule !== req.user.matricule) {
+      return reply.code(409).send({ error: 'Ce numéro est déjà utilisé par un autre compte' });
+    }
+
+    const code = generateVerificationCode();
+    await db.setComptePhoneVerification(req.user.matricule, phone_number, code, Math.floor(Date.now() / 1000) + PHONE_CODE_LIFETIME);
+    await sendPhoneVerificationSms(phone_number, code);
+    db.audit(req.user.matricule, 'PHONE_VERIFICATION_REQUEST', phone_number, req.ip, req.headers['user-agent'] ?? '');
+
+    return reply.send({ success: true, message: 'Code de vérification envoyé' });
+  });
+
+  app.post('/api/auth/phone/verify', { preHandler: requireAuth }, async (req, reply) => {
+    const b = z.object({ code: z.string().min(4).max(20) }).safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'Code de vérification invalide' });
+    const code = b.data.code.trim();
+    const compte = await db.getCompteByMatricule(req.user.matricule);
+    if (!compte) return reply.code(404).send({ error: 'Compte introuvable' });
+    if (!compte.phone_verification_code || !compte.phone_verification_expires_at) {
+      return reply.code(400).send({ error: 'Aucune demande de vérification en attente' });
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (compte.phone_verification_expires_at < now) {
+      return reply.code(400).send({ error: 'Le code de vérification a expiré' });
+    }
+    if (compte.phone_verification_code !== code) {
+      return reply.code(400).send({ error: 'Code de vérification incorrect' });
+    }
+
+    await db.confirmComptePhoneVerification(req.user.matricule);
+    db.audit(req.user.matricule, 'PHONE_VERIFICATION_COMPLETE', compte.phone_number ?? '', req.ip, req.headers['user-agent'] ?? '');
+    return reply.send({ success: true, phone_number: compte.phone_number, phone_verified: true });
   });
 
   // POST /api/auth/change-password
@@ -75,6 +148,17 @@ export async function authRoutes(app: any): Promise<void> {
   app.get('/api/auth/me', { preHandler: requireAuth }, async (req, reply) => {
     const compte = await db.getCompteByMatricule(req.user.matricule);
     if (!compte || !compte.actif) return reply.code(404).send({ error: 'Compte introuvable' });
-    return reply.send({ success: true, user: { matricule: compte.matricule, nom: compte.nom, prenom: compte.prenom, role: compte.role, must_change_password: compte.must_change_password===1 } });
+    return reply.send({
+      success: true,
+      user: {
+        matricule: compte.matricule,
+        nom: compte.nom,
+        prenom: compte.prenom,
+        role: compte.role,
+        must_change_password: compte.must_change_password === 1,
+        phone_number: compte.phone_number ?? null,
+        phone_verified: !!compte.phone_verified_at,
+      },
+    });
   });
 }

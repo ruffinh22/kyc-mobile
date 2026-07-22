@@ -1,11 +1,16 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
-  ActivityIndicator, StatusBar, SafeAreaView, RefreshControl, Modal
+  ActivityIndicator, StatusBar, SafeAreaView, RefreshControl, Modal,
+  TextInput, Animated, Easing,
 } from 'react-native';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
+
+type SortKey = 'statut' | 'date' | 'score' | 'numero';
+
+type FilterStatus = 'all' | 'accepted' | 'rejected' | 'pending';
 
 interface DossierItem {
   id: string;
@@ -30,6 +35,15 @@ interface DossierItem {
   autre_numero?: string | null;
   nom_pere?: string | null;
   nom_mere?: string | null;
+}
+
+const STATUS_ORDER = ['accepted', 'pending', 'rejected'] as const;
+
+function normalizeStatus(value: string) {
+  const normalized = String(value || '').toLowerCase();
+  if (['accepte', 'accepted', 'valide', 'validé'].includes(normalized)) return 'accepted';
+  if (['rejete', 'rejected', 'refuse', 'refusé'].includes(normalized)) return 'rejected';
+  return 'pending';
 }
 
 function getStatusMeta(status: string) {
@@ -71,12 +85,46 @@ export function DossierListScreen({ navigation }: any) {
   const [error, setError] = useState('');
   const [dossiers, setDossiers] = useState<DossierItem[]>([]);
   const [selectedDossier, setSelectedDossier] = useState<DossierItem | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const modalAnimation = useRef(new Animated.Value(0)).current;
+  const [fieldFilterKey, setFieldFilterKey] = useState<SortKey>('statut');
+  const [fieldFilterValue, setFieldFilterValue] = useState('');
+  const [statusFilter, setStatusFilter] = useState<FilterStatus>('all');
 
   const agentWa = useMemo(() => numeroAgent.replace(/\D/g, ''), [numeroAgent]);
   const baseUrl = useMemo(() => {
     const url = serverUrl?.replace(/\/$/, '') || '';
     return url.startsWith('http') ? url : `http://${url}`;
   }, [serverUrl]);
+
+  const openDossier = (item: DossierItem) => {
+    setSelectedDossier(item);
+    setModalVisible(true);
+    modalAnimation.setValue(0);
+  };
+
+  const closeDossierModal = () => {
+    Animated.timing(modalAnimation, {
+      toValue: 0,
+      duration: 180,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start(() => {
+      setModalVisible(false);
+      setSelectedDossier(null);
+    });
+  };
+
+  useEffect(() => {
+    if (modalVisible) {
+      Animated.timing(modalAnimation, {
+        toValue: 1,
+        duration: 240,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [modalVisible, modalAnimation]);
 
   const fetchDossiers = async (isRefresh = false) => {
     if (!agentWa) {
@@ -113,6 +161,43 @@ export function DossierListScreen({ navigation }: any) {
   useEffect(() => {
     fetchDossiers();
   }, [agentWa, baseUrl]);
+
+  const filteredDossiers = useMemo(() => {
+    const normalizedFilter = statusFilter;
+    return dossiers.filter((item) => {
+      if (normalizedFilter !== 'all' && normalizeStatus(item.statut) !== normalizedFilter) {
+        return false;
+      }
+
+      const value = fieldFilterValue.trim();
+      if (!value) return true;
+
+      if (fieldFilterKey === 'date') {
+        return String(item.date || '').includes(value) || String(item.heure_reception || '').includes(value);
+      }
+      if (fieldFilterKey === 'score') {
+        const num = Number(value);
+        if (Number.isNaN(num)) return true;
+        return typeof item.score_visage === 'number' ? item.score_visage >= num : false;
+      }
+      if (fieldFilterKey === 'numero') {
+        return String(item.numero_mtn || '').includes(value) || String(item.id || '').includes(value);
+      }
+
+      return true;
+    });
+  }, [dossiers, statusFilter, fieldFilterKey, fieldFilterValue]);
+
+  const sortedDossiers = useMemo(() => {
+    const list = [...filteredDossiers];
+    return list.sort((a, b) => {
+      const sa = STATUS_ORDER.indexOf(normalizeStatus(a.statut));
+      const sb = STATUS_ORDER.indexOf(normalizeStatus(b.statut));
+      if (sa !== sb) return sa - sb;
+      if (a.date !== b.date) return String(b.date || '').localeCompare(String(a.date || ''));
+      return a.numero_mtn.localeCompare(b.numero_mtn);
+    });
+  }, [filteredDossiers]);
 
   const renderItem = ({ item }: { item: DossierItem }) => {
     const score = typeof item.score_visage === 'number' ? item.score_visage : null;
@@ -161,7 +246,7 @@ export function DossierListScreen({ navigation }: any) {
     return (
       <TouchableOpacity
         activeOpacity={0.9}
-        onPress={() => setSelectedDossier(item)}
+        onPress={() => openDossier(item)}
         style={[s.card, { borderLeftColor: statusMeta.accentColor, borderLeftWidth: 4 }]}
       >
         <View style={s.cardHeader}>
@@ -222,6 +307,68 @@ export function DossierListScreen({ navigation }: any) {
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
       <AppHeader title="Mes dossiers" subtitle={`Liste des dossiers envoyés par ${agentWa || 'votre agent'}`} rightIcon="✕" onRightPress={() => navigation.goBack()} />
 
+      <View style={s.controlBar}>
+        <View style={s.filterPills}>
+          {[
+            { key: 'all', label: 'Tous' },
+            { key: 'accepted', label: 'Acceptés' },
+            { key: 'pending', label: 'En attente' },
+            { key: 'rejected', label: 'Rejetés' },
+          ].map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => setStatusFilter(item.key as FilterStatus)}
+              style={[s.filterChip, statusFilter === item.key ? s.filterChipActive : undefined]}
+              activeOpacity={0.8}
+            >
+              <Text style={[s.filterText, statusFilter === item.key ? s.filterTextActive : undefined]}>{item.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={s.sortBar}>
+          {[
+            { key: 'date', label: 'Date' },
+            { key: 'score', label: 'Score' },
+            { key: 'numero', label: 'Numéro' },
+          ].map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              onPress={() => {
+                setFieldFilterKey(item.key as SortKey);
+                setFieldFilterValue('');
+              }}
+              style={[s.sortButton, fieldFilterKey === item.key ? s.sortButtonActive : undefined]}
+              activeOpacity={0.8}
+            >
+              <Text style={[s.sortButtonText, fieldFilterKey === item.key ? s.sortButtonTextActive : undefined]}>{item.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={s.filterInputRow}>
+          <TextInput
+            value={fieldFilterValue}
+            onChangeText={setFieldFilterValue}
+            placeholder={
+              fieldFilterKey === 'date'
+                ? 'YYYY-MM-DD ou partie de date'
+                : fieldFilterKey === 'score'
+                  ? 'Score minimum'
+                  : 'Numéro dossier ou MTN'
+            }
+            placeholderTextColor={C.ink3}
+            keyboardType={fieldFilterKey === 'score' ? 'numeric' : 'default'}
+            style={s.filterInput}
+          />
+          {fieldFilterValue ? (
+            <TouchableOpacity style={s.clearButton} onPress={() => setFieldFilterValue('')}>
+              <Text style={s.clearButtonText}>Effacer</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+
       {loading ? (
         <View style={s.loadingBox}>
           <ActivityIndicator color={C.yellow} size="large" />
@@ -234,7 +381,7 @@ export function DossierListScreen({ navigation }: any) {
             <Text style={s.refreshTxt}>Réessayer</Text>
           </TouchableOpacity>
         </View>
-      ) : dossiers.length === 0 ? (
+      ) : sortedDossiers.length === 0 ? (
         <View style={s.messageBox}>
           <Text style={s.emptyTxt}>Aucun dossier trouvé pour ce numéro.</Text>
           <TouchableOpacity style={s.refreshBtn} onPress={() => { void fetchDossiers(false); }}>
@@ -243,7 +390,7 @@ export function DossierListScreen({ navigation }: any) {
         </View>
       ) : (
         <FlatList
-          data={dossiers}
+          data={sortedDossiers}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={s.list}
@@ -254,15 +401,36 @@ export function DossierListScreen({ navigation }: any) {
         />
       )}
 
-      <Modal visible={!!selectedDossier} transparent animationType="fade" onRequestClose={() => setSelectedDossier(null)}>
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="none"
+        hardwareAccelerated
+        onRequestClose={closeDossierModal}
+      >
         <View style={s.modalBackdrop}>
-          <View style={s.modalCard}>
+          <Animated.View
+            style={[
+              s.modalCard,
+              {
+                opacity: modalAnimation,
+                transform: [
+                  {
+                    translateY: modalAnimation.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [24, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
             <View style={s.modalHeader}>
               <View>
                 <Text style={s.modalTitle}>Détail du dossier</Text>
                 <Text style={s.modalSubtitle}>Informations du titulaire</Text>
               </View>
-              <TouchableOpacity onPress={() => setSelectedDossier(null)} style={s.closeBtnModal}>
+              <TouchableOpacity onPress={closeDossierModal} style={s.closeBtnModal}>
                 <Text style={s.closeBtnText}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -335,7 +503,7 @@ export function DossierListScreen({ navigation }: any) {
                 ) : null}
               </View>
             ) : null}
-          </View>
+          </Animated.View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -410,9 +578,56 @@ const s = StyleSheet.create({
   aiLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
   aiValue: { marginTop: 1, color: C.ink, fontSize: 9 },
   footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
-  noteBox: { flex: 1, minWidth: 88, padding: 5, borderRadius: 7, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
-  noteLabel: { color: C.ink3, fontSize: 7, textTransform: 'uppercase', letterSpacing: 0.3 },
-  noteValue: { marginTop: 1, color: C.ink, fontSize: 9 },
+  noteBox: { flex: 1, minWidth: 88, padding: 8, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },
+  noteLabel: { color: C.ink3, fontSize: 8, textTransform: 'uppercase', letterSpacing: 0.3 },
+  noteValue: { marginTop: 2, color: C.ink, fontSize: 10 },
+  controlBar: { flexDirection: 'column', gap: 10, paddingHorizontal: 12, paddingBottom: 12 },
+  filterPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  filterChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+  },
+  filterChipActive: {
+    borderColor: C.blue,
+    backgroundColor: 'rgba(59,130,246,0.12)',
+  },
+  filterText: { color: C.ink3, fontSize: 11, fontWeight: '700' },
+  filterTextActive: { color: C.blue },
+  sortBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
+  sortButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.05)',
+  },
+  sortButtonActive: {
+    backgroundColor: 'rgba(59,130,246,0.14)',
+  },
+  sortButtonText: { color: C.ink3, fontSize: 11, fontWeight: '700' },
+  sortButtonTextActive: { color: C.blue },
+  filterInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  filterInput: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15,23,42,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    paddingHorizontal: 14,
+    color: C.ink,
+    fontSize: 13,
+  },
+  clearButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.08)',
+  },
+  clearButtonText: { color: C.ink3, fontSize: 11, fontWeight: '700' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '85%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },

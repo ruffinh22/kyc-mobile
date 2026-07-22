@@ -19,6 +19,7 @@ const UpdateCompteSchema = z.object({
   role: z.enum(['agent', 'superviseur', 'admin']).optional(),
   actif: z.boolean().optional(),
   must_change_password: z.boolean().optional(),
+  phone_number: z.string().min(6).max(20).optional(),
 });
 
 export async function adminRoutes(app: any): Promise<void> {
@@ -34,6 +35,8 @@ export async function adminRoutes(app: any): Promise<void> {
       comptes: comptes.map(c => ({
         matricule: c.matricule, nom: c.nom, prenom: c.prenom,
         role: c.role, actif: !!c.actif, must_change_password: !!c.must_change_password,
+        phone_number: c.phone_number ?? null,
+        phone_verified: !!c.phone_verified_at,
         failed_login_count: c.failed_login_count,
         locked_until: c.locked_until,
         last_login_at: c.last_login_at,
@@ -65,6 +68,7 @@ export async function adminRoutes(app: any): Promise<void> {
       role: p.data.role as Role | undefined,
       actif: p.data.actif !== undefined ? (p.data.actif ? 1 : 0) : undefined,
       must_change_password: p.data.must_change_password !== undefined ? (p.data.must_change_password ? 1 : 0) : undefined,
+      phone_number: p.data.phone_number,
     });
     db.audit(req.user.matricule, 'COMPTE_MODIFIE', `matricule=${target}`, req.ip);
     return reply.send({ success: true });

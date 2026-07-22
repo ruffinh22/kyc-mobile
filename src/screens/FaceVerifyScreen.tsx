@@ -1,56 +1,45 @@
 /**
- * FaceVerifyScreen.tsx — Vérification faciale interactive pour mobile
+ * FaceVerifyScreen.tsx — Vérification Face Liveness via WebView mobile
  * ─────────────────────────────────────────────────────────────────────────────
- * 1 capture live du visage
- * • Hold-bar 1s avant auto-capture
- * • Flash blanc à la capture
- * • Envoi du frame live vers /api/dossiers/verify-face-realtime pour obtenir un score Rekognition AWS
- * • Puis POST /api/dossiers/complete-with-face-verify pour finaliser le dossier
- * • Caméra de secours (expo-image-picker) si la permission ou le matériel caméra bloque
+ * Suite directe d'AcquisitionScreenPro : même charte "kyc-modern" (tokens
+ * C/R/T), même grammaire visuelle plein écran sombre que l'étape caméra
+ * (header overlay + point de statut + pastille dossier), pour que le passage
+ * capture CNI → preuve de vivacité soit ressenti comme une seule expérience
+ * continue plutôt que deux écrans différents.
+ *
+ * Cet écran charge la page web `/liveness-check?dossierId=...` dans une
+ * WebView. La page web gère le flux AWS Amplify Liveness et renvoie le
+ * résultat au parent via `window.ReactNativeWebView.postMessage(...)`.
  */
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, SafeAreaView,
-  StatusBar, ActivityIndicator, Platform, NativeModules
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  StatusBar,
+  ActivityIndicator,
+  Animated,
+  Platform,
 } from 'react-native';
-import { Camera, CameraType } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
+import WebView from 'react-native-webview';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
-
-type StepType = 'center' | 'left' | 'right';
-type StepState = 'idle' | 'active' | 'done';
-
-interface StepDef {
-  id: number;
-  label: string;
-  dir: StepType;
-  icon: string;
-}
-
-const STEPS: StepDef[] = [
-  { id: 0, label: 'Face', dir: 'center', icon: '😐' },
-  { id: 1, label: 'Gauche', dir: 'left', icon: '↩️' },
-  { id: 2, label: 'Droite', dir: 'right', icon: '↪️' },
-];
-
-const HOLD_MS = 1000;
-const TICK_MS = 50;
-// Nombre d'échecs de capture live avant de proposer la caméra de secours
-const MAX_LIVE_FAILURES = 2;
 
 type FaceVerifyParams = {
   dossierId: string;
   serverUrl: string;
-  rectoPath: string;
-  versoPath: string;
-  numeroMtn: string;
-  waAgent: string;
-  country: string;
-  fonctionAgent: string;
-  zoneAgent: string;
+  rectoPath?: string;
+  versoPath?: string;
+  numeroMtn?: string;
+  waAgent?: string;
+  country?: string;
+  fonctionAgent?: string;
+  zoneAgent?: string;
 };
+
 type FaceVerifyScreenProps = {
   route: { params: FaceVerifyParams };
   navigation: {
@@ -60,719 +49,412 @@ type FaceVerifyScreenProps = {
   };
 };
 
+// ── Étapes du flux (miroir visuel du stepper d'AcquisitionScreenPro) ───────
+const STAGES = [
+  { id: 1, label: 'Connexion' },
+  { id: 2, label: 'Scan facial' },
+  { id: 3, label: 'Résultat' },
+] as const;
+
 export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
   const {
     dossierId,
-    serverUrl,
-    rectoPath,
-    versoPath,
+    serverUrl: routeServerUrl,
     numeroMtn,
-    waAgent,
-    country,
-    fonctionAgent,
-    zoneAgent,
   } = route.params;
-  const { numeroAgent, preferredCamera, setPreferredCamera } = useAgentStore();
+  const agentServerUrl = useAgentStore((s) => s.serverUrl);
 
-  const cameraRef = useRef<any>(null);
-  const flashRef = useRef<View>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'done' | 'error'>('loading');
+  const [message, setMessage] = useState<string>('Préparation de la vérification…');
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const holdProgressRef = useRef(0);
-  const isHoldingRef = useRef(false);
-  const doneRef = useRef(false);
-  const liveFailuresRef = useRef(0);
+  const shake = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(shakeAnim, { toValue: 8, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -8, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 8, duration: 55, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 0, duration: 55, useNativeDriver: true }),
+    ]).start();
+  }, [shakeAnim]);
 
-  // State UI
-  const [stepStates, setStepStates] = useState<StepState[]>(['active', 'idle', 'idle']);
-  const [ovalColor, setOvalColor] = useState<'grey' | 'yellow' | 'green' | 'red'>('grey');
-  const [holdPct, setHoldPct] = useState(0);
-  const [showHold, setShowHold] = useState(false);
-  const [instrTitle, setInstrTitle] = useState('Initialisation…');
-  const [instrSub, setInstrSub] = useState('Préparation caméra');
-  // 'init' | 'capture' (caméra live) | 'fallback' (caméra de secours) |
-  // 'uploading' | 'done' | 'error'
-  const [phase, setPhase] = useState<'init' | 'capture' | 'fallback' | 'uploading' | 'done' | 'error'>('init');
-  const [errMsg, setErrMsg] = useState('');
-  const [selectedCamera, setSelectedCamera] = useState<'front' | 'back'>(preferredCamera === 'front' ? 'front' : preferredCamera === 'back' ? 'back' : 'front');
-  const [result, setResult] = useState<{ message: string } | null>(null);
-  const [cameraReady, setCameraReady] = useState(false);
+  // Petit pouls sur le point de statut pendant l'analyse — signal discret
+  // que le flux est bien en cours (rassurant sur un réseau terrain lent).
+  React.useEffect(() => {
+    if (status !== 'loading' && status !== 'ready') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.6, duration: 650, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [status, pulseAnim]);
 
-  const baseUrl = serverUrl?.replace(/\/$/, '') || '';
-  const apiBase = baseUrl.startsWith('http') ? baseUrl : `http://${baseUrl}`;
+  const baseServerUrl = useMemo(() => {
+    const url = (routeServerUrl || agentServerUrl || '').trim();
+    if (!url) return null;
+    return url.startsWith('http') ? url.replace(/\/$/, '') : `http://${url.replace(/\/$/, '')}`;
+  }, [agentServerUrl, routeServerUrl]);
 
-  useEffect(() => {
-    if (preferredCamera === 'front' || preferredCamera === 'back') {
-      setSelectedCamera(preferredCamera);
-    }
-  }, [preferredCamera]);
+  const livenessUrl = useMemo(() => {
+    if (!baseServerUrl || !dossierId) return null;
+    return `${baseServerUrl}/liveness-check?dossierId=${encodeURIComponent(dossierId)}`;
+  }, [baseServerUrl, dossierId]);
 
-  // ── Init ────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const cameraModule = NativeModules.CameraModule as any;
-        const nativeInfo = cameraModule?.checkCameraAvailability
-          ? await cameraModule.checkCameraAvailability()
-          : null;
-        const nativeAvailable = nativeInfo?.available === true && nativeInfo?.cameraPermissionGranted === true;
-
-        const perm = await ImagePicker.requestCameraPermissionsAsync();
-        if (!perm.granted || !nativeAvailable) {
-          setPhase('fallback');
-          setInstrTitle('Caméra live indisponible');
-          setInstrSub('Utilise l’appareil photo du téléphone pour continuer');
-          return;
+  const handleWebMessage = useCallback((event: any) => {
+    try {
+      const payload = JSON.parse(event.nativeEvent.data);
+      if (payload?.type === 'liveness-result') {
+        setMessage(payload.message || 'Vérification terminée');
+        if (payload.success) {
+          setStatus('done');
+          setTimeout(() => navigation.navigate('Idle'), 1800);
+        } else {
+          setError(payload.message || 'Vérification non concluante');
+          setStatus('error');
+          shake();
         }
-      } catch (err) {
-        setPhase('fallback');
-        setInstrTitle('Caméra live indisponible');
-        setInstrSub('Utilise l’appareil photo du téléphone pour continuer');
         return;
       }
+      if (payload?.type === 'liveness-error') {
+        setError(payload.error || 'Erreur Face Liveness');
+        setStatus('error');
+        shake();
+      }
+    } catch (err) {
+      setError('Réponse WebView invalide');
+      setStatus('error');
+      shake();
+    }
+  }, [navigation, shake]);
 
-      setPhase('capture');
-      setInstrTitle(STEPS[0].label);
-      setInstrSub('Placez votre visage dans l\'oval');
-    })();
+  const handleWebError = useCallback((syntheticEvent: any) => {
+    const nativeEvent = syntheticEvent.nativeEvent;
+    setError(nativeEvent.description || 'Erreur WebView');
+    setStatus('error');
+    shake();
+  }, [shake]);
+
+  const retry = useCallback(() => {
+    setError(null);
+    setStatus('loading');
+    setMessage('Préparation de la vérification…');
+    setReloadKey((k) => k + 1);
   }, []);
 
-  // ── Hold logic ──────────────────────────────────────────────────────────
-  const resetHold = useCallback(() => {
-    if (holdTimerRef.current) {
-      clearInterval(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-    isHoldingRef.current = false;
-    holdProgressRef.current = 0;
-    setHoldPct(0);
-    setShowHold(false);
-  }, []);
+  const activeStage = status === 'loading' ? 1 : status === 'ready' ? 2 : 3;
+  const dossierShort = dossierId ? `#${dossierId.slice(-6).toUpperCase()}` : null;
 
-  const startHold = useCallback(() => {
-    if (isHoldingRef.current || doneRef.current || !cameraReady) return;
-    isHoldingRef.current = true;
-    setShowHold(true);
-    holdProgressRef.current = 0;
+  // ── Serveur / dossier introuvable ──────────────────────────────────────
+  if (!livenessUrl) {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="light-content" backgroundColor="#05070C" />
+        <SafeAreaView style={s.centerBox}>
+          <View style={s.errorIconRing}>
+            <Text style={s.errorIconTxt}>⚠</Text>
+          </View>
+          <Text style={s.centerTitle}>Serveur introuvable</Text>
+          <Text style={s.centerSub}>Le serveur ou l’identifiant du dossier est manquant. Reviens en arrière et relance la soumission.</Text>
+          <TouchableOpacity style={s.primaryBtn} onPress={() => navigation.goBack()} activeOpacity={0.88}>
+            <Text style={s.primaryBtnTxt}>Retour</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </View>
+    );
+  }
 
-    holdTimerRef.current = setInterval(() => {
-      holdProgressRef.current += TICK_MS;
-      setHoldPct((holdProgressRef.current / HOLD_MS) * 100);
+  // ── Résultat : succès ────────────────────────────────────────────────────
+  if (status === 'done') {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="light-content" backgroundColor="#05070C" />
+        <SafeAreaView style={s.centerBox}>
+          <View style={s.successIconRing}>
+            <Text style={s.successIconTxt}>✓</Text>
+          </View>
+          <Text style={s.centerTitle}>Identité vérifiée</Text>
+          <Text style={s.centerSub}>{message}</Text>
+          {dossierShort && <View style={s.dossierPill}><Text style={s.dossierPillTxt}>Dossier {dossierShort}</Text></View>}
+          <View style={s.redirectRow}>
+            <ActivityIndicator size="small" color={C.yellow} />
+            <Text style={s.redirectTxt}>Redirection en cours…</Text>
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  }
 
-      if (holdProgressRef.current >= HOLD_MS) {
-        clearInterval(holdTimerRef.current!);
-        holdTimerRef.current = null;
-        autoCapture();
-      }
-    }, TICK_MS);
-  }, [cameraReady]);
+  // ── Résultat : erreur ─────────────────────────────────────────────────────
+  if (status === 'error') {
+    return (
+      <View style={s.root}>
+        <StatusBar barStyle="light-content" backgroundColor="#05070C" />
+        <SafeAreaView style={s.centerBox}>
+          <Animated.View style={{ transform: [{ translateX: shakeAnim }], alignItems: 'center' }}>
+            <View style={s.errorIconRing}>
+              <Text style={s.errorIconTxt}>✕</Text>
+            </View>
+            <Text style={s.centerTitle}>Vérification échouée</Text>
+            <Text style={s.centerSub}>{error || message}</Text>
+          </Animated.View>
+          {dossierShort && <View style={s.dossierPill}><Text style={s.dossierPillTxt}>Dossier {dossierShort}</Text></View>}
+          <View style={s.errorActions}>
+            <TouchableOpacity style={s.secondaryBtn} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+              <Text style={s.secondaryBtnTxt}>Retour</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.primaryBtn} onPress={retry} activeOpacity={0.88}>
+              <Text style={s.primaryBtnTxt}>↺ Réessayer</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  }
 
-  // ── Traitement commun d'une photo capturée (live ou secours) ──────────
-  const handleCapturedPhoto = useCallback(async (uri: string) => {
-    try {
-      resetHold();
-      setOvalColor('green');
-      doneRef.current = true;
-      setPhase('uploading');
-      setInstrTitle('Analyse en cours…');
-      setInstrSub('Capture du visage et calcul du score Rekognition AWS');
-      setStepStates(['done', 'idle', 'idle']);
-
-      const verifyFd = new FormData();
-      verifyFd.append('video_frame', {
-        uri,
-        type: 'image/jpeg',
-        name: 'live-front.jpg',
-      } as any);
-      verifyFd.append('recto_path', rectoPath || '');
-
-      const verifyRes = await fetch(`${apiBase}/api/dossiers/verify-face-realtime`, {
-        method: 'POST',
-        body: verifyFd,
-      });
-
-      if (!verifyRes.ok) {
-        throw new Error(`Vérification échouée (${verifyRes.status})`);
-      }
-
-      const verifyData = await verifyRes.json();
-      if (!verifyData?.success) {
-        throw new Error(verifyData?.message || 'Échec de la vérification');
-      }
-
-      const completeFd = new FormData();
-      completeFd.append('video_frame', {
-        uri,
-        type: 'image/jpeg',
-        name: 'live-front.jpg',
-      } as any);
-      completeFd.append('dossier_id', dossierId || '');
-      completeFd.append('numero_mtn', String(numeroMtn || '').replace(/\D/g, ''));
-      completeFd.append('wa_agent', waAgent || numeroAgent || '');
-      completeFd.append('username_agent', waAgent || numeroAgent || '');
-      completeFd.append('fonction_agent', fonctionAgent || '');
-      completeFd.append('zone_agent', zoneAgent || '');
-      completeFd.append('country', country || '');
-      completeFd.append('recto_path', rectoPath || '');
-      completeFd.append('verso_path', versoPath || '');
-      completeFd.append('score_visage', verifyData.score != null ? String(verifyData.score) : '');
-      completeFd.append('visage_match', verifyData.match ? '1' : '0');
-      completeFd.append('visage_motif', verifyData.motif || 'verification_live');
-
-      const completeRes = await fetch(`${apiBase}/api/dossiers/complete-with-face-verify`, {
-        method: 'POST',
-        body: completeFd,
-      });
-
-      if (!completeRes.ok) {
-        throw new Error(`Finalisation échouée (${completeRes.status})`);
-      }
-
-      const completeData = await completeRes.json();
-      setPhase('done');
-      setResult({ message: completeData?.message || verifyData?.message || 'Dossier validé avec succès !' });
-      setInstrTitle('✓ Vérification enregistrée');
-      setInstrSub('Le score facial a été recueilli et le dossier a été finalisé');
-
-      setTimeout(() => {
-        navigation.navigate('Idle');
-      }, 2200);
-    } catch (err: any) {
-      liveFailuresRef.current += 1;
-      console.warn('[FaceVerify] handleCapturedPhoto a échoué :', err);
-      setErrMsg(err.message || "Erreur d'analyse faciale");
-      setPhase('error');
-    }
-  }, [apiBase, country, dossierId, fonctionAgent, navigation, numeroAgent, numeroMtn, rectoPath, resetHold, versoPath, waAgent, zoneAgent]);
-
-  // ── Auto-capture (caméra live) ─────────────────────────────────────────
-  const autoCapture = useCallback(async () => {
-    if (!cameraRef.current || doneRef.current) return;
-
-    try {
-      if (flashRef.current) {
-        flashRef.current.setNativeProps({ opacity: 0.8 });
-        setTimeout(() => {
-          if (flashRef.current) flashRef.current.setNativeProps({ opacity: 0 });
-        }, 150);
-      }
-
-      // `fixOrientation` n'existe pas dans expo-camera : l'orientation est
-      // déjà correctement gérée via les métadonnées EXIF de la photo.
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.92,
-        base64: true,
-      });
-
-      if (!photo?.uri) {
-        throw new Error('Échec de la capture');
-      }
-
-      await handleCapturedPhoto(photo.uri);
-    } catch (err: any) {
-      liveFailuresRef.current += 1;
-      resetHold();
-
-      // Après plusieurs échecs de la caméra live, on bascule automatiquement
-      // sur la caméra de secours plutôt que de bloquer l'agent sur le terrain.
-      if (liveFailuresRef.current >= MAX_LIVE_FAILURES) {
-        setPhase('fallback');
-        setInstrTitle('Caméra live instable');
-        setInstrSub('Utilise l\u2019appareil photo du téléphone pour continuer');
-      } else {
-        setErrMsg(err.message || "Erreur d'analyse faciale");
-        setPhase('error');
-      }
-    }
-  }, [handleCapturedPhoto, resetHold]);
-
-  // ── Capture de secours (appareil photo natif via expo-image-picker) ────
-  const captureFallback = useCallback(async () => {
-    try {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) {
-        setErrMsg('Autorisation caméra refusée. Active-la dans les réglages du téléphone.');
-        setPhase('error');
-        return;
-      }
-
-      const res = await ImagePicker.launchCameraAsync({
-        cameraType: selectedCamera === 'front' ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
-        quality: 0.92,
-        base64: false,
-        allowsEditing: false,
-      });
-
-      if (res.canceled || !res.assets?.[0]?.uri) {
-        return;
-      }
-
-      doneRef.current = false;
-      await handleCapturedPhoto(res.assets[0].uri);
-    } catch (err: any) {
-      setErrMsg(err.message || "Erreur de la caméra de secours");
-      setPhase('error');
-    }
-  }, [handleCapturedPhoto, selectedCamera]);
-
-  // ── Handlers ────────────────────────────────────────────────────────────
-  const [arrow, setArrow] = useState<string | null>(null);
-
+  // ── Flux principal : connexion / scan en cours ─────────────────────────
   return (
     <SafeAreaView style={s.root}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
+      <StatusBar barStyle="light-content" backgroundColor="#05070C" />
 
-      {/* ── Caméra live ─────────────────────────────────────────────────── */}
-      {phase === 'capture' && (
-        <Camera
-          ref={cameraRef}
-          style={s.camera}
-          type={selectedCamera === 'front' ? CameraType.front : CameraType.back}
-          onCameraReady={() => setCameraReady(true)}
-        />
-      )}
-
-      {/* ── Flash ───────────────────────────────────────────────────────── */}
-      <View
-        ref={flashRef}
-        style={[s.flash]}
-        pointerEvents="none"
-      />
-
-      {/* ── Overlay UI (caméra live) ────────────────────────────────────── */}
-      {phase === 'capture' && (
-        <View style={s.overlay}>
-          {/* Header */}
-          <View style={s.header}>
-            <TouchableOpacity
-              style={s.closeBtn}
-              onPress={() => navigation.goBack()}
-              accessibilityRole="button"
-              accessibilityLabel="Retour"
-            >
-              <Text style={s.closeTxt}>✕</Text>
-            </TouchableOpacity>
-            <Text style={s.headerTitle}>Vérification faciale</Text>
-            <View style={s.cameraSwitchRow}>
-              <TouchableOpacity
-                style={[s.cameraSwitchBtn, selectedCamera === 'front' && s.cameraSwitchBtnActive]}
-                onPress={() => {
-                  setSelectedCamera('front');
-                  setPreferredCamera('front');
-                }}
-              >
-                <Text style={[s.cameraSwitchTxt, selectedCamera === 'front' && s.cameraSwitchTxtActive]}>Avant</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.cameraSwitchBtn, selectedCamera === 'back' && s.cameraSwitchBtnActive]}
-                onPress={() => {
-                  setSelectedCamera('back');
-                  setPreferredCamera('back');
-                }}
-              >
-                <Text style={[s.cameraSwitchTxt, selectedCamera === 'back' && s.cameraSwitchTxtActive]}>Arrière</Text>
-              </TouchableOpacity>
-            </View>
+      <View style={s.header}>
+        <TouchableOpacity style={s.closeBtn} onPress={() => navigation.goBack()} accessibilityRole="button" accessibilityLabel="Fermer la vérification">
+          <Text style={s.closeTxt}>✕</Text>
+        </TouchableOpacity>
+        <View style={s.titleWrap}>
+          <View style={s.titleTopRow}>
+            <Animated.View style={[s.statusDot, { transform: [{ scale: pulseAnim }] }]} />
+            <Text style={s.title}>Vérification faciale</Text>
           </View>
+          <Text style={s.subtitle}>
+            {dossierShort ? `Dossier ${dossierShort}` : 'Preuve de vivacité'}
+            {numeroMtn ? ` · ${numeroMtn}` : ''}
+          </Text>
+        </View>
+        <View style={s.headerSpacer} />
+      </View>
 
-          {/* Stepper */}
-          <View style={s.stepper}>
-            {STEPS.map((step, i) => (
-              <View key={step.id} style={s.stepItem}>
-                <View
-                  style={[
-                    s.stepDot,
-                    stepStates[i] === 'done'
-                      ? s.stepDone
-                      : stepStates[i] === 'active'
-                      ? s.stepActive
-                      : s.stepIdle,
-                  ]}
-                >
-                  <Text style={s.stepIcon}>{step.icon}</Text>
+      {/* ── Mini-stepper : Connexion → Scan facial → Résultat ──────────── */}
+      <View style={s.stepper}>
+        {STAGES.map((stage, i) => {
+          const done = activeStage > stage.id;
+          const active = activeStage === stage.id;
+          return (
+            <React.Fragment key={stage.id}>
+              <View style={s.stepItem}>
+                <View style={[s.stepDot, done && s.stepDotDone, active && s.stepDotActive]}>
+                  {done ? <Text style={s.stepDotCheck}>✓</Text> : <Text style={[s.stepDotNum, active && s.stepDotNumActive]}>{stage.id}</Text>}
                 </View>
-                <Text
-                  style={[
-                    s.stepLabel,
-                    stepStates[i] === 'active' && s.stepLabelActive,
-                  ]}
-                >
-                  {step.label}
-                </Text>
+                <Text style={[s.stepLabel, active && s.stepLabelActive]}>{stage.label}</Text>
               </View>
-            ))}
-          </View>
+              {i < STAGES.length - 1 && <View style={[s.stepLine, done && s.stepLineDone]} />}
+            </React.Fragment>
+          );
+        })}
+      </View>
 
-          {/* Instructions */}
-          <View style={s.instrBox}>
-            <Text style={s.instrTitle}>{instrTitle}</Text>
-            <Text style={s.instrSub}>{instrSub}</Text>
-          </View>
-
-          {/* Oval avec couleur */}
-          <View style={s.ovalContainer}>
-            <View
-              style={[
-                s.oval,
-                ovalColor === 'green'
-                  ? s.ovalGreen
-                  : ovalColor === 'red'
-                  ? s.ovalRed
-                  : ovalColor === 'yellow'
-                  ? s.ovalYellow
-                  : s.ovalGrey,
-              ]}
-            />
-            {arrow && <Text style={s.arrow}>{arrow}</Text>}
-          </View>
-
-          {/* Hold bar */}
-          {showHold && (
-            <View style={s.holdBarContainer}>
-              <View style={[s.holdBar, { width: `${holdPct}%` }]} />
+      <View style={s.webviewCard}>
+        <WebView
+          key={reloadKey}
+          source={{ uri: livenessUrl }}
+          style={s.webview}
+          onLoadStart={() => { setStatus('loading'); setMessage('Connexion à la vérification…'); }}
+          onLoadEnd={() => setStatus((prev) => (prev === 'loading' ? 'ready' : prev))}
+          onMessage={handleWebMessage}
+          onError={handleWebError}
+          javaScriptEnabled
+          domStorageEnabled
+          startInLoadingState
+        />
+        {status === 'loading' && (
+          <View style={s.loadingOverlay}>
+            <View style={s.loadingRing}>
+              <ActivityIndicator size="large" color={C.yellow} />
             </View>
-          )}
-
-          {/* Controls */}
-          <View style={s.controls}>
-            <TouchableOpacity
-              style={s.captureBtn}
-              onPress={startHold}
-              onLongPress={startHold}
-              disabled={!cameraReady}
-              accessibilityRole="button"
-              accessibilityLabel={cameraReady ? 'Maintenir pour capturer en live' : 'Préparation caméra'}
-              accessibilityState={{ disabled: !cameraReady }}
-            >
-              <Text style={s.captureTxt}>
-                {cameraReady ? 'Maintenir pour capturer en live' : 'Préparation caméra…'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={s.fallbackLink}
-              onPress={() => setPhase('fallback')}
-            >
-              <Text style={s.fallbackLinkTxt}>Problème avec la caméra ? Utiliser l'appareil photo</Text>
-            </TouchableOpacity>
+            <Text style={s.loadingText}>{message}</Text>
           </View>
-        </View>
-      )}
+        )}
+      </View>
 
-      {/* ── Caméra de secours ───────────────────────────────────────────── */}
-      {phase === 'fallback' && (
-        <View style={s.messageBox}>
-          <Text style={s.instrTitle}>{instrTitle}</Text>
-          <Text style={[s.instrSub, { marginBottom: 24, textAlign: 'center' }]}>{instrSub}</Text>
-          <TouchableOpacity style={s.retryBtn} onPress={captureFallback} accessibilityRole="button" accessibilityLabel="Ouvrir l'appareil photo">
-            <Text style={s.retryTxt}>Ouvrir l'appareil photo</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[s.fallbackLink, { marginTop: 20 }]}
-            onPress={() => {
-              liveFailuresRef.current = 0;
-              setPhase('capture');
-              setCameraReady(false);
-            }}
-          >
-            <Text style={s.fallbackLinkTxt}>Réessayer la caméra live</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* ── Loading/Uploading ───────────────────────────────────────────── */}
-      {phase === 'uploading' && (
-        <View style={s.messageBox}>
-          <ActivityIndicator size="large" color={C.yellow} />
-          <Text style={s.messageTxt}>{instrSub}</Text>
-        </View>
-      )}
-
-      {/* ── Error ───────────────────────────────────────────────────────── */}
-      {phase === 'error' && (
-        <View style={s.messageBox}>
-          <Text style={s.errorTxt}>{errMsg}</Text>
-          <TouchableOpacity
-            style={s.retryBtn}
-            onPress={() => {
-              doneRef.current = false;
-              setPhase('capture');
-              setCameraReady(false);
-              setStepStates(['active', 'idle', 'idle']);
-              setOvalColor('grey');
-              setInstrTitle(STEPS[0].label);
-              setInstrSub("Placez votre visage dans l'oval");
-            }}
-          >
-            <Text style={s.retryTxt}>Recommencer</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[s.fallbackLink, { marginTop: 16 }]}
-            onPress={() => setPhase('fallback')}
-          >
-            <Text style={s.fallbackLinkTxt}>Utiliser l'appareil photo à la place</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* ── Done ────────────────────────────────────────────────────────── */}
-      {phase === 'done' && (
-        <View style={s.messageBox}>
-          <Text style={s.successIcon}>✓</Text>
-          <Text style={s.successTxt}>{result?.message}</Text>
-        </View>
-      )}
+      <View style={s.footer}>
+        <Text style={s.footerHint}>
+          {status === 'ready'
+            ? 'Centre ton visage dans le cadre et suis les instructions à l’écran'
+            : 'Ne quitte pas cette page pendant le chargement'}
+        </Text>
+      </View>
     </SafeAreaView>
   );
 }
 
+// ── Styles ───────────────────────────────────────────────────────────────
+// Palette volontairement sombre (comme le mode caméra d'AcquisitionScreenPro)
+// pour rester cohérent avec l'étape précédente du parcours et ne pas
+// distraire l'agent pendant la capture live du visage.
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg0 },
-  camera: { flex: 1 },
-  flash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0)',
-    opacity: 0,
+  root: {
+    flex: 1,
+    backgroundColor: '#05070C',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 12) : 0,
+    paddingBottom: Platform.OS === 'android' ? 8 : 0,
   },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    paddingBottom: 20,
-  },
+
+  // Header overlay
   header: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-  },
-  cameraSwitchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  cameraSwitchBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.12)',
-  },
-  cameraSwitchBtnActive: {
-    backgroundColor: C.blue,
-    borderColor: C.blue,
-  },
-  cameraSwitchTxt: {
-    color: C.ink,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  cameraSwitchTxtActive: {
-    color: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(15,23,32,0.72)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
   },
   closeBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.08)',
-    shadowColor: '#0F1720',
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  closeTxt: { fontSize: 20, fontWeight: '700', color: C.ink },
-  headerTitle: {
-    fontSize: T.base,
-    fontWeight: '900',
-    color: 'rgba(255, 255, 255, 0.98)',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
+  closeTxt: { fontSize: 18, color: '#fff', fontWeight: '700' },
+  headerSpacer: { width: 42 },
+  titleWrap: { flex: 1, alignItems: 'center' },
+  titleTopRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.yellow },
+  title: { fontSize: T.md, fontWeight: '800', color: '#fff', letterSpacing: -0.2 },
+  subtitle: { fontSize: T.xs, color: 'rgba(255,255,255,0.55)', marginTop: 2, fontVariant: ['tabular-nums'] },
+
+  // Stepper
   stepper: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: 'rgba(0, 0, 0, 0.15)',
-    borderRadius: R.lg,
-    marginHorizontal: 20,
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center',
+    paddingVertical: 16, paddingHorizontal: 28,
   },
-  stepItem: { alignItems: 'center', gap: 8 },
+  stepItem: { alignItems: 'center', gap: 6, width: 74 },
   stepDot: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  stepIdle: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  stepActive: {
-    backgroundColor: C.yellow,
-    borderColor: C.yellow,
-  },
-  stepDone: {
-    backgroundColor: 'rgba(76, 175, 80, 0.8)',
-    borderColor: 'rgba(76, 175, 80, 0.95)',
-  },
-  stepIcon: { fontSize: 24 },
-  stepLabel: {
-    fontSize: T.xs,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.6)',
-  },
-  stepLabelActive: {
-    color: C.yellow,
-  },
-  instrBox: {
-    alignItems: 'center',
-    paddingVertical: 16,
-  },
-  instrTitle: {
-    fontSize: T.lg,
-    fontWeight: '800',
-    color: 'rgba(255, 255, 255, 0.98)',
-    marginBottom: 4,
-  },
-  instrSub: {
-    fontSize: T.sm,
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  ovalContainer: {
+  stepDotActive: { backgroundColor: C.blue, borderColor: C.yellow },
+  stepDotDone: { backgroundColor: 'rgba(34,197,94,0.18)', borderColor: C.success },
+  stepDotNum: { fontSize: T.xs, fontWeight: '700', color: 'rgba(255,255,255,0.5)' },
+  stepDotNumActive: { color: '#fff' },
+  stepDotCheck: { fontSize: T.xs, fontWeight: '800', color: C.success },
+  stepLabel: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.4)', textAlign: 'center' },
+  stepLabelActive: { color: '#fff' },
+  stepLine: { flex: 1, height: 1.5, backgroundColor: 'rgba(255,255,255,0.14)', marginTop: 13, marginHorizontal: -6 },
+  stepLineDone: { backgroundColor: C.success },
+
+  // Carte WebView
+  webviewCard: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  oval: {
-    width: 180,
-    height: 220,
-    borderRadius: 90,
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  ovalGrey: {
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  ovalYellow: {
-    borderColor: C.yellow,
-  },
-  ovalGreen: {
-    borderColor: 'rgba(76, 175, 80, 0.9)',
-  },
-  ovalRed: {
-    borderColor: 'rgba(244, 67, 54, 0.9)',
-  },
-  arrow: {
-    fontSize: 40,
-    fontWeight: '600',
-    color: C.yellow,
-    marginTop: 12,
-  },
-  holdBarContainer: {
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    borderRadius: 2,
-    marginHorizontal: 40,
+    marginHorizontal: 14,
+    marginBottom: 12,
+    borderRadius: R.xl,
     overflow: 'hidden',
-  },
-  holdBar: {
-    height: '100%',
-    backgroundColor: C.yellow,
-  },
-  controls: {
-    alignItems: 'center',
-    paddingBottom: 16,
-    gap: 12,
-  },
-  captureBtn: {
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: R.pill,
+    backgroundColor: '#000',
     borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.08)',
+    borderColor: 'rgba(255,255,255,0.10)',
+    minHeight: 260,
+    marginTop: 8,
+  },
+  webview: { flex: 1, backgroundColor: '#000' },
+
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(5,7,12,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    gap: 14,
+  },
+  loadingRing: {
+    width: 84, height: 84, borderRadius: 42,
+    borderWidth: 1.5, borderColor: 'rgba(255,204,0,0.35)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  loadingText: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: T.sm,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  footer: {
+    paddingHorizontal: 24, paddingBottom: 18, paddingTop: 2,
     alignItems: 'center',
   },
-  captureTxt: {
-    fontSize: T.sm,
-    fontWeight: '700',
-    color: C.ink,
-  },
-  fallbackLink: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  fallbackLinkTxt: {
+  footerHint: {
     fontSize: T.xs,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.85)',
-    textDecorationLine: 'underline',
+    color: 'rgba(255,255,255,0.45)',
+    textAlign: 'center',
   },
-  messageBox: {
+
+  // États plein écran (succès / erreur / serveur introuvable)
+  centerBox: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    paddingHorizontal: 32,
+    gap: 6,
   },
-  messageTxt: {
-    marginTop: 16,
-    fontSize: T.base,
-    color: 'rgba(255, 255, 255, 0.8)',
-    textAlign: 'center',
+  successIconRing: {
+    width: 88, height: 88, borderRadius: 44,
+    backgroundColor: 'rgba(34,197,94,0.14)',
+    borderWidth: 1.5, borderColor: C.success,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 18,
   },
-  errorTxt: {
-    fontSize: T.base,
-    color: 'rgba(244, 67, 54, 0.9)',
-    textAlign: 'center',
+  successIconTxt: { fontSize: 40, color: C.success, fontWeight: '800' },
+  errorIconRing: {
+    width: 88, height: 88, borderRadius: 44,
+    backgroundColor: 'rgba(248,113,113,0.14)',
+    borderWidth: 1.5, borderColor: C.danger,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 18,
   },
-  retryBtn: {
-    marginTop: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 28,
+  errorIconTxt: { fontSize: 36, color: C.dangerText || '#f87171', fontWeight: '800' },
+  centerTitle: {
+    fontSize: T.xl, fontWeight: '900', color: '#fff',
+    textAlign: 'center', letterSpacing: -0.3, marginBottom: 8,
+  },
+  centerSub: {
+    fontSize: T.sm, color: 'rgba(255,255,255,0.62)',
+    textAlign: 'center', lineHeight: 20, marginBottom: 6,
+  },
+  dossierPill: {
+    marginTop: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
+    borderRadius: R.pill, paddingVertical: 6, paddingHorizontal: 14,
+  },
+  dossierPillTxt: { fontSize: T.xs, fontWeight: '700', color: 'rgba(255,255,255,0.7)', fontVariant: ['tabular-nums'] },
+
+  redirectRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 22 },
+  redirectTxt: { fontSize: T.xs, color: 'rgba(255,255,255,0.5)', fontWeight: '600' },
+
+  errorActions: { flexDirection: 'row', gap: 10, marginTop: 26, width: '100%' },
+  primaryBtn: {
+    flex: 1,
     backgroundColor: C.yellow,
     borderRadius: R.lg,
-    shadowColor: C.shadowYellow,
-    shadowOpacity: 0.24,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
+    paddingVertical: 15,
+    alignItems: 'center',
+    shadowColor: C.shadowYellow, shadowOpacity: 0.3, shadowRadius: 14, elevation: 8,
+    marginTop: 22,
   },
-  retryTxt: {
-    fontSize: T.sm,
-    fontWeight: '700',
-    color: C.blue,
+  primaryBtnTxt: { fontSize: T.base, fontWeight: '800', color: C.blue },
+  secondaryBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: R.lg,
+    paddingVertical: 15,
+    alignItems: 'center',
   },
-  successIcon: {
-    fontSize: 60,
-    fontWeight: '800',
-    color: 'rgba(76, 175, 80, 0.9)',
-    marginBottom: 12,
-  },
-  successTxt: {
-    fontSize: T.base,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.9)',
-    textAlign: 'center',
-  },
+  secondaryBtnTxt: { fontSize: T.base, fontWeight: '700', color: '#fff' },
 });

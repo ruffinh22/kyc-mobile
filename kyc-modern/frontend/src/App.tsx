@@ -7,6 +7,7 @@ import { LoadingCenter } from './components/ui';
 import { AccueilPage } from './pages/AccueilPage';
 import { AcquisitionPage } from './pages/AcquisitionPage';
 import { FaceVerifyInteractivePage } from './pages/FaceVerifyInteractivePage';
+import { FaceLivenessCheck } from './pages/FaceLivenessCheck';
 
 // ── Agent pages ───────────────────────────────────────────────────────────────
 import { AgentDashboard, AgentFileAttente, AgentMesDossiers, AgentAcquisition } from './pages/agent/DossierPages';
@@ -37,6 +38,7 @@ function PublicRouter() {
 
   if (route === '/acquisition' || route === '/acquisition.html') return <AcquisitionPage />;
   if (route === '/face-verify-interactive' || route === '/face-verify-interactive.html') return <FaceVerifyInteractivePage />;
+  if (route === '/liveness-check' || route === '/liveness-check.html') return <FaceLivenessCheck />;
   if (route === '/login') return null;
 
   return <AccueilPage />;
@@ -132,7 +134,9 @@ function AppContent() {
     pathname === '/acquisition' ||
     pathname === '/acquisition.html' ||
     pathname === '/face-verify-interactive' ||
-    pathname === '/face-verify-interactive.html';
+    pathname === '/face-verify-interactive.html' ||
+    pathname === '/liveness-check' ||
+    pathname === '/liveness-check.html';
 
   if (!user && isPublicPage) return <PublicRouter />;
 

@@ -122,7 +122,7 @@ export function OutgoingCallScreen({ route, navigation }: any) {
           // du back-office arrivera (SignalingService.handleOffer).
           callStore.setConnecting();
           signalingService.acceptCall()
-            .then(() => navigation.replace('Call', { numeroMtn }))
+            .then(() => navigation.replace('Call', { numeroMtn, callUuid: callStore.callUuid }))
             .catch(() => {
               setPhase('unavailable');
               setReason('Caméra/micro indisponible');

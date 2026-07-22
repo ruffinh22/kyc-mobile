@@ -1,0 +1,426 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - File d'attente</title><script src="https://cdn.tailwindcss.com"></script><script src="/static/pages/video-call.js"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:'Inter',system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#1A1A1A 0%,#2a2a2a 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#d1d5db;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#374151;color:#fff}
+.sb-link.active{background:#eab308;color:#111827;font-weight:600}
+</style>
+<script>
+async function chargerSidebar(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-50 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 p-6" x-data="fileAttente()" x-init="init()">
+<div class="flex justify-between mb-6"><div><h1 class="text-2xl font-bold text-gray-800">📋 File d'attente</h1><p class="text-gray-500 text-sm">Mis à jour: <span x-text="derniereMaj"></span></p></div><div class="flex gap-2">
+<button @click="demanderAide()" :disabled="actionEnCours" style="font-size:13px;background:#fff;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:999px;cursor:pointer;font-weight:600">🆘 Aide</button>
+<button @click="togglePause()" style="font-size:13px;background:#fff;color:#d97706;border:1px solid #fed7aa;padding:6px 14px;border-radius:999px;cursor:pointer;font-weight:600">⏸️ Pause</button>
+<button @click="charger()" style="font-size:13px;background:#fff;color:#475569;border:1px solid #e2e8f0;padding:6px 14px;border-radius:999px;cursor:pointer;font-weight:600">🔄 Rafraîchir</button>
+</div></div>
+<div x-show="dossiersAttenteVieux>0" class="bg-red-500 text-white text-center py-2 mb-4 rounded">⚠️ <span x-text="dossiersAttenteVieux"></span> dossier(s) en attente > 5 min !</div>
+<div class="grid grid-cols-7 gap-2 mb-4">
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #f97316"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="stats.en_attente">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">En attente</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #94a3b8"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="stats.total">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">Total</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #3b82f6"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="stats.en_cours">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">En cours</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #22c55e"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="stats.accepte">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">Acceptés</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #ef4444"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="stats.rejete">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">Rejetés</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #8b5cf6"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="tempsMoyenTraitement()+' min'">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">Tps moyen</div></div>
+<div style="background:#fff;border-radius:12px;padding:12px 8px;text-align:center;border-top:3px solid #0ea5e9"><div style="font-size:22px;font-weight:600;color:#0f172a" x-text="touchTimeMoyen()+' min'">0</div><div style="font-size:11px;color:#64748b;margin-top:2px">Touch Time</div></div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+<div><div class="flex items-center justify-between mb-2"><h2 class="font-bold text-gray-800 uppercase text-sm">📥 En attente</h2><span class="bg-orange-100 text-orange-800 text-xs font-bold px-2 py-1 rounded-full" x-text="enAttente.length"></span></div><div class="space-y-2">
+<template x-for="d in enAttente" :key="d.id"><div style="background:#fff;border:0.5px solid #d1d5db;border-left:4px solid #378add;border-radius:0;padding:12px 14px;width:100%;box-sizing:border-box" :class="(distributionMode==='auto'?'opacity-60 ':'')+(dureeMinutes(d.created_at)>5?'carte-urgente':'')">
+<div class="flex justify-between items-center mb-2"><span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#374151"><span style="color:#378add;font-size:16px">🔒</span> Dossier masqué</span><span style="font-size:10px;font-family:monospace;color:#9ca3af" x-text="d.id"></span></div>
+<div class="flex flex-wrap gap-1.5 mb-1">
+<span style="font-size:11px;background:#f1f5f9;color:#475569;padding:2px 8px;border-radius:6px" x-text="d.heure_reception"></span>
+<span :style="dureeMinutes(d.created_at)>5?'background:#fceaea;color:#b91c1c;font-weight:600':'background:#f1f5f9;color:#475569'" style="font-size:11px;padding:2px 8px;border-radius:6px" x-text="dureeMinutes(d.created_at)+' min'"></span>
+<span style="font-size:11px;background:#faeeda;color:#854f0b;padding:2px 8px;border-radius:6px">En attente</span>
+</div>
+<p style="font-size:11px;color:#9ca3af;font-style:italic;margin-top:6px">Informations visibles à la prise en charge</p>
+<button x-show="distributionMode==='manuel'" @click="prendre(d.id)" :disabled="actionEnCours" style="width:100%;margin-top:10px;background:#eab308;color:#fff;font-weight:600;padding:8px;border-radius:8px;border:none;cursor:pointer;font-size:13px">👉 Prendre</button>
+</div></template>
+<div x-show="enAttente.length===0" class="text-center py-4 text-gray-400 text-sm">📭 Aucun dossier en attente</div>
+</div></div>
+<div><div class="flex items-center justify-between mb-2"><h2 class="font-bold text-gray-800 uppercase text-sm">⚡ En cours</h2><span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded-full" x-text="enCours.length"></span></div><div class="space-y-2"><button x-show="distributionMode==='auto'&&enCours.length===1" @click="appeler()" :disabled="actionEnCours" class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-semibold py-2 rounded-lg mb-2 text-sm">📞 Appeler un dossier</button>
+<template x-for="d in enCours" :key="d.id"><div class="bg-white p-3" style="width:100%;box-sizing:border-box;border:0.5px solid #e5e7eb;border-left:3px solid #3b82f6;border-radius:8px">
+<div class="flex justify-between items-start mb-3 gap-2"><div class="flex gap-2">
+<div class="bg-gray-100 rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center" style="width:48px;height:48px;flex:none"><img x-show="photosUrls[d.id]&&photosUrls[d.id].recto" :src="photosUrls[d.id]?photosUrls[d.id].recto:''" @click="agrandir(photosUrls[d.id]&&photosUrls[d.id].recto)" class="w-full h-full object-cover cursor-pointer"><span x-show="!(photosUrls[d.id]&&photosUrls[d.id].recto)" class="text-gray-300" style="font-size:8px">Recto</span></div>
+<div class="bg-gray-100 rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center" style="width:48px;height:48px;flex:none"><img x-show="photosUrls[d.id]&&photosUrls[d.id].verso" :src="photosUrls[d.id]?photosUrls[d.id].verso:''" @click="agrandir(photosUrls[d.id]&&photosUrls[d.id].verso)" class="w-full h-full object-cover cursor-pointer"><span x-show="!(photosUrls[d.id]&&photosUrls[d.id].verso)" class="text-gray-300" style="font-size:8px">Verso</span></div>
+<div class="bg-gray-100 rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center" style="width:48px;height:48px;flex:none"><img x-show="photosUrls[d.id]&&photosUrls[d.id].live" :src="photosUrls[d.id]?photosUrls[d.id].live:''" @click="agrandir(photosUrls[d.id]&&photosUrls[d.id].live)" class="w-full h-full object-cover cursor-pointer"><span x-show="!(photosUrls[d.id]&&photosUrls[d.id].live)" class="text-gray-300" style="font-size:8px">Live</span></div>
+</div><div class="text-right"><p class="text-xs text-gray-400 font-mono" x-text="d.id"></p><p class="text-xs text-gray-500 mt-0.5">Heure: <span class="font-semibold" x-text="d.heure_prise||d.heure_reception||'?'"></span></p></div></div>
+
+<div class="flex gap-3 mb-2">
+<div class="flex-1"><p class="text-[11px] font-bold text-gray-500 uppercase mb-0.5">Numero MTN webcare</p><div class="flex items-center gap-1.5"><span class="font-bold text-sm text-gray-900" x-text="d.numero_mtn"></span><button @click="copier(d.numero_mtn)" class="text-[11px] text-gray-500 border border-gray-300 rounded px-1.5 py-0.5 hover:bg-gray-50">Copier</button></div></div>
+<div class="flex-1" x-show="d.wa_agent"><p class="text-[11px] font-bold text-gray-500 uppercase mb-0.5">Agent acquisition</p><div class="flex items-center gap-1.5"><span style="color:#25D366;font-size:15px">&#9990;</span><span class="font-bold text-sm text-gray-900" x-text="d.wa_agent"></span><button @click="copier(d.wa_agent)" class="text-[11px] text-gray-500 border border-gray-300 rounded px-1.5 py-0.5 hover:bg-gray-50">Copier</button></div></div>
+</div>
+
+
+<div class="grid grid-cols-2 gap-2"><button @click="accepter(d.id)" :disabled="actionEnCours" style="background:#22c55e;color:#fff;font-weight:600;padding:10px;border-radius:8px;border:none;cursor:pointer;font-size:13px">&#10003; Accepter</button><button @click="ouvrirRejet(d)" :disabled="actionEnCours" style="background:#ef4444;color:#fff;font-weight:600;padding:10px;border-radius:8px;border:none;cursor:pointer;font-size:13px">&#10005; Rejeter</button></div>
+<button x-show="d.wa_agent" @click="lancerAppelVideo(d)" style="width:100%;margin-top:8px;background:#7c3aed;color:#fff;font-weight:600;padding:10px;border-radius:8px;border:none;cursor:pointer;font-size:13px">📹 Appel video</button>
+</div></template>
+<div x-show="enCours.length===0" class="text-center py-4 text-gray-400 text-sm">💤 Aucun dossier en cours</div>
+</div></div>
+</div>
+<div x-show="modalRejet.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-2xl p-6 max-w-md w-full"><h3 class="text-xl font-bold mb-4">❌ Rejeter</h3><p class="text-sm text-gray-600 mb-2">Numéro: <strong x-text="modalRejet.numero"></strong></p><label class="block text-sm font-semibold mt-4 mb-2">Motif *</label><textarea x-model="modalRejet.raison" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg"></textarea><div class="flex gap-2 mt-6"><button @click="fermerRejet()" class="flex-1 py-2 border border-gray-300 rounded-lg">Annuler</button><button @click="confirmerRejet()" :disabled="!modalRejet.raison||modalRejet.raison.length<3" class="flex-1 py-2 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 text-white font-semibold rounded-lg">Confirmer</button></div></div></div>
+<div x-show="modalAccept.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-2xl p-6 max-w-md w-full"><h3 class="text-xl font-bold mb-4">✅ Accepter</h3><p class="text-sm text-gray-600 mb-2">Numéro: <strong x-text="modalAccept.numero"></strong></p><p class="text-sm text-gray-600 mt-2">Confirmer l'acceptation de ce dossier ?</p><div class="flex gap-2 mt-6"><button @click="fermerAccept()" class="flex-1 py-2 border border-gray-300 rounded-lg">Annuler</button><button @click="confirmerAccept()" class="flex-1 py-2 bg-green-500 hover:bg-green-600 disabled:bg-gray-300 text-white font-semibold rounded-lg">Confirmer</button></div></div></div>
+<div x-show="modalPause.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-2xl p-6 max-w-md w-full"><h3 class="text-xl font-bold mb-4">⏸️ Passer en pause</h3><p class="text-sm text-gray-600 mt-2">Vos dossiers en cours vont repartir dans la file. Confirmer la pause ?</p><div class="flex gap-2 mt-6"><button @click="modalPause.ouvert=false" class="flex-1 py-2 border border-gray-300 rounded-lg">Annuler</button><button @click="confirmerPause()" class="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg">Confirmer</button></div></div></div>
+<div x-show="modalBloc.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-2xl p-6 max-w-md w-full"><div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><div style="width:42px;height:42px;border-radius:12px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:22px">&#9888;</div><h3 class="text-xl font-bold" x-text="modalBloc.titre"></h3></div><p class="text-sm text-gray-600" x-text="modalBloc.message"></p><div class="flex gap-2 mt-6"><button @click="modalBloc.ouvert=false" class="flex-1 py-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-lg">Compris</button></div></div></div>
+<!-- Lightbox capture -->
+<div x-show="lightbox" @click="lightbox=''" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4 cursor-zoom-out"><img :src="lightbox" class="max-h-full max-w-full rounded-lg shadow-2xl"></div>
+<div x-show="toast.message" class="fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white font-semibold z-50" :class="toast.type==='success'?'bg-green-500':'bg-red-500'"><span x-text="toast.message"></span></div>
+<div x-show="enPause" class="fixed inset-0 z-[100] flex flex-col items-center justify-center" style="display:none;background:#fdf6d8;padding:24px">
+  <div style="font-size:56px;font-weight:800;color:#2563eb;letter-spacing:4px;line-height:1;margin-bottom:8px">&#10073;&#10073;</div>
+  <h1 style="font-size:38px;font-weight:800;margin:0 0 4px;color:#ea580c">Vous êtes en pause</h1>
+  <p style="font-size:18px;color:#475569;margin:0 0 32px" x-text="user.prenom?(user.prenom+' '+(user.nom||'')):(user.matricule||'')"></p>
+  <div style="background:#fff;border-radius:18px;padding:24px 56px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.05);margin-bottom:18px">
+    <p style="font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:#94a3b8;margin:0">Duree de la pause</p>
+    <p style="font-size:60px;font-family:monospace;font-weight:700;margin:8px 0 4px;color:#0f172a" x-text="chronoPause"></p>
+    <p style="font-size:14px;color:#94a3b8;margin:0">Depuis <span x-text="heurePause()"></span></p>
+  </div>
+  <div style="display:flex;gap:14px;margin-bottom:32px">
+    <div style="background:#fff;border-radius:14px;padding:16px 32px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.05)"><p style="font-size:14px;color:#94a3b8;margin:0">Pauses</p><p style="font-size:26px;font-weight:700;margin:2px 0 0;color:#0f172a" x-text="resumePauses.nb"></p></div>
+    <div style="background:#fff;border-radius:14px;padding:16px 32px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.05)"><p style="font-size:14px;color:#94a3b8;margin:0">Temps total</p><p style="font-size:26px;font-weight:700;margin:2px 0 0;color:#0f172a" x-text="resumePauses.total"></p></div>
+  </div>
+  <button @click="togglePause()" style="background:#16a34a;color:#fff;border:none;padding:18px 56px;border-radius:14px;font-size:20px;font-weight:700;cursor:pointer">&#9654; Reprendre le travail</button>
+  <p style="font-size:14px;color:#94a3b8;font-style:italic;margin-top:20px">Votre superviseur voit que vous êtes en pause</p>
+</div>
+
+<div x-show="modalVideo.ouvert" class="fixed inset-0 z-[200] flex flex-col" style="background:#0f172a">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#1e293b">
+    <div style="color:#fff;font-weight:600;font-size:14px">📹 Appel video — Agent <span x-text="modalVideo.agent"></span></div>
+    <div style="color:#94a3b8;font-size:13px" x-text="modalVideo.statut"></div>
+  </div>
+  <div style="flex:1;position:relative;background:#000;overflow:hidden">
+    <video id="video-distant" autoplay playsinline style="width:100%;height:100%;object-fit:contain;background:#000"></video>
+    <video id="video-local" autoplay playsinline muted style="position:absolute;bottom:16px;right:16px;width:120px;height:160px;object-fit:cover;border:2px solid #fff;border-radius:10px;background:#334155"></video>
+  </div>
+  <div style="display:flex;justify-content:center;padding:16px;background:#1e293b">
+    <button @click="raccrocherVideo()" style="background:#ef4444;color:#fff;border:none;padding:14px 40px;border-radius:999px;font-weight:700;font-size:16px;cursor:pointer">☎ Raccrocher</button>
+  </div>
+</div>
+</main></div>
+<script>
+function fileAttente(){
+  return {
+    lancerAppelVideo(d){
+      if(!d || !d.wa_agent){ this.afficherToast('Numero agent manquant','error'); return; }
+      this.modalVideo={ouvert:true,statut:'Connexion...',agent:d.wa_agent};
+      const self=this;
+      VideoCall.setOnStateChange((etat,extra)=>{
+        if(etat==='connected'){ self.modalVideo.statut='Appel en cours...'; }
+        else if(etat==='terrain-absent'){ self.modalVideo.statut='Agent terrain non connecte'; }
+        else if(etat==='local-stream'){ const v=document.getElementById('video-local'); if(v) v.srcObject=extra.stream; }
+        else if(etat==='remote-stream'){ const v=document.getElementById('video-distant'); if(v) v.srcObject=extra.stream; self.modalVideo.statut='Connecte'; }
+        else if(etat==='call-connected'){ self.modalVideo.statut='Connecte'; }
+        else if(etat==='remote-hangup'){ self.afficherToast('Agent a raccroche','info'); self.raccrocherVideo(); }
+        else if(etat==='call-ended'){ self.modalVideo.statut='Appel termine'; }
+        else if(etat==='refus'){ self.afficherToast('Appel refuse par l agent terrain','info'); self.raccrocherVideo(); }
+      });
+      VideoCall.connecter('backoffice', d.wa_agent);
+      setTimeout(()=>{ VideoCall.appeler(); }, 600);
+    },
+    raccrocherVideo(){
+      try{ VideoCall.terminer(true); VideoCall.deconnecter(); }catch(e){}
+      this.modalVideo={ouvert:false,statut:'',agent:''};
+    },
+    copier(txt){
+      txt=String(txt||'');
+      const ok=()=>{ this.afficherToast('Copie : '+txt); };
+      if(navigator.clipboard && window.isSecureContext){
+        navigator.clipboard.writeText(txt).then(ok).catch(()=>this._copieFallback(txt,ok));
+      } else { this._copieFallback(txt,ok); }
+    },
+    _copieFallback(txt,ok){
+      try{ const ta=document.createElement('textarea'); ta.value=txt;
+        ta.style.position='fixed'; ta.style.top='-1000px'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        const r=document.execCommand('copy'); document.body.removeChild(ta);
+        if(r){ ok&&ok(); } else { this.afficherToast('Copie impossible','error'); }
+      }catch(e){ console.error('copie echec',e); this.afficherToast('Copie impossible','error'); }
+    },
+    user:{},
+    stats:{total:0,en_attente:0,en_cours:0,accepte:0,rejete:0},
+    enAttente:[],
+    modalVideo:{ouvert:false,statut:'',agent:''},
+    distributionMode:'manuel',
+    enPause:false,
+    chronoPause:'00:00',
+    chronoTimer:null,
+    pauseDebut:null,
+    resumePauses:{nb:0,total:'0 min'},
+    enCours:[],
+    tousDossiers:[],
+    photosUrls:{},
+    lightbox:'',
+    loading:false,
+    actionEnCours:false,
+    derniereMaj:'',
+    dossiersAttenteVieux:0,
+    modalRejet:{ouvert:false,id:null,numero:'',raison:''},
+    modalAccept:{ouvert:false,id:null,numero:''},
+    modalPause:{ouvert:false},
+    modalBloc:{ouvert:false,titre:'',message:''},
+    toast:{message:'',type:'success',timer:null},
+    pollingTimer:null,
+    async init(){
+      window.addEventListener('bloc-deconnexion',()=>{ this.modalBloc={ouvert:true,titre:'Dossier en cours',message:'Vous avez un dossier en cours. Traitez-le (accepter ou rejeter) avant de vous deconnecter.'}; });
+      await chargerSidebar('file-attente');
+      try{const t=sessionStorage.getItem('kyc_token');const rm=await fetch('/api/config/distribution-mode',{headers:{'Authorization':'Bearer '+t}});if(rm.ok){const dm=await rm.json();this.distributionMode=dm.mode||'manuel'}}catch(e){console.error('mode',e)}
+      try{this.user=JSON.parse(sessionStorage.getItem('kyc_user')||'{}')}catch(e){}
+      await this.restaurerEtatPause();
+      await this.charger();
+      this.pollingTimer=setInterval(()=>this.charger(true),15000);
+      this.pingDispo();
+      this.pingTimer=setInterval(()=>this.pingDispo(),10000);
+      this.demarrerFlux();
+    },
+    async charger(silencieux){
+      if(!silencieux)this.loading=true;
+      const t=sessionStorage.getItem('kyc_token');
+      const d=new Date().toISOString().slice(0,10);
+      try{
+        const r1=await fetch('/api/dossiers/stats?date='+d,{headers:{'Authorization':'Bearer '+t}});
+        if(r1.status===401){window.location.href='/login';return}
+        this.stats=await r1.json();
+        const r2=await fetch('/api/dossiers',{headers:{'Authorization':'Bearer '+t}});
+        const dat=await r2.json();
+        const tous=dat.dossiers||[];
+        this.tousDossiers=tous;
+        // Accepte/Rejete INDIVIDUELS : compter uniquement les dossiers de cet agent
+        try{
+          const moi=this.user.matricule;
+          const auj=new Date().toISOString().slice(0,10);
+          this.stats.accepte=tous.filter(x=>x.statut==='accepte'&&x.agent_saisie===moi&&x.date===auj).length;
+          this.stats.rejete=tous.filter(x=>x.statut==='rejete'&&x.agent_saisie===moi&&x.date===auj).length;
+          // En cours PERSONNEL : ses dossiers en cours
+          this.stats.en_cours=tous.filter(x=>x.statut==='en_cours'&&x.agent_saisie===moi).length;
+          // Total PERSONNEL du jour : en cours + acceptes + rejetes (de cet agent, aujourd'hui)
+          this.stats.total=this.stats.en_cours+this.stats.accepte+this.stats.rejete;
+        }catch(e){}
+        this.enAttente=tous.filter(d=>d.statut==='en_attente').sort((a,b)=>a.created_at-b.created_at);
+        this.enCours=tous.filter(d=>d.statut==='en_cours'&&d.agent_saisie===this.user.matricule);
+        this.dossiersAttenteVieux=this.enAttente.filter(d=>this.dureeMinutes(d.created_at)>5).length;
+        this.derniereMaj=new Date().toLocaleTimeString('fr-FR');
+        await this.chargerPhotosEnCours();
+      }catch(e){console.error(e)}finally{this.loading=false}
+    },
+    async chargerPhotosEnCours(){
+      const t=sessionStorage.getItem('kyc_token');
+      const nouveaux={};
+      for(const d of this.enCours){
+        // Si on a déjà chargé les photos de ce dossier, on les réutilise (évite de recharger à chaque polling)
+        if(this.photosUrls[d.id]){nouveaux[d.id]=this.photosUrls[d.id];continue}
+        const p={recto:null,verso:null,live:null};
+        for(const type of ['recto','verso','live']){
+          try{
+            const r=await fetch('/api/dossiers/'+d.id+'/photo/'+type,{headers:{'Authorization':'Bearer '+t}});
+            if(r.ok){const b=await r.blob();p[type]=URL.createObjectURL(b)}
+          }catch(e){}
+        }
+        nouveaux[d.id]=p;
+      }
+      // Libère les URLs des dossiers qui ne sont plus en cours
+      for(const id in this.photosUrls){
+        if(!nouveaux[id]){
+          const p=this.photosUrls[id];
+          ['recto','verso','live'].forEach(k=>{if(p&&p[k])URL.revokeObjectURL(p[k])});
+        }
+      }
+      this.photosUrls=nouveaux;
+    },
+    agrandir(url){if(url)this.lightbox=url},
+    tempsMoyenTraitement(){
+      // Moyenne (en minutes) entre prise (assigne_le) et cloture (closed_at)
+      // des dossiers traites aujourd'hui par cet agent.
+      const traites=(this.tousDossiers||[]).filter(d=>
+        (d.statut==='accepte'||d.statut==='rejete') &&
+        d.agent_saisie===this.user.matricule &&
+        d.assigne_le && d.closed_at && d.closed_at>=d.assigne_le
+      );
+      if(!traites.length) return 0;
+      let total=0;
+      for(const d of traites){ total += (d.closed_at - d.assigne_le); }
+      return Math.round((total/traites.length)/60);
+    },
+    touchTimeMoyen(){
+      // Moyenne (en minutes) du touch_time (distribution -> enregistrement GSM)
+      // des dossiers traites aujourd'hui par cet agent.
+      const auj=new Date().toISOString().slice(0,10);
+      const avecTT=(this.tousDossiers||[]).filter(d=>
+        d.agent_saisie===this.user.matricule &&
+        d.date===auj &&
+        d.touch_time!=null && d.touch_time>=0
+      );
+      if(!avecTT.length) return 0;
+      let total=0;
+      for(const d of avecTT){ total += d.touch_time; }
+      return Math.round((total/avecTT.length)/60);
+    },
+    dureeMinutes(ts){return Math.floor((Math.floor(Date.now()/1000)-ts)/60)},
+    demarrerFlux(){
+      const t=sessionStorage.getItem('kyc_token');
+      if(!t)return;
+      try{
+        if(this.flux){this.flux.close()}
+        this.flux=new EventSource('/api/dossiers/flux?token='+encodeURIComponent(t));
+        this.flux.addEventListener('nouveau-dossier',()=>{ this.charger(true); });
+        this.flux.onerror=()=>{ /* reconnexion auto par le navigateur */ };
+      }catch(e){console.error('flux SSE',e)}
+    },
+    fmtDuree(sec){const m=Math.floor(sec/60),s2=sec%60;return String(m).padStart(2,'0')+':'+String(s2).padStart(2,'0')},
+    async chargerResumePauses(majPauseDebut){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/pauses-jour',{headers:{'Authorization':'Bearer '+t}});
+        if(r.ok){const d=await r.json();this.resumePauses={nb:d.nb_pauses,total:Math.round(d.duree_totale_sec/60)+' min'};if(majPauseDebut&&d.pause_debut)this.pauseDebut=d.pause_debut}
+      }catch(e){}
+    },
+    heurePause(){
+      if(!this.pauseDebut) return (this.user && this.user.pause_depuis) ? this.user.pause_depuis : '';
+      const d=new Date(this.pauseDebut*1000);
+      return String(d.getHours()).padStart(2,'0')+'h'+String(d.getMinutes()).padStart(2,'0');
+    },
+    demarrerChrono(){
+      if(this.chronoTimer)clearInterval(this.chronoTimer);
+      const maj=()=>{ if(!this.pauseDebut){this.chronoPause='00:00';return} const ecoule=Math.floor(Date.now()/1000)-this.pauseDebut; this.chronoPause=this.fmtDuree(ecoule); };
+      maj();
+      this.chronoTimer=setInterval(maj,1000);
+    },
+    async demanderAide(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/aide',{method:'POST',headers:{'Authorization':'Bearer '+t}});
+        if(r.ok){this.afficherToast('Demande d\'aide envoyee au superviseur','success')}
+        else{this.afficherToast('Erreur lors de l\'envoi','error')}
+      }catch(e){this.afficherToast('Erreur reseau','error')}
+    },
+    async restaurerEtatPause(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/pauses-jour',{headers:{'Authorization':'Bearer '+t}});
+        if(r.ok){
+          const d=await r.json();
+          if(d.en_pause){
+            this.enPause=true;
+            this.pauseDebut=d.pause_debut||Math.floor(Date.now()/1000);
+            this.resumePauses={nb:d.nb_pauses,total:Math.round(d.duree_totale_sec/60)+' min'};
+            this.demarrerChrono();
+          }
+        }
+      }catch(e){}
+    },
+    async togglePause(){
+      // Si deja en pause -> reprendre directement
+      if(this.enPause){ await this.confirmerPause(); return; }
+      // Pas en pause : si un dossier est en cours -> pause PROGRAMMEE (apres saisie Gross Add)
+      if(this.enCours.length>0){
+        try{ sessionStorage.setItem('pause_apres_gross','1'); }catch(e){}
+        this.afficherToast('⏸️ Pause programmee : elle demarrera apres votre saisie Gross Add','success');
+        return;
+      }
+      // Pas en pause et aucun dossier en cours -> pause directe (sans pop-up)
+      await this.confirmerPause();
+    },
+    async confirmerPause(){
+      this.modalPause.ouvert=false;
+      const t=sessionStorage.getItem('kyc_token');
+      const action=this.enPause?'reprendre':'pause';
+      try{
+        const r=await fetch('/api/dossiers/pause',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({action})});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok){
+          this.enPause=(d.statut==='pause');
+          if(this.enPause){ this.pauseDebut=Math.floor(Date.now()/1000); await this.chargerResumePauses(false); this.demarrerChrono(); }
+          else { if(this.chronoTimer){clearInterval(this.chronoTimer);this.chronoTimer=null} this.pauseDebut=null; }
+          this.afficherToast(this.enPause?'En pause':'Vous avez repris','success');
+          await this.charger();
+        } else { this.afficherToast(d.error||'Erreur','error'); }
+      }catch(e){this.afficherToast('Erreur reseau','error')}
+    },
+    async pingDispo(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{await fetch('/api/dossiers/ping-dispo',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}
+    },
+    async appeler(){
+      if(this.actionEnCours)return;
+      this.actionEnCours=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/appeler',{method:'POST',headers:{'Authorization':'Bearer '+t}});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok&&d.aucun){this.afficherToast('Aucun dossier en attente','error')}
+        else if(r.ok){this.afficherToast('Dossier attribue','success');await this.charger()}
+        else{this.afficherToast(d.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur reseau','error')}
+      finally{this.actionEnCours=false}
+    },
+    async prendre(id){
+      if(this.actionEnCours)return;
+      this.actionEnCours=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/'+id+'/prendre',{method:'POST',headers:{'Authorization':'Bearer '+t}});
+        const dat=await r.json();
+        if(r.ok){this.afficherToast('Dossier pris','success');await this.charger()}
+        else{this.afficherToast(dat.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur réseau','error')}finally{this.actionEnCours=false}
+    },
+    accepter(id){
+      const dd=this.enCours.find(x=>x.id===id);
+      this.modalAccept={ouvert:true,id:id,numero:dd?dd.numero_mtn:''};
+    },
+    fermerAccept(){this.modalAccept.ouvert=false;},
+    async confirmerAccept(){
+      const id=this.modalAccept.id;
+      this.modalAccept.ouvert=false;
+      if(this.actionEnCours)return;
+      this.actionEnCours=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/'+id+'/accepter',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:'{}'});
+        const dat=await r.json();
+        if(r.ok){const dd=this.enCours.find(x=>x.id===id);const num=dd?dd.numero_mtn:'';try{sessionStorage.setItem('gsm_a_finaliser',JSON.stringify({dossier:id,numero:num||''}))}catch(e){}this.afficherToast('✅ Accepté - GSM à remplir','success');setTimeout(()=>{window.location.href='/agent/gross-add?numero='+encodeURIComponent(num||'')+'&dossier='+encodeURIComponent(id)},800);return}
+        else{this.afficherToast(dat.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur réseau','error')}finally{this.actionEnCours=false}
+    },
+    ouvrirRejet(d){this.modalRejet={ouvert:true,id:d.id,numero:d.numero_mtn,raison:''}},
+    fermerRejet(){this.modalRejet.ouvert=false},
+    async confirmerRejet(){
+      if(!this.modalRejet.raison||this.modalRejet.raison.length<3)return;
+      this.actionEnCours=true;
+      const t=sessionStorage.getItem('kyc_token');
+      const id=this.modalRejet.id;
+      try{
+        const r=await fetch('/api/dossiers/'+id+'/rejeter',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({raison_rejet:this.modalRejet.raison})});
+        const dat=await r.json();
+        if(r.ok){const num=this.modalRejet.numero;try{sessionStorage.setItem('gsm_a_finaliser',JSON.stringify({dossier:id,numero:num||''}))}catch(e){}this.afficherToast('❌ Rejeté - GSM à remplir','success');this.fermerRejet();setTimeout(()=>{window.location.href='/agent/gross-add?numero='+encodeURIComponent(num||'')+'&dossier='+encodeURIComponent(id)},800);return}
+        else{this.afficherToast(dat.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur','error')}finally{this.actionEnCours=false}
+    },
+    afficherToast(m,t){
+      this.toast.message=m;this.toast.type=t||'success';
+      if(this.toast.timer)clearTimeout(this.toast.timer);
+      this.toast.timer=setTimeout(()=>{this.toast.message=''},3000);
+    }
+  };
+}
+</script>
+
+</body></html>

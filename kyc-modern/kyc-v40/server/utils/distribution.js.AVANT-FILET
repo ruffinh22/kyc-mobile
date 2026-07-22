@@ -1,0 +1,60 @@
+// ============================================================================
+// KYC V3 - Logique de distribution AUTO des dossiers (partagee)
+// Appelee par le worker (toutes les 2s) ET a chaque soumission de dossier
+// (distribution instantanee). FIFO strict, max 1 push auto par agent.
+// ============================================================================
+'use strict';
+
+function distribuerMaintenant() {
+  try {
+    const { db } = require('../db');
+    const sse = require('./sse');
+
+    const cfg = db.prepare("SELECT valeur FROM config WHERE cle='distribution_mode'").get();
+    if (!cfg || cfg.valeur !== 'auto') return;
+
+    const maintenant = Math.floor(Date.now() / 1000);
+    const limite = maintenant - 60; // ping recent (page ouverte)
+
+    // Poser dispo_depuis pour les agents devenus eligibles
+    db.prepare(
+      "UPDATE presence SET dispo_depuis = ? " +
+      "WHERE statut='online' AND ts >= ? AND dispo_depuis IS NULL " +
+      "AND nom NOT IN (SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL)"
+    ).run(maintenant, limite);
+    // Effacer dispo_depuis pour les non eligibles
+    db.prepare(
+      "UPDATE presence SET dispo_depuis = NULL " +
+      "WHERE dispo_depuis IS NOT NULL AND (statut!='online' OR ts < ? " +
+      "OR nom IN (SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL))"
+    ).run(limite);
+
+    // Agents disponibles, FIFO
+    const agents = db.prepare(
+      "SELECT nom FROM presence " +
+      "WHERE statut='online' AND ts >= ? AND dispo_depuis IS NOT NULL " +
+      "AND nom NOT IN (SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL) " +
+      "ORDER BY dispo_depuis ASC"
+    ).all(limite);
+
+    for (const ag of agents) {
+      const prochain = db.prepare(
+        "SELECT id FROM dossiers WHERE statut='en_attente' ORDER BY created_at ASC LIMIT 1"
+      ).get();
+      if (!prochain) break;
+      const r = db.prepare(
+        "UPDATE dossiers SET statut='en_cours', agent_saisie=?, assigne_a=?, " +
+        "assigne_le=strftime('%s','now'), heure_prise=strftime('%H:%M','now','localtime'), " +
+        "updated_at=strftime('%s','now') WHERE id=? AND statut='en_attente'"
+      ).run(ag.nom, ag.nom, prochain.id);
+      if (r.changes === 1) {
+        db.prepare("UPDATE presence SET dispo_depuis=NULL WHERE nom=?").run(ag.nom);
+        try { sse.notifier(ag.nom, 'nouveau-dossier', { id: prochain.id }); } catch(e){}
+      }
+    }
+  } catch (err) {
+    // silencieux : le worker reessaiera au prochain cycle
+  }
+}
+
+module.exports = { distribuerMaintenant };

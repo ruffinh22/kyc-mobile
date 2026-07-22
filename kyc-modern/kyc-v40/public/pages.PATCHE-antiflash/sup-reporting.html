@@ -1,0 +1,132 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Reporting</title><script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+.rcard{border-radius:12px;padding:16px}
+.rbtn{display:block;width:100%;text-align:center;padding:10px;border-radius:8px;font-weight:700;font-size:13px;color:#fff;cursor:pointer;border:none;margin-top:10px}
+.qbtn{padding:6px 12px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:12px;font-weight:600;color:#374151;cursor:pointer}
+.qbtn:hover{background:#f3f4f6}
+</style>
+<script>
+async function chargerSidebarSup(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/agent/dashboard';return}
+  const r=await fetch('/static/pages/_sidebar-sup.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body data-antiflash="1" style="background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%)" class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount" class="w-64 flex-shrink-0" style="background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%);min-height:100vh"></div>
+<main class="flex-1 min-w-0 p-6">
+
+<div class="flex items-center gap-3 mb-5">
+<div class="w-12 h-12 rounded-xl bg-gray-800 text-white flex items-center justify-center text-2xl">📊</div>
+<div><h1 class="text-2xl font-bold text-gray-800">Reporting</h1><p class="text-gray-500 text-sm">Export des données sur une période</p></div>
+</div>
+
+<!-- Période -->
+<div class="bg-white rounded-xl border border-gray-200 p-5 mb-5">
+<p class="text-xs font-bold text-gray-500 uppercase mb-3">📅 Période d'export</p>
+<div class="flex flex-wrap gap-4 items-end mb-3">
+<div><label class="block text-xs font-semibold text-gray-500 mb-1">Du *</label><input type="date" id="rep-date-debut" onchange="repMajLabel()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>
+<div><label class="block text-xs font-semibold text-gray-500 mb-1">Au *</label><input type="date" id="rep-date-fin" onchange="repMajLabel()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>
+<div class="flex gap-2"><button class="qbtn" onclick="setRepPeriode('today')">Aujourd'hui</button><button class="qbtn" onclick="setRepPeriode('week')">Cette semaine</button><button class="qbtn" onclick="setRepPeriode('month')">Ce mois</button></div>
+</div>
+<div id="rep-periode-label" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;color:#92400e"></div>
+</div>
+
+<!-- Exports principaux -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+<div class="rcard" style="background:#fffbeb;border:1px solid #fde68a">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-gray-800 text-white flex items-center justify-center">📄</span><div><p class="font-bold text-gray-800">Historique Dossiers</p><p class="text-xs text-gray-500">Dossiers MTN traités</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Numéros MTN, statuts, agents, horaires de réception et clôture, raisons de rejet, processing time.</p>
+<button class="rbtn" style="background:#eab308" onclick="exporterReporting('dossiers')">⬇ Exporter Historique (.xlsx)</button>
+</div>
+<div class="rcard" style="background:#fffbeb;border:1px solid #fde68a">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-yellow-400 text-white flex items-center justify-center">📊</span><div><p class="font-bold" style="color:#b45309">Compilation GSM</p><p class="text-xs text-gray-500">GROSS-ADD GSM</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Lignes GSM, agents, dates, statuts, constat, pièces, verbatim, action, traitement.</p>
+<button class="rbtn" style="background:#eab308" onclick="exporterReporting('gsm')">⬇ Exporter Compilation GSM (.xlsx)</button>
+</div>
+</div>
+<div class="rcard mb-6" style="background:#f0fdf4;border:1px solid #bbf7d0">
+<div class="flex items-center justify-between flex-wrap gap-3">
+<div class="flex items-center gap-3"><span class="w-9 h-9 rounded-lg bg-green-600 text-white flex items-center justify-center">🗂</span><div><p class="font-bold" style="color:#15803d">Export complet</p><p class="text-xs text-gray-500">Historique + Compilation GSM en un seul fichier</p></div></div>
+<button class="rbtn" style="background:#16a34a;width:auto;margin-top:0;padding:10px 20px" onclick="exporterReporting('tout')">⬇ Tout exporter</button>
+</div>
+</div>
+
+<!-- Rapports de production -->
+<p class="text-center text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">👥 Rapports de production</p>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+<div class="rcard" style="background:#eef2ff;border:1px solid #c7d2fe">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-indigo-500 text-white flex items-center justify-center">👤</span><div><p class="font-bold" style="color:#4338ca">Production par agent</p><p class="text-xs text-gray-500">Dossiers traités, acceptés, rejetés par agent</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Nombre de dossiers traités, taux d'acceptation, taux de rejet et temps moyen de traitement par agent de saisie.</p>
+<button class="rbtn" style="background:#4f46e5" onclick="exporterReporting('prod_agent')">⬇ Production par agent (.xlsx)</button>
+</div>
+<div class="rcard" style="background:#fffbeb;border:1px solid #fde68a">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-orange-500 text-white flex items-center justify-center">📈</span><div><p class="font-bold" style="color:#b45309">Production globale</p><p class="text-xs text-gray-500">Vue d'ensemble de la période</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Total dossiers, acceptés, rejetés, en attente, production par jour et par heure.</p>
+<button class="rbtn" style="background:#d97706" onclick="exporterReporting('prod_global')">⬇ Production globale (.xlsx)</button>
+</div>
+<div class="rcard" style="background:#fef2f2;border:1px solid #fecaca">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-red-500 text-white flex items-center justify-center">🕐</span><div><p class="font-bold" style="color:#b91c1c">Heures agents</p><p class="text-xs text-gray-500">Connexion, déconnexion, pauses</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Heures de connexion et déconnexion, durée totale de travail, durée et nombre de pauses par agent.</p>
+<button class="rbtn" style="background:#9ca3af;cursor:not-allowed" onclick="exporterReporting('heures_agents')">⬇ Heures agents (bientôt)</button>
+</div>
+<div class="rcard" style="background:#eff6ff;border:1px solid #bfdbfe">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-blue-500 text-white flex items-center justify-center">⏰</span><div><p class="font-bold" style="color:#1d4ed8">Traitement par heure</p><p class="text-xs text-gray-500">Dossiers traités par date et heure</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Nombre de dossiers reçus, acceptés, rejetés et en cours pour chaque heure de chaque jour de la période.</p>
+<button class="rbtn" style="background:#2563eb" onclick="exporterReporting('traitement_heure')">⬇ Traitement par heure (.xlsx)</button>
+</div>
+</div>
+<div class="rcard mb-6" style="background:#f0fdf4;border:1px solid #bbf7d0;max-width:calc(50% - 8px)">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-green-600 text-white flex items-center justify-center">✅</span><div><p class="font-bold" style="color:#15803d">Rejets &amp; Acceptations</p><p class="text-xs text-gray-500">Détail par agent et par raison</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Nombre d'acceptations et rejets par agent, raisons de rejet, évolution sur la période.</p>
+<button class="rbtn" style="background:#059669" onclick="exporterReporting('rejets_acceptations')">⬇ Rejets &amp; Acceptations (.xlsx)</button>
+</div>
+
+<!-- AAFO -->
+<p class="text-center text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">👥 Agents Acquisition &amp; Front Office</p>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+<div class="rcard" style="background:#eef2ff;border:1px solid #c7d2fe">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-indigo-500 text-white flex items-center justify-center">👤</span><div><p class="font-bold" style="color:#4338ca">Par Username</p><p class="text-xs text-gray-500">Détail par agent</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Volume reçu, accepté, rejeté et en cours pour chaque agent acquisition / front office.</p>
+<button class="rbtn" style="background:#4f46e5" onclick="exporterReporting('aafo_username')">⬇ Par Username (.xlsx)</button>
+</div>
+<div class="rcard" style="background:#f0fdf4;border:1px solid #bbf7d0">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-green-600 text-white flex items-center justify-center">📍</span><div><p class="font-bold" style="color:#15803d">Par Zone</p><p class="text-xs text-gray-500">Regroupement géographique</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Volume reçu, accepté, rejeté et taux par zone (Brazzaville, Pointe-Noire, Hinterland…).</p>
+<button class="rbtn" style="background:#16a34a" onclick="exporterReporting('aafo_zone')">⬇ Par Zone (.xlsx)</button>
+</div>
+<div class="rcard" style="background:#fdf2f8;border:1px solid #fbcfe8">
+<div class="flex items-center gap-3 mb-1"><span class="w-9 h-9 rounded-lg bg-pink-500 text-white flex items-center justify-center">📋</span><div><p class="font-bold" style="color:#be185d">Par Fonction</p><p class="text-xs text-gray-500">Type d'agent</p></div></div>
+<p class="text-xs text-gray-500 mt-2">Volume reçu, accepté, rejeté et taux par fonction (Acquisition, Frontoffice, EBU, Autre).</p>
+<button class="rbtn" style="background:#db2777" onclick="exporterReporting('aafo_fonction')">⬇ Par Fonction (.xlsx)</button>
+</div>
+</div>
+
+<div id="rep-toast" style="display:none;position:fixed;bottom:16px;right:16px;padding:12px 24px;border-radius:8px;color:#fff;font-weight:700;z-index:50;background:#16a34a"></div>
+
+</main></div>
+<script src="/static/pages/reporting-logic.js"></script>
+<script>
+window.addEventListener('DOMContentLoaded',function(){ chargerSidebarSup('reporting').then(function(){ if(typeof initReporting==='function') initReporting(); }); });
+</script>
+</body></html>

@@ -21,17 +21,25 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
+export async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = opts;
   const isForm = rest.body instanceof FormData;
   const headers: Record<string, string> = {};
   if (json !== undefined && !isForm) headers['Content-Type'] = 'application/json';
-  if (_token) headers['Authorization'] = `Bearer ${_token}`;
+  if (_token) {
+    headers['Authorization'] = `Bearer ${_token}`;
+    console.log('[apiFetch] Token présent, longueur:', _token.length);
+  } else {
+    console.warn('[apiFetch] Aucun token disponible');
+  }
   const res = await fetch(`${BASE}${endpoint}`, {
     credentials: 'include', headers, body: json !== undefined ? JSON.stringify(json) : rest.body, ...rest,
   });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(body?.error || res.statusText || 'Erreur API', res.status, body?.details);
+  if (!res.ok) {
+    console.error('[apiFetch] Erreur:', res.status, body);
+    throw new ApiError(body?.error || res.statusText || 'Erreur API', res.status, body?.details);
+  }
   return body as T;
 }
 
@@ -75,6 +83,10 @@ export async function getDossiersHistorique(p: { debut?: string; fin?: string; s
   const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '') qs.set(k, String(v)); });
   return apiFetch<{ success: boolean; total: number; count: number; dossiers: Dossier[] }>(`/api/dossiers/historique?${qs}`);
 }
+export async function getAdminReporting(p: { debut?: string; fin?: string; statut?: string; agent?: string; search?: string } = {}) {
+  const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '') qs.set(k, String(v)); });
+  return apiFetch<{ success: boolean; total: number; count: number; dossiers: Dossier[]; stats: Record<string, number>; byAgent: Array<{ agent: string; total: number; accepte: number; rejete: number; en_cours: number }> }>(`/api/admin/reporting?${qs}`);
+}
 export async function submitDossierPublic(formData: FormData) { return apiFetch<{ success: boolean; id: string; ref: string; numero: string }>('/api/public/dossiers', { method: 'POST', body: formData }); }
 
 // ── Face Verify (terrain public) ──────────────────────────────────────────────
@@ -114,13 +126,21 @@ export async function getGsmMesHistorique(debut?: string, fin?: string) {
   return apiFetch<{ success: boolean; count: number; saisies: GsmRecord[] }>(`/api/gsm/mes-historique?${qs}`);
 }
 export async function getGsmMesPerfs(debut: string, fin: string) { return apiFetch<{ success: boolean; evolution: { jour: string; n: number }[]; stats: unknown }>(`/api/gsm/mes-perfs?debut=${debut}&fin=${fin}`); }
-export async function createGsmLibre(data: Record<string, string>) { return apiFetch<{ success: boolean; id: number }>('/api/gsm/libre', { method: 'POST', json: data }); }
+export async function createGsmLibre(data: Record<string, string | undefined>) { return apiFetch<{ success: boolean; id: number }>('/api/gsm/libre', { method: 'POST', json: data }); }
 export async function updateGsm(id: number, data: Record<string, unknown>) { return apiFetch<{ success: boolean }>(`/api/gsm/${id}`, { method: 'PUT', json: data }); }
 export async function deleteGsm(id: number) { return apiFetch<{ success: boolean }>(`/api/gsm/${id}`, { method: 'DELETE' }); }
 export async function uploadGsmCaptures(id: number, formData: FormData) { return apiFetch<{ success: boolean; uploads: Record<string, string> }>(`/api/gsm/${id}/captures`, { method: 'POST', body: formData }); }
 export async function getGsmCompilation(debut?: string, fin?: string) {
   const qs = new URLSearchParams(); if (debut) qs.set('debut', debut); if (fin) qs.set('fin', fin);
   return apiFetch<{ success: boolean; count: number; saisies: GsmRecord[] }>(`/api/gsm/compilation?${qs}`);
+}
+export async function exportGsmCaptures(params: { numero?: string; du?: string; au?: string } = {}) {
+  const qs = new URLSearchParams(); Object.entries(params).forEach(([k, v]) => { if (v) qs.set(k, v); });
+  return apiFetch<{ success: boolean; count: number; saisies: Array<{ id: number | string; numero: string; date_saisie: string; captures: Array<{ field: string; filename: string; url: string }> }> }>(`/api/gsm/export-captures${qs.toString() ? `?${qs}` : ''}`);
+}
+export async function exportGsmCsv(params: { numero?: string; du?: string; au?: string } = {}) {
+  const qs = new URLSearchParams(); Object.entries(params).forEach(([k, v]) => { if (v) qs.set(k, v); });
+  return apiFetch<string>(`/api/gsm/export-csv${qs.toString() ? `?${qs}` : ''}`);
 }
 export async function getReferentiels() { return apiFetch<{ success: boolean; referentiels: Record<string, string[]> }>('/api/gsm/referentiels'); }
 
@@ -150,6 +170,8 @@ export async function getPresenceResume() { return apiFetch<PresenceResume & { s
 // ── Config ────────────────────────────────────────────────────────────────────
 export async function getDistributionMode() { return apiFetch<{ success: boolean; mode: string }>('/api/config/distribution-mode'); }
 export async function setDistributionMode(mode: string) { return apiFetch<{ success: boolean }>('/api/config/distribution-mode', { method: 'PUT', json: { mode } }); }
+export async function getRejectionMotifs() { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs'); }
+export async function setRejectionMotifs(motifs: string[]) { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs', { method: 'PUT', json: { motifs } }); }
 export async function getSeuilAlerte() { return apiFetch<{ success: boolean; seuil: number }>('/api/config/seuil-alerte'); }
 export async function setSeuilAlerte(seuil: number) { return apiFetch<{ success: boolean }>('/api/config/seuil-alerte', { method: 'PUT', json: { seuil } }); }
 export async function getConfigReferentiels() { return apiFetch<{ success: boolean; referentiels: Record<string, string[]> }>('/api/config/referentiels-gsm'); }

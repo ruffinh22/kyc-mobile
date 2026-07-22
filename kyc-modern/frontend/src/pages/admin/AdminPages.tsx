@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Dossier } from '../../types';
 import { useFetch } from '../../hooks';
 import * as api from '../../services/api';
 import { Compte, Role, Session, AuditLog } from '../../types';
@@ -330,10 +331,67 @@ export function AdminAudit() {
 export function AdminDistribution() {
   const modeQ  = useFetch(() => api.getDistributionMode(), []);
   const seuilQ = useFetch(() => api.getSeuilAlerte(), []);
+  const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
   const [seuil, setSeuil]     = useState('');
   const [saving, setSaving]   = useState(false);
   const [err, setErr]         = useState<string|null>(null);
   const [success, setSuccess] = useState<string|null>(null);
+  const [motifs, setMotifs] = useState<string[]>([]);
+  const [motifInput, setMotifInput] = useState('');
+  const [motifSaving, setMotifSaving] = useState(false);
+  const [motifErr, setMotifErr] = useState<string|null>(null);
+  const [motifSuccess, setMotifSuccess] = useState<string|null>(null);
+  const [editingIndex, setEditingIndex] = useState<number|null>(null);
+  const [editingValue, setEditingValue] = useState('');
+
+  useEffect(() => {
+    if (motifsQ.data?.motifs) setMotifs(motifsQ.data.motifs);
+  }, [motifsQ.data?.motifs]);
+
+  const saveMotifs = async (next: string[]) => {
+    setMotifSaving(true); setMotifErr(null); setMotifSuccess(null);
+    try {
+      const cleaned = Array.from(new Set(next.map(m => String(m).trim()).filter(Boolean)));
+      await api.setRejectionMotifs(cleaned);
+      setMotifs(cleaned);
+      setMotifSuccess('Motifs mis à jour.');
+      motifsQ.refetch();
+    } catch (e) {
+      setMotifErr(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setMotifSaving(false);
+    }
+  };
+
+  const addMotif = async () => {
+    const value = motifInput.trim();
+    if (!value) return;
+    if (motifs.includes(value)) {
+      setMotifErr('Ce motif existe déjà.');
+      return;
+    }
+    await saveMotifs([...motifs, value]);
+    setMotifInput('');
+  };
+
+  const removeMotif = async (value: string) => {
+    await saveMotifs(motifs.filter(m => m !== value));
+  };
+
+  const startEdit = (idx: number) => {
+    setEditingIndex(idx);
+    setEditingValue(motifs[idx] ?? '');
+  };
+
+  const saveEdit = async (idx: number) => {
+    const nextValue = editingValue.trim();
+    if (!nextValue) return;
+    const next = [...motifs];
+    next[idx] = nextValue;
+    await saveMotifs(next);
+    setEditingIndex(null);
+    setEditingValue('');
+  };
 
   const toggleMode = async () => {
     const cur = modeQ.data?.mode ?? 'manuel';
@@ -374,6 +432,41 @@ export function AdminDistribution() {
           <div className="field"><label>Nouveau seuil (min)</label><input type="number" min="1" max="1440" value={seuil} onChange={e => setSeuil(e.target.value)} placeholder="Ex. 10" /></div>
           <button className="btn btn-primary" disabled={saving || !seuil} onClick={saveSeuil}>Enregistrer</button>
         </div>
+      </div>
+      <div className="card" style={{ maxWidth:760 }}>
+        <p className="card-title">Motifs de rejet configurables</p>
+        <p style={{ fontSize:13, color:'var(--ink-3)', marginBottom:'1rem' }}>Les agents verront ces motifs dans la liste déroulante au moment d’un rejet.</p>
+        {motifErr && <Alert kind="error">{motifErr}</Alert>}
+        {motifSuccess && <Alert kind="success">{motifSuccess}</Alert>}
+        <div className="form-row" style={{ alignItems:'flex-end', marginBottom:'1rem' }}>
+          <div className="field"><label>Nouveau motif</label><input value={motifInput} onChange={e => setMotifInput(e.target.value)} placeholder="Ex. Document illisible" onKeyDown={e => e.key === 'Enter' && addMotif()} /></div>
+          <button className="btn btn-primary" disabled={motifSaving || !motifInput.trim()} onClick={addMotif}>{motifSaving ? 'Enregistrement…' : 'Ajouter'}</button>
+        </div>
+        {!motifs.length ? <p style={{ fontSize:13, color:'var(--ink-3)' }}>Aucun motif configuré.</p> : (
+          <ul style={{ listStyle:'none', display:'flex', flexDirection:'column', gap:'.5rem' }}>
+            {motifs.map((motif, idx) => (
+              <li key={motif + idx} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.75rem', padding:'.6rem .75rem', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', background:'var(--surface-2)' }}>
+                {editingIndex === idx ? (
+                  <>
+                    <input value={editingValue} onChange={e => setEditingValue(e.target.value)} style={{ flex:1 }} />
+                    <div style={{ display:'flex', gap:'.4rem' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => { setEditingIndex(null); setEditingValue(''); }}>Annuler</button>
+                      <button className="btn btn-primary btn-sm" disabled={motifSaving || !editingValue.trim()} onClick={() => saveEdit(idx)}>Enregistrer</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontWeight:600 }}>{motif}</span>
+                    <div style={{ display:'flex', gap:'.4rem' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => startEdit(idx)}>Modifier</button>
+                      <button className="btn btn-danger btn-sm" disabled={motifSaving} onClick={() => removeMotif(motif)}>Supprimer</button>
+                    </div>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </>
   );
@@ -625,6 +718,335 @@ export function AdminPurge() {
 // ─────────────────────────────────────────────────────────────────────────────
 // 9. Stockage
 // ─────────────────────────────────────────────────────────────────────────────
+export function AdminReporting() {
+  const [debut, setDebut] = useState('');
+  const [fin, setFin] = useState('');
+  const [statut, setStatut] = useState('');
+  const [agent, setAgent] = useState('');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [data, setData] = useState<{
+    total: number; count: number; dossiers: Dossier[]; stats: Record<string, number>; byAgent: Array<{ agent: string; total: number; accepte: number; rejete: number; en_cours: number }>;
+  } | null>(null);
+
+  const load = async (override?: { debut?: string; fin?: string; statut?: string; agent?: string; search?: string }) => {
+    setLoading(true); setErr(null);
+    try {
+      const params = override ?? { debut: debut || undefined, fin: fin || undefined, statut: statut || undefined, agent: agent || undefined, search: search || undefined };
+      const result = await api.getAdminReporting(params);
+      setData(result);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetFilters = () => {
+    setDebut('');
+    setFin('');
+    setStatut('');
+    setAgent('');
+    setSearch('');
+    load({});
+  };
+
+  const exportExcel = () => {
+    if (!data?.dossiers?.length) return;
+    const rows = data.dossiers.map((d) => ({
+      id: d.id,
+      statut: d.statut,
+      numero_mtn: d.numero_mtn,
+      agent_saisie: d.agent_saisie || '—',
+      username_agent: d.username_agent || '—',
+      date: d.date,
+      heure_reception: d.heure_reception,
+      heure_prise: d.heure_prise || '—',
+      heure_cloture: d.heure_cloture || '—',
+      raison_rejet: d.raison_rejet || '—',
+      resultat_crm: d.resultat_crm || '—',
+      created_at: d.created_at ? new Date(d.created_at * 1000).toLocaleString('fr-FR') : '—',
+    }));
+    const headers = ['id', 'statut', 'numero_mtn', 'agent_saisie', 'username_agent', 'date', 'heure_reception', 'heure_prise', 'heure_cloture', 'raison_rejet', 'resultat_crm', 'created_at'];
+    const csv = [headers.join(';'), ...rows.map((row) => headers.map((header) => `"${String(row[header as keyof typeof row] ?? '').replace(/"/g, '""')}"`).join(';'))].join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `reporting_dossiers_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <div className="page-header">
+        <div><h1 className="page-title">Reporting admin</h1><p className="page-sub">Analyse du traitement des dossiers, filtres et export.</p></div>
+        <div style={{ display: 'flex', gap: '.5rem' }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => load()}>{loading ? 'Chargement…' : 'Actualiser'}</button>
+          <button className="btn btn-primary btn-sm" disabled={!data?.dossiers?.length} onClick={exportExcel}>⬇ Export CSV</button>
+        </div>
+      </div>
+      {err && <Alert kind="error">{err}</Alert>}
+      <div className="card">
+        <div className="filter-bar">
+          <div className="field"><label>Du</label><input type="date" value={debut} onChange={(e) => setDebut(e.target.value)} /></div>
+          <div className="field"><label>Au</label><input type="date" value={fin} onChange={(e) => setFin(e.target.value)} /></div>
+          <div className="field"><label>Statut</label><select value={statut} onChange={(e) => setStatut(e.target.value)}><option value="">Tous</option><option value="en_attente">En attente</option><option value="en_cours">En cours</option><option value="accepte">Acceptés</option><option value="rejete">Rejetés</option></select></div>
+          <div className="field"><label>Agent</label><input value={agent} onChange={(e) => setAgent(e.target.value.toUpperCase())} placeholder="AG001" /></div>
+          <div className="field"><label>Recherche</label><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Référence / numéro" /></div>
+          <button className="btn btn-primary" onClick={() => load()}>Appliquer</button>
+          <button className="btn btn-ghost" onClick={resetFilters}>Tout voir</button>
+        </div>
+      </div>
+      {data && (
+        <>
+          <div className="stats-grid">
+            <StatCard label="Total" value={data.total} variant="attente" />
+            <StatCard label="En attente" value={data.stats.en_attente ?? 0} variant="attente" />
+            <StatCard label="En cours" value={data.stats.en_cours ?? 0} variant="cours" />
+            <StatCard label="Acceptés" value={data.stats.accepte ?? 0} variant="accepte" />
+            <StatCard label="Rejetés" value={data.stats.rejete ?? 0} variant="rejete" />
+            <StatCard label="Taux acceptation" value={data.total > 0 ? ((data.stats.accepte ?? 0) / data.total * 100).toFixed(1) + '%' : '0%'} variant="accepte" sub="Sur total" />
+            <StatCard label="Taux rejet" value={data.total > 0 ? ((data.stats.rejete ?? 0) / data.total * 100).toFixed(1) + '%' : '0%'} variant="rejete" sub="Sur total" />
+          </div>
+          <div className="card">
+            <p className="card-title">Répartition par statut</p>
+            <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', width: '200px', height: '200px' }}>
+                <svg viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)', width: '100%', height: '100%' }}>
+                  {(() => {
+                    const total = data.total || 1;
+                    const enAttente = (data.stats.en_attente ?? 0) / total * 100;
+                    const enCours = (data.stats.en_cours ?? 0) / total * 100;
+                    const accepte = (data.stats.accepte ?? 0) / total * 100;
+                    const rejete = (data.stats.rejete ?? 0) / total * 100;
+                    let offset = 0;
+                    const segments = [
+                      { value: enAttente, color: '#f59e0b', label: 'En attente' },
+                      { value: enCours, color: '#3b82f6', label: 'En cours' },
+                      { value: accepte, color: '#10b981', label: 'Acceptés' },
+                      { value: rejete, color: '#ef4444', label: 'Rejetés' }
+                    ];
+                    return segments.map((seg, i) => {
+                      const dashArray = `${seg.value} ${100 - seg.value}`;
+                      const dashOffset = -offset;
+                      offset += seg.value;
+                      return (
+                        <circle
+                          key={i}
+                          cx="50"
+                          cy="50"
+                          r="40"
+                          fill="none"
+                          stroke={seg.color}
+                          strokeWidth="20"
+                          strokeDasharray={dashArray}
+                          strokeDashoffset={dashOffset}
+                        />
+                      );
+                    });
+                  })()}
+                </svg>
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{data.total}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#666' }}>Total</div>
+                </div>
+              </div>
+              <div style={{ flex: 1, minWidth: '200px' }}>
+                {[
+                  { label: 'En attente', value: data.stats.en_attente ?? 0, color: '#f59e0b' },
+                  { label: 'En cours', value: data.stats.en_cours ?? 0, color: '#3b82f6' },
+                  { label: 'Acceptés', value: data.stats.accepte ?? 0, color: '#10b981' },
+                  { label: 'Rejetés', value: data.stats.rejete ?? 0, color: '#ef4444' }
+                ].map((item, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <div style={{ width: '12px', height: '12px', backgroundColor: item.color, borderRadius: '2px', marginRight: '0.5rem' }} />
+                    <span style={{ flex: 1 }}>{item.label}</span>
+                    <span style={{ fontWeight: 'bold' }}>{item.value}</span>
+                    <span style={{ marginLeft: '0.5rem', color: '#666', fontSize: '0.875rem' }}>
+                      ({data.total > 0 ? (item.value / data.total * 100).toFixed(1) : 0}%)
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="card">
+            <p className="card-title">Évolution des motifs de rejet par date</p>
+            {(() => {
+              const byDateAndReason = data.dossiers.reduce((acc, d) => {
+                if (d.statut !== 'rejete') return acc;
+                const date = d.date || 'Inconnu';
+                const reason = d.raison_rejet || 'Non spécifié';
+                if (!acc[date]) acc[date] = {};
+                if (!acc[date][reason]) acc[date][reason] = 0;
+                acc[date][reason]++;
+                return acc;
+              }, {} as Record<string, Record<string, number>>);
+              
+              const dates = Object.keys(byDateAndReason).sort();
+              const allReasons = Array.from(new Set(
+                Object.values(byDateAndReason).flatMap(r => Object.keys(r))
+              )).sort();
+              
+              const colors = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#8b5cf6', '#ec4899', '#64748b'];
+              
+              if (dates.length === 0) {
+                return <EmptyState icon="📊" title="Aucune donnée de rejet par date" />;
+              }
+              
+              const maxValue = Math.max(...dates.map(d => 
+                Math.max(...Object.values(byDateAndReason[d]))
+              ), 1);
+              
+              const chartWidth = 600;
+              const chartHeight = 200;
+              const padding = { top: 20, right: 20, bottom: 40, left: 50 };
+              const innerWidth = chartWidth - padding.left - padding.right;
+              const innerHeight = chartHeight - padding.top - padding.bottom;
+              
+              const xScale = (index: number) => padding.left + (index / (dates.length - 1 || 1)) * innerWidth;
+              const yScale = (value: number) => padding.top + innerHeight - (value / maxValue) * innerHeight;
+              
+              return (
+                <>
+                  <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.875rem' }}>
+                    {allReasons.map((reason, i) => (
+                      <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <div style={{ width: '12px', height: '12px', backgroundColor: colors[i % colors.length], borderRadius: '2px' }} />
+                        {reason}
+                      </div>
+                    ))}
+                  </div>
+                  <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} style={{ width: '100%', height: 'auto', maxWidth: chartWidth }}>
+                    {/* Grid lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map(t => (
+                      <line
+                        key={t}
+                        x1={padding.left}
+                        y1={padding.top + innerHeight * (1 - t)}
+                        x2={chartWidth - padding.right}
+                        y2={padding.top + innerHeight * (1 - t)}
+                        stroke="#e5e7eb"
+                        strokeWidth="1"
+                      />
+                    ))}
+                    
+                    {/* Y-axis labels */}
+                    {[0, 0.25, 0.5, 0.75, 1].map(t => (
+                      <text
+                        key={t}
+                        x={padding.left - 5}
+                        y={padding.top + innerHeight * (1 - t) + 4}
+                        textAnchor="end"
+                        fontSize="10"
+                        fill="#6b7280"
+                      >
+                        {Math.round(maxValue * t)}
+                      </text>
+                    ))}
+                    
+                    {/* X-axis labels */}
+                    {dates.map((date, i) => (
+                      <text
+                        key={date}
+                        x={xScale(i)}
+                        y={chartHeight - padding.bottom + 15}
+                        textAnchor="middle"
+                        fontSize="10"
+                        fill="#6b7280"
+                      >
+                        {date}
+                      </text>
+                    ))}
+                    
+                    {/* Lines for each reason */}
+                    {allReasons.map((reason, i) => {
+                      const points = dates.map((date, j) => {
+                        const count = byDateAndReason[date][reason] || 0;
+                        return `${xScale(j)},${yScale(count)}`;
+                      }).join(' ');
+                      
+                      return (
+                        <g key={reason}>
+                          <polyline
+                            points={points}
+                            fill="none"
+                            stroke={colors[i % colors.length]}
+                            strokeWidth="2"
+                          />
+                          {dates.map((date, j) => {
+                            const count = byDateAndReason[date][reason] || 0;
+                            if (count > 0) {
+                              return (
+                                <circle
+                                  key={date}
+                                  cx={xScale(j)}
+                                  cy={yScale(count)}
+                                  r="4"
+                                  fill={colors[i % colors.length]}
+                                />
+                              );
+                            }
+                            return null;
+                          })}
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </>
+              );
+            })()}
+          </div>
+          <div className="card">
+            <p className="card-title">Par agent</p>
+            {data.byAgent.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Agent</th><th>Total</th><th>En cours</th><th>Acceptés</th><th>Rejetés</th></tr></thead>
+                  <tbody>
+                    {data.byAgent.map((row) => (
+                      <tr key={row.agent}>
+                        <td><strong>{row.agent}</strong></td>
+                        <td>{row.total}</td>
+                        <td>{row.en_cours}</td>
+                        <td>{row.accepte}</td>
+                        <td>{row.rejete}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <EmptyState icon="📊" title="Aucune donnée agrégée" />}
+          </div>
+          <div className="card">
+            <p className="card-title">Détails des dossiers</p>
+            {!data.dossiers.length ? <EmptyState icon="📁" title="Aucun dossier" /> : (
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>ID</th><th>Statut</th><th>Numéro</th><th>Agent</th><th>Date</th><th>Heure</th><th>Motif rejet</th></tr></thead>
+                  <tbody>
+                    {data.dossiers.map((d) => (
+                      <tr key={d.id}>
+                        <td style={{ fontFamily: 'monospace' }}>{d.id}</td>
+                        <td><span className={`badge ${d.statut === 'accepte' ? 'b-accepte' : d.statut === 'rejete' ? 'b-rejete' : d.statut === 'en_cours' ? 'b-cours' : 'b-attente'}`}>{d.statut}</span></td>
+                        <td>{d.numero_mtn || '—'}</td>
+                        <td>{d.agent_saisie || d.username_agent || '—'}</td>
+                        <td>{d.date || '—'}</td>
+                        <td>{d.heure_reception || '—'}</td>
+                        <td>{d.raison_rejet || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 export function AdminStockage() {
   const { data, loading, error, refetch } = useFetch(() => api.getStorageStats(), []);
 

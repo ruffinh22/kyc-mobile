@@ -1,0 +1,96 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Distribution</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:'Inter',system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#d8b4fe;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#7f1d1d;color:#fff}
+.sb-link.active{background:#a855f7;color:#fff;font-weight:600}
+.opt{border:2px solid #e5e7eb;border-radius:12px;padding:18px;cursor:pointer;transition:all .15s}
+.opt:hover{border-color:#fca5a5}
+.opt.sel{border-color:#dc2626;background:#fef2f2}
+</style>
+<script>
+async function chargerSidebarAdm(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='admin'){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar-admin.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-50 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0 p-6" x-data="distrib()" x-init="init()">
+
+<div class="mb-6 border-b border-gray-200 pb-3"><h1 class="text-2xl font-bold text-gray-800">&#128260; Distribution des dossiers</h1>
+<p class="text-sm text-gray-500 mt-1">Choisissez comment les dossiers sont attribu&eacute;s aux agents du Back Office.</p></div>
+
+<div class="bg-white rounded-xl border border-gray-200 p-6 max-w-2xl">
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+<div class="opt" :class="mode==='manuel'?'sel':''" @click="mode='manuel'">
+<div class="flex items-center gap-2 mb-2"><span class="text-2xl">&#128100;</span><h3 class="font-bold text-gray-800">Manuel</h3></div>
+<p class="text-sm text-gray-600">Les dossiers arrivent dans une file commune. Chaque agent choisit lui-m&ecirc;me un dossier en cliquant sur &laquo;&nbsp;Prendre&nbsp;&raquo;.</p>
+</div>
+<div class="opt" :class="mode==='auto'?'sel':''" @click="mode='auto'">
+<div class="flex items-center gap-2 mb-2"><span class="text-2xl">&#9881;&#65039;</span><h3 class="font-bold text-gray-800">Automatique</h3></div>
+<p class="text-sm text-gray-600">L'agent clique &laquo;&nbsp;Appeler un dossier&nbsp;&raquo; et re&ccedil;oit le dossier le plus ancien. Un seul dossier &agrave; la fois.</p>
+</div>
+</div>
+
+<div class="flex items-center justify-between border-t border-gray-100 pt-4">
+<p class="text-sm text-gray-500">Mode actuel : <span class="font-bold" :class="modeEnregistre==='auto'?'text-red-600':'text-gray-700'" x-text="modeEnregistre==='auto'?'Automatique':'Manuel'"></span></p>
+<button @click="enregistrer()" :disabled="loading||mode===modeEnregistre" class="px-5 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-300 text-white text-sm font-semibold rounded-lg" x-text="loading?'Enregistrement...':'Enregistrer'"></button>
+</div>
+
+</div>
+
+<div x-show="toast.message" class="fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white font-semibold z-50" :class="toast.type==='success'?'bg-green-500':'bg-red-500'"><span x-text="toast.message"></span></div>
+
+</main></div>
+<script>
+function distrib(){
+  return {
+    mode:'manuel',
+    modeEnregistre:'manuel',
+    loading:false,
+    toast:{message:'',type:'success',timer:null},
+    async init(){
+      try{ await chargerSidebarAdm('distribution'); }catch(e){ console.error('sidebar',e); }
+      await this.charger();
+    },
+    async charger(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/config/distribution-mode',{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        if(r.ok){const d=await r.json();this.mode=d.mode;this.modeEnregistre=d.mode}
+      }catch(e){console.error(e)}
+    },
+    async enregistrer(){
+      this.loading=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/config/distribution-mode',{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({mode:this.mode})});
+        const d=await r.json();
+        if(r.ok){this.modeEnregistre=d.mode;this.afficherToast('Mode enregistre : '+(d.mode==='auto'?'Automatique':'Manuel'),'success')}
+        else{this.afficherToast(d.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur reseau','error')}finally{this.loading=false}
+    },
+    afficherToast(m,t){this.toast.message=m;this.toast.type=t||'success';if(this.toast.timer)clearTimeout(this.toast.timer);this.toast.timer=setTimeout(()=>{this.toast.message=''},3000)}
+  };
+}
+</script>
+</body></html>

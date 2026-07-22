@@ -4,6 +4,7 @@ import { dossiersRoutes }    from './dossiers';
 import { gsmRoutes }         from './gsm';
 import { presenceRoutes }    from './presence';
 import { planningRoutes }    from './planning';
+import { planningManagersRoutes } from './planning-managers';
 import { notesQualiteRoutes } from './notes-qualite';
 import { configRoutes }      from './config';
 import { supFileRoutes }     from './sup-file';
@@ -13,6 +14,8 @@ import { faceLivenessRoutes } from './face-liveness';
 import { livenessPageRoutes } from './liveness-page';
 import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
+import { videoSignalRoutes } from './video-signal';
+import { capturesRoutes } from './captures';
 
 export async function registerRoutes(app: any): Promise<void> {
   app.get('/api/health', async (_req: FastifyRequest, reply: FastifyReply) =>
@@ -24,6 +27,7 @@ export async function registerRoutes(app: any): Promise<void> {
   await app.register(gsmRoutes);
   await app.register(presenceRoutes);
   await app.register(planningRoutes);
+  await app.register(planningManagersRoutes);
   await app.register(notesQualiteRoutes);
   await app.register(configRoutes);
   await app.register(supFileRoutes);
@@ -33,4 +37,6 @@ export async function registerRoutes(app: any): Promise<void> {
   await app.register(livenessPageRoutes);
   await app.register(adminRoutes);
   await app.register(ocrRoutes);
+  await app.register(videoSignalRoutes);
+  await app.register(capturesRoutes);
 }

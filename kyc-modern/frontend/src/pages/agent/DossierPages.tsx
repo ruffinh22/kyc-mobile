@@ -217,8 +217,11 @@ export function AgentFileAttente() {
   }, [preview]);
   const [selected, setSelected] = useState<Dossier | null>(null);
   const [rejetTarget, setRejetTarget] = useState<Dossier | null>(null);
-  const [raison, setRaison] = useState(''); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
+  const [selectedMotif, setSelectedMotif] = useState('');
+  const [customMotif, setCustomMotif] = useState('');
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200 }), []);
+  const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
 
   const dossiers = data?.dossiers ?? [];
   const stats = useMemo(() => ({
@@ -230,7 +233,15 @@ export function AgentFileAttente() {
     vieux: dossiers.filter(d => ageMinutes(d.created_at) > 5).length,
   }), [dossiers]);
 
-  const action = async (fn: () => Promise<unknown>) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
+  const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
+  const motifs = motifsQ.data?.motifs ?? [];
+
+  useEffect(() => {
+    if (rejetTarget) {
+      setSelectedMotif(motifs[0] ?? 'autre');
+      setCustomMotif('');
+    }
+  }, [rejetTarget, motifs]);
 
   return (
     <>
@@ -321,7 +332,10 @@ export function AgentFileAttente() {
                       </div>
                       <div className="agent-actions-inline">
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
-                        <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id))}>Accepter</button>
+                        <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
+                          localStorage.setItem('gsm_dossier_id', d.id);
+                          window.location.href = '/gsm-saisie?dossier=' + d.id;
+                        })}>Accepter</button>
                       </div>
                     </div>
                     <div className="face-preview-card">
@@ -367,20 +381,48 @@ export function AgentFileAttente() {
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
-              <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id))}>Accepter</button>
+              <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
+                localStorage.setItem('gsm_dossier_id', selected.id);
+                window.location.href = '/gsm-saisie?dossier=' + selected.id;
+              })}>Accepter</button>
             </>
           ) : null
         }/>
       )}
 
       {rejetTarget && (
-        <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setRaison(''); }} footer={
+        <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); }} footer={
           <>
-            <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setRaison(''); }}>Annuler</button>
-            <button className="btn btn-danger btn-sm" disabled={busy || raison.trim().length < 2} onClick={() => action(async () => { await api.rejeterDossier(rejetTarget.id, raison.trim()); setRejetTarget(null); setRaison(''); })}>Confirmer</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); }}>Annuler</button>
+            <button className="btn btn-danger btn-sm" disabled={busy || (!selectedMotif || (selectedMotif === 'autre' && !customMotif.trim()))} onClick={() => action(async () => {
+              const finalReason = selectedMotif === 'autre' ? customMotif.trim() : selectedMotif;
+              if (!finalReason) return;
+              if (selectedMotif === 'autre' && finalReason && !motifs.includes(finalReason)) {
+                await api.setRejectionMotifs([...motifs, finalReason]);
+              }
+              await api.rejeterDossier(rejetTarget.id, finalReason);
+              setRejetTarget(null);
+              setSelectedMotif('');
+              setCustomMotif('');
+              localStorage.setItem('gsm_dossier_id', rejetTarget.id);
+              window.location.href = '/gsm-saisie?dossier=' + rejetTarget.id;
+            })}>Confirmer</button>
           </>
         }>
-          <div className="field"><label>Raison du rejet<span className="req">*</span></label><textarea value={raison} onChange={e => setRaison(e.target.value)} placeholder="Motif obligatoire…" autoFocus /></div>
+          <div className="field">
+            <label>Motif du rejet<span className="req">*</span></label>
+            <select value={selectedMotif} onChange={e => setSelectedMotif(e.target.value)}>
+              <option value="">Sélectionner…</option>
+              {motifs.map(m => <option key={m} value={m}>{m}</option>)}
+              <option value="autre">Autre…</option>
+            </select>
+          </div>
+          {selectedMotif === 'autre' && (
+            <div className="field" style={{ marginTop: '.75rem' }}>
+              <label>Préciser le motif</label>
+              <textarea value={customMotif} onChange={e => setCustomMotif(e.target.value)} placeholder="Saisissez un motif puis validez" autoFocus />
+            </div>
+          )}
         </Modal>
       )}
       {preview && (
@@ -476,7 +518,11 @@ const COUNTRIES = [
 ];
 
 export function AgentAcquisition() {
-  const [f, setF] = useState({ wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'' });
+  const [f, setF] = useState({
+    wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'',
+    nom_titulaire:'', prenom_titulaire:'', date_naissance:'', lieu_naissance:'', autre_numero:'',
+    nom_pere:'', nom_mere:'', adresse_complete:'', numero_cni:'', sexe:'', nationalite:'', profession:''
+  });
   const [recto, setRecto] = useState<File|null>(null); const [verso, setVerso] = useState<File|null>(null);
   const [loading, setLoading] = useState(false); const [err, setErr] = useState<string|null>(null); const [success, setSuccess] = useState<string|null>(null);
 
@@ -484,6 +530,9 @@ export function AgentAcquisition() {
     e.preventDefault(); setErr(null); setSuccess(null);
     if (!recto || !verso) { setErr('Photos recto et verso obligatoires'); return; }
     if (!f.country) { setErr('Sélectionnez un pays'); return; }
+    if (!f.nom_titulaire.trim() || !f.prenom_titulaire.trim() || !f.date_naissance.trim() || !f.lieu_naissance.trim() || !f.nom_pere.trim() || !f.nom_mere.trim()) {
+      setErr('Les informations du titulaire et des parents sont obligatoires'); return;
+    }
     setLoading(true);
     try {
       const fd = new FormData();
@@ -491,7 +540,11 @@ export function AgentAcquisition() {
       fd.append('photo_recto', recto); fd.append('photo_verso', verso);
       const r = await api.submitDossierPublic(fd);
       setSuccess(`Dossier déposé avec succès — Réf. ${r.ref}`);
-      setF({ wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'' });
+      setF({
+        wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'',
+        nom_titulaire:'', prenom_titulaire:'', date_naissance:'', lieu_naissance:'', autre_numero:'',
+        nom_pere:'', nom_mere:'', adresse_complete:'', numero_cni:'', sexe:'', nationalite:'', profession:''
+      });
       setRecto(null); setVerso(null);
       (e.target as HTMLFormElement).reset();
     } catch(e2) { setErr(e2 instanceof Error ? e2.message : 'Erreur'); }
@@ -533,6 +586,35 @@ export function AgentAcquisition() {
               </select>
             </div>
           </div>
+
+          <div className="card" style={{ marginBottom: '1rem', padding: '1rem' }}>
+            <h3 style={{ margin: '0 0 .75rem', fontSize: '1rem' }}>Informations du titulaire</h3>
+            <div className="form-row">
+              <div className="field"><label>Nom titulaire<span className="req">*</span></label><input value={f.nom_titulaire} onChange={e => setF(x => ({...x, nom_titulaire: e.target.value}))} placeholder="Nom du titulaire" required /></div>
+              <div className="field"><label>Prénom titulaire<span className="req">*</span></label><input value={f.prenom_titulaire} onChange={e => setF(x => ({...x, prenom_titulaire: e.target.value}))} placeholder="Prénom du titulaire" required /></div>
+            </div>
+            <div className="form-row">
+              <div className="field"><label>Date de naissance<span className="req">*</span></label><input type="date" value={f.date_naissance} onChange={e => setF(x => ({...x, date_naissance: e.target.value}))} required /></div>
+              <div className="field"><label>Lieu de naissance<span className="req">*</span></label><input value={f.lieu_naissance} onChange={e => setF(x => ({...x, lieu_naissance: e.target.value}))} placeholder="Lieu de naissance" required /></div>
+            </div>
+            <div className="form-row">
+              <div className="field"><label>Nom du père<span className="req">*</span></label><input value={f.nom_pere} onChange={e => setF(x => ({...x, nom_pere: e.target.value}))} placeholder="Nom du père" required /></div>
+              <div className="field"><label>Nom de la mère<span className="req">*</span></label><input value={f.nom_mere} onChange={e => setF(x => ({...x, nom_mere: e.target.value}))} placeholder="Nom de la mère" required /></div>
+            </div>
+            <div className="form-row">
+              <div className="field"><label>Adresse complète</label><input value={f.adresse_complete} onChange={e => setF(x => ({...x, adresse_complete: e.target.value}))} placeholder="Adresse complète" /></div>
+              <div className="field"><label>Numéro CNI</label><input value={f.numero_cni} onChange={e => setF(x => ({...x, numero_cni: e.target.value}))} placeholder="Numéro CNI" /></div>
+            </div>
+            <div className="form-row">
+              <div className="field"><label>Sexe</label><select value={f.sexe} onChange={e => setF(x => ({...x, sexe: e.target.value}))}><option value="">Sélectionner…</option><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
+              <div className="field"><label>Nationalité</label><input value={f.nationalite} onChange={e => setF(x => ({...x, nationalite: e.target.value}))} placeholder="Nationalité" /></div>
+            </div>
+            <div className="form-row">
+              <div className="field"><label>Profession</label><input value={f.profession} onChange={e => setF(x => ({...x, profession: e.target.value}))} placeholder="Profession" /></div>
+              <div className="field"><label>Autre numéro</label><input value={f.autre_numero} onChange={e => setF(x => ({...x, autre_numero: e.target.value}))} placeholder="Autre numéro" /></div>
+            </div>
+          </div>
+
           <div className="form-row">
             <div className="field"><label>Photo recto CNI<span className="req">*</span></label><input type="file" accept="image/*" onChange={e => setRecto(e.target.files?.[0]??null)} required /></div>
             <div className="field"><label>Photo verso CNI<span className="req">*</span></label><input type="file" accept="image/*" onChange={e => setVerso(e.target.files?.[0]??null)} required /></div>

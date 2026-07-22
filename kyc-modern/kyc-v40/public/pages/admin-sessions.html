@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Sessions actives</title><script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+</style>
+<script>
+async function chargerSidebarAdm(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  const r=await fetch('/static/pages/_sidebar-admin.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head><body data-antiflash="1" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)" class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount" class="w-64 flex-shrink-0" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%);min-height:100vh"></div>
+<main class="flex-1 min-w-0 p-6" x-data="sessionsAdmin()" x-init="init()" style="background:#f3f4f6">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+<div><h1 style="font-size:24px;font-weight:800;color:#1f2937;margin:0">Sessions actives</h1>
+<p style="color:#9ca3af;font-size:14px;margin:2px 0 0"><span x-text="sessionsFiltres().length"></span> session(s) active(s)</p></div>
+<button @click="charger()" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:10px;background:#fff;font-size:13px;font-weight:600;color:#374151;cursor:pointer">Actualiser</button>
+</div>
+
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:14px;margin-bottom:16px">
+<input type="text" x-model="recherche" placeholder="Rechercher (matricule, IP...)" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:10px;font-size:14px;box-sizing:border-box">
+</div>
+
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:16px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.04);overflow-x:auto">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+<thead><tr style="background:#7f1d1d;color:#fff">
+<th style="padding:10px 8px;text-align:left;border-radius:8px 0 0 0">UTILISATEUR</th>
+<th style="padding:10px 8px;text-align:left">IP</th>
+<th style="padding:10px 8px;text-align:left">NAVIGATEUR</th>
+<th style="padding:10px 8px;text-align:left">CONNECTE LE</th>
+<th style="padding:10px 8px;text-align:left">EXPIRE LE</th>
+<th style="padding:10px 8px;text-align:center;border-radius:0 8px 0 0">ACTION</th>
+</tr></thead>
+<tbody>
+<template x-for="se in sessionsFiltres()" :key="se.jti">
+<tr style="border-bottom:1px solid #f0f0f0">
+<td style="padding:9px 8px;font-weight:700;color:#1f2937" x-text="se.matricule"></td>
+<td style="padding:9px 8px;color:#6b7280;font-family:monospace;font-size:11px" x-text="se.ip||'-'"></td>
+<td style="padding:9px 8px;color:#9ca3af;font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="navigateurCourt(se.user_agent)"></td>
+<td style="padding:9px 8px;color:#6b7280;white-space:nowrap" x-text="se.cree_le"></td>
+<td style="padding:9px 8px;color:#6b7280;white-space:nowrap" x-text="se.expire_le"></td>
+<td style="padding:9px 8px;text-align:center"><button @click="revoquer(se)" style="padding:5px 12px;border:none;border-radius:8px;background:#fee2e2;color:#b91c1c;font-size:12px;font-weight:600;cursor:pointer">Deconnecter</button></td>
+</tr>
+</template>
+<tr x-show="sessionsFiltres().length===0"><td colspan="6" style="padding:20px;text-align:center;color:#9ca3af">Aucune session active</td></tr>
+</tbody>
+</table>
+</div>
+
+<div x-show="toast.show" x-cloak style="position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:12px;color:#fff;font-weight:600;z-index:60" :style="toast.type==='error'?'background:#b91c1c':'background:#15803d'" x-text="toast.msg"></div>
+</main></div>
+<script>
+function sessionsAdmin(){
+  return {
+    sessions:[], recherche:'', toast:{show:false,msg:'',type:'success'},
+    async init(){
+      if(typeof chargerSidebarAdm==='function'){ try{ await chargerSidebarAdm('sessions'); }catch(e){} }
+      await this.charger();
+    },
+    async charger(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/admin/sessions',{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        const d=await r.json(); this.sessions=d.sessions||[];
+      }catch(e){ this.sessions=[]; }
+    },
+    sessionsFiltres(){
+      if(!this.recherche) return this.sessions;
+      const q=this.recherche.toLowerCase();
+      return this.sessions.filter(s=>(s.matricule||'').toLowerCase().includes(q)||(s.ip||'').toLowerCase().includes(q));
+    },
+    navigateurCourt(ua){ if(!ua)return'-'; if(ua.includes('Chrome'))return'Chrome'; if(ua.includes('Firefox'))return'Firefox'; if(ua.includes('Safari'))return'Safari'; if(ua.includes('Edg'))return'Edge'; return ua.slice(0,30); },
+    afficherToast(msg,type){ this.toast={show:true,msg:msg,type:type||'success'}; setTimeout(()=>{this.toast.show=false},2500); },
+    async revoquer(se){
+      if(!confirm('Deconnecter la session de '+se.matricule+' ?')) return;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/admin/sessions/'+encodeURIComponent(se.jti)+'/revoke',{method:'POST',headers:{'Authorization':'Bearer '+t}});
+        if(r.ok){ this.afficherToast('Session deconnectee'); await this.charger(); }
+        else { const d=await r.json(); this.afficherToast(d.error||'Erreur','error'); }
+      }catch(e){ this.afficherToast('Erreur reseau','error'); }
+    }
+  };
+}
+(function(){
+  function demarrer(){ if(typeof chargerSidebarAdm==='function'){ try{ chargerSidebarAdm('sessions'); }catch(e){} } }
+  if(document.readyState==='loading'){ window.addEventListener('DOMContentLoaded',demarrer); }
+})();
+</script>
+<style>[x-cloak]{display:none!important}</style>
+</body></html>

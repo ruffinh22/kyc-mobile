@@ -1,0 +1,246 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - File d'attente (Supervision)</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:'Inter',system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#0f2747 0%,#16335c 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e3a5f;color:#fff}
+.sb-link.active{background:#eab308;color:#111827;font-weight:600}
+</style>
+<script>
+async function chargerSidebarSup(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  let u={};
+  try{u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}')}catch(e){}
+  if(u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar-sup.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0" x-data="supFile()" x-init="init()">
+
+<!-- Bandeau alerte -->
+<div x-show="dossiersVieux>0" class="bg-red-600 text-white text-center py-2 text-sm font-semibold">⚠️ <span x-text="dossiersVieux"></span> dossier(s) en attente depuis plus de 5 min ! Cliquez pour traiter.</div>
+
+<div class="p-6">
+
+<!-- Compteurs + date -->
+<div class="flex flex-wrap items-center justify-between gap-4 mb-5">
+<div class="flex flex-wrap gap-3">
+<div class="bg-white rounded-xl border border-yellow-200 px-6 py-3 text-center"><div class="text-2xl font-bold text-yellow-600" x-text="stats.total">0</div><div class="text-[10px] font-semibold text-gray-500 uppercase">Total</div></div>
+<div class="bg-white rounded-xl border border-orange-200 px-6 py-3 text-center"><div class="text-2xl font-bold text-orange-600" x-text="stats.en_attente">0</div><div class="text-[10px] font-semibold text-gray-500 uppercase">En attente</div></div>
+<div class="bg-white rounded-xl border border-blue-200 px-6 py-3 text-center"><div class="text-2xl font-bold" style="color:#1e3a5f" x-text="stats.en_cours">0</div><div class="text-[10px] font-semibold text-gray-500 uppercase">En cours</div></div>
+<div class="bg-white rounded-xl border border-green-200 px-6 py-3 text-center"><div class="text-2xl font-bold text-green-600" x-text="stats.accepte">0</div><div class="text-[10px] font-semibold text-gray-500 uppercase">Acceptés</div></div>
+<div class="bg-white rounded-xl border border-red-200 px-6 py-3 text-center"><div class="text-2xl font-bold text-red-600" x-text="stats.rejete">0</div><div class="text-[10px] font-semibold text-gray-500 uppercase">Rejetés</div></div>
+</div>
+<div class="flex items-center gap-2">
+<input type="date" x-model="date" @change="charger()" class="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+<button @click="aujourdhui()" class="px-4 py-2 border border-yellow-400 text-yellow-600 hover:bg-yellow-50 rounded-lg text-sm font-semibold">Aujourd'hui</button>
+</div>
+</div>
+
+<!-- 2 colonnes -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+<!-- EN ATTENTE -->
+<div>
+<div class="flex items-center justify-between mb-3"><h2 class="font-bold text-gray-700 uppercase text-sm">En attente</h2><span class="bg-orange-100 text-orange-800 text-xs font-bold px-2.5 py-1 rounded-full" x-text="enAttente.length"></span></div>
+<div class="space-y-3">
+<template x-for="d in enAttente" :key="d.id">
+<div class="bg-white rounded-xl border border-red-200 p-4">
+<div class="flex justify-between items-start mb-2"><p class="font-bold text-gray-800" x-text="d.numero_mtn||'—'"></p><p class="text-[10px] text-gray-400 font-mono" x-text="d.id"></p></div>
+<div class="flex flex-wrap items-center gap-1.5 mb-2 text-[11px]">
+<span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">Formulaire Web</span>
+<span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded" x-text="d.heure_reception"></span>
+<span class="bg-red-100 text-red-700 px-2 py-0.5 rounded" x-text="'⚠ '+dureeMinutes(d.created_at)+'min'"></span>
+<span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded">En attente</span>
+</div>
+<!-- vignettes -->
+<div class="flex gap-1.5 mb-3">
+<template x-for="type in ['recto','verso','live']" :key="type">
+<div class="w-10 h-10 bg-gray-100 rounded border border-gray-200 overflow-hidden flex items-center justify-center flex-shrink-0">
+<img x-show="photos[d.id]&&photos[d.id][type]" :src="photos[d.id]?photos[d.id][type]:''" @click="agrandir(photos[d.id]&&photos[d.id][type])" class="w-full h-full object-cover cursor-pointer">
+<span x-show="!(photos[d.id]&&photos[d.id][type])" class="text-gray-300 text-xs">📷</span>
+</div>
+</template>
+</div>
+<div class="grid grid-cols-2 gap-2">
+<button @click="voir(d)" class="py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg">👁 Voir</button>
+<button @click="ouvrirTransfert(d)" class="py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg">↪ Transférer</button>
+</div>
+</div>
+</template>
+<div x-show="enAttente.length===0" class="text-center py-10 text-gray-400 text-sm">📭 Aucun dossier en attente</div>
+</div>
+</div>
+
+<!-- EN COURS -->
+<div>
+<div class="flex items-center justify-between mb-3"><h2 class="font-bold text-gray-700 uppercase text-sm">En cours</h2><span class="text-white text-xs font-bold px-2.5 py-1 rounded-full" style="background:#1e3a5f" x-text="enCours.length"></span></div>
+<div class="space-y-3">
+<template x-for="d in enCours" :key="d.id">
+<div class="bg-white rounded-xl border border-blue-200 p-4">
+<div class="flex justify-between items-start mb-2"><p class="font-bold text-gray-800" x-text="d.numero_mtn||'—'"></p><p class="text-[10px] text-gray-400 font-mono" x-text="d.id"></p></div>
+<div class="flex flex-wrap items-center gap-1.5 mb-2 text-[11px]">
+<span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">Formulaire Web</span>
+<span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded" x-text="d.heure_prise||d.heure_reception"></span>
+<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">En cours</span>
+<span class="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded" x-text="'👤 '+(d.agent_saisie||'?')"></span>
+</div>
+<div class="flex gap-1.5 mb-3">
+<template x-for="type in ['recto','verso','live']" :key="type">
+<div class="w-10 h-10 bg-gray-100 rounded border border-gray-200 overflow-hidden flex items-center justify-center flex-shrink-0">
+<img x-show="photos[d.id]&&photos[d.id][type]" :src="photos[d.id]?photos[d.id][type]:''" @click="agrandir(photos[d.id]&&photos[d.id][type])" class="w-full h-full object-cover cursor-pointer">
+<span x-show="!(photos[d.id]&&photos[d.id][type])" class="text-gray-300 text-xs">📷</span>
+</div>
+</template>
+</div>
+<p x-show="d.transfert_message" class="text-[11px] bg-yellow-50 border border-yellow-200 text-yellow-800 rounded p-2 mb-2">↪ Transfert<span x-show="d.transfert_par" x-text="' par '+d.transfert_par"></span> : <span x-text="d.transfert_message"></span></p>
+<div class="grid grid-cols-2 gap-2">
+<button @click="voir(d)" class="py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-lg">👁 Voir</button>
+<button @click="ouvrirTransfert(d)" class="py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg">↪ Transférer</button>
+</div>
+</div>
+</template>
+<div x-show="enCours.length===0" class="text-center py-10 text-gray-400 text-sm">💤 Aucun dossier</div>
+</div>
+</div>
+
+</div>
+</div>
+
+<!-- Modale transfert -->
+<div x-show="modal.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+<div class="bg-white rounded-2xl p-6 max-w-md w-full">
+<h3 class="text-xl font-bold mb-1">↪ Transférer le dossier</h3>
+<p class="text-sm text-gray-600 mb-4">Numéro : <strong x-text="modal.numero"></strong></p>
+<label class="block text-sm font-semibold mb-1">Agent destinataire *</label>
+<select x-model="modal.agent" class="w-full px-3 py-2 border border-gray-300 rounded-lg mb-3">
+<option value="">-- Choisir un agent --</option>
+<template x-for="a in agents" :key="a.matricule"><option :value="a.matricule" x-text="(a.nom||'')+' '+(a.prenom||'')"></option></template>
+</select>
+<label class="block text-sm font-semibold mb-1">Message (visible sur le dossier)</label>
+<textarea x-model="modal.message" rows="3" placeholder="Ex: À traiter en priorité..." class="w-full px-3 py-2 border border-gray-300 rounded-lg"></textarea>
+<div class="flex gap-2 mt-6">
+<button @click="fermerTransfert()" class="flex-1 py-2 border border-gray-300 rounded-lg">Annuler</button>
+<button @click="confirmerTransfert()" :disabled="!modal.agent||action" class="flex-1 py-2 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-300 text-white font-semibold rounded-lg">Transférer</button>
+</div>
+</div>
+</div>
+
+<!-- Fiche aperçu (lecture seule) -->
+<div x-show="apercu.ouvert" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+<div class="bg-white rounded-2xl p-6 max-w-lg w-full">
+<div class="flex justify-between items-start mb-4"><h3 class="text-xl font-bold">👁 Aperçu du dossier</h3><button @click="apercu.ouvert=false" class="text-gray-400 hover:text-gray-700 text-2xl leading-none">×</button></div>
+<div class="grid grid-cols-2 gap-3 text-sm mb-4">
+<div><p class="text-xs text-gray-500">Numéro</p><p class="font-bold" x-text="apercu.d.numero_mtn||'—'"></p></div>
+<div><p class="text-xs text-gray-500">Statut</p><p class="font-semibold text-orange-600" x-text="apercu.d.statut"></p></div>
+<div><p class="text-xs text-gray-500">Agent terrain</p><p x-text="apercu.d.username_agent||'?'"></p></div>
+<div><p class="text-xs text-gray-500">Reçu à</p><p x-text="apercu.d.heure_reception||'?'"></p></div>
+</div>
+<div class="flex gap-2">
+<template x-for="type in ['recto','verso','live']" :key="type">
+<div class="flex-1 aspect-square bg-gray-100 rounded border border-gray-200 overflow-hidden flex items-center justify-center">
+<img x-show="photos[apercu.d.id]&&photos[apercu.d.id][type]" :src="photos[apercu.d.id]?photos[apercu.d.id][type]:''" @click="agrandir(photos[apercu.d.id]&&photos[apercu.d.id][type])" class="w-full h-full object-cover cursor-pointer">
+<span x-show="!(photos[apercu.d.id]&&photos[apercu.d.id][type])" class="text-gray-300 text-2xl">📷</span>
+</div>
+</template>
+</div>
+</div>
+</div>
+
+<!-- Lightbox -->
+<div x-show="lightbox" @click="lightbox=''" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4 cursor-zoom-out"><img :src="lightbox" class="max-h-full max-w-full rounded-lg shadow-2xl"></div>
+
+<div x-show="toast.message" class="fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white font-semibold z-50" :class="toast.type==='success'?'bg-green-500':'bg-red-500'"><span x-text="toast.message"></span></div>
+
+</main></div>
+<script>
+function supFile(){
+  return {
+    user:{},
+    date:new Date().toISOString().slice(0,10),
+    stats:{total:0,en_attente:0,en_cours:0,accepte:0,rejete:0},
+    enAttente:[],
+    enCours:[],
+    agents:[],
+    photos:{},
+    dossiersVieux:0,
+    action:false,
+    modal:{ouvert:false,id:null,numero:'',agent:'',message:''},
+    apercu:{ouvert:false,d:{}},
+    lightbox:'',
+    toast:{message:'',type:'success',timer:null},
+    pollingTimer:null,
+    async init(){
+      if(typeof chargerSidebarSup==='function'){ try{ await chargerSidebarSup('file-attente'); }catch(e){} }
+      try{this.user=JSON.parse(sessionStorage.getItem('kyc_user')||'{}')}catch(e){}
+      await this.chargerAgents();
+      await this.charger();
+      this.pollingTimer=setInterval(()=>this.charger(true),12000);
+    },
+    aujourdhui(){this.date=new Date().toISOString().slice(0,10);this.charger()},
+    async chargerAgents(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{const r=await fetch('/api/comptes/agents',{headers:{'Authorization':'Bearer '+t}});if(r.ok){const d=await r.json();this.agents=d.agents||[]}}catch(e){}
+    },
+    async charger(silencieux){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r1=await fetch('/api/dossiers/stats?date='+this.date,{headers:{'Authorization':'Bearer '+t}});
+        if(r1.status===401){window.location.href='/login';return}
+        this.stats=await r1.json();
+        const r2=await fetch('/api/dossiers',{headers:{'Authorization':'Bearer '+t}});
+        const dat=await r2.json();
+        const tous=dat.dossiers||[];
+        this.enAttente=tous.filter(d=>d.statut==='en_attente').sort((a,b)=>a.created_at-b.created_at);
+        this.enCours=tous.filter(d=>d.statut==='en_cours');
+        this.dossiersVieux=this.enAttente.filter(d=>this.dureeMinutes(d.created_at)>5).length;
+        await this.chargerPhotos();
+      }catch(e){console.error(e)}
+    },
+    async chargerPhotos(){
+      const t=sessionStorage.getItem('kyc_token');
+      for(const d of this.enAttente){
+        if(this.photos[d.id])continue;
+        const p={recto:null,verso:null,live:null};
+        for(const type of ['recto','verso','live']){
+          try{const r=await fetch('/api/dossiers/'+d.id+'/photo/'+type,{headers:{'Authorization':'Bearer '+t}});if(r.ok){const b=await r.blob();p[type]=URL.createObjectURL(b)}}catch(e){}
+        }
+        this.photos[d.id]=p;
+      }
+    },
+    dureeMinutes(ts){return Math.floor((Math.floor(Date.now()/1000)-ts)/60)},
+    voir(d){this.apercu={ouvert:true,d:d}},
+    agrandir(url){if(url)this.lightbox=url},
+    ouvrirTransfert(d){this.modal={ouvert:true,id:d.id,numero:d.numero_mtn,agent:'',message:''}},
+    fermerTransfert(){this.modal.ouvert=false},
+    async confirmerTransfert(){
+      if(!this.modal.agent)return;
+      this.action=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/'+this.modal.id+'/transferer',{method:'POST',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({agent:this.modal.agent,message:this.modal.message})});
+        const d=await r.json();
+        if(r.ok){this.afficherToast('✅ Dossier transféré','success');this.fermerTransfert();await this.charger()}
+        else{this.afficherToast(d.error||'Erreur','error')}
+      }catch(e){this.afficherToast('Erreur réseau','error')}finally{this.action=false}
+    },
+    afficherToast(m,t){this.toast.message=m;this.toast.type=t||'success';if(this.toast.timer)clearTimeout(this.toast.timer);this.toast.timer=setTimeout(()=>{this.toast.message=''},3000)}
+  };
+}
+</script>
+</body></html>

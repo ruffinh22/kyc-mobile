@@ -1,0 +1,144 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Mon planning</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#1a1a1a 0%,#2d2d2d 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#d1d5db;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#3d3d3d;color:#fff}
+.sb-link.active{background:#FFC300;color:#1a1a1a;font-weight:600}
+</style>
+<script>
+async function chargerSidebar(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0 p-6" x-data="planning()" x-init="init()">
+
+<div class="mb-4 border-b border-gray-200 pb-3"><h1 class="text-2xl font-bold text-gray-800">🗓 Mon planning</h1></div>
+
+<!-- Navigation semaine -->
+<div class="flex items-center justify-between bg-white rounded-xl border border-gray-200 p-3 mb-4">
+<button @click="navSemaine(-1)" class="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold">← Semaine précédente</button>
+<div class="text-center" x-html="labelSemaine"></div>
+<button @click="navSemaine(1)" class="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold">Semaine suivante →</button>
+</div>
+
+<!-- KPI -->
+<div x-show="entrees.length>0" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+<div class="bg-white rounded-xl border border-gray-200 p-4 text-center"><div class="text-2xl font-bold" style="color:#1f3a68" x-text="stats.travail"></div><div class="text-xs text-gray-500 mt-1">💼 Jours travaillés</div></div>
+<div class="bg-white rounded-xl border border-gray-200 p-4 text-center"><div class="text-2xl font-bold text-green-600" x-text="stats.repos"></div><div class="text-xs text-gray-500 mt-1">🟢 Repos</div></div>
+<div class="bg-white rounded-xl border border-gray-200 p-4 text-center"><div class="text-2xl font-bold text-yellow-600" x-text="stats.permission"></div><div class="text-xs text-gray-500 mt-1">🟡 Permission/Congé</div></div>
+<div class="bg-white rounded-xl border border-gray-200 p-4 text-center"><div class="text-2xl font-bold text-red-600" x-text="stats.maladie"></div><div class="text-xs text-gray-500 mt-1">🔴 Maladie</div></div>
+</div>
+
+<!-- Contenu -->
+<div x-show="!chargement&&entrees.length===0" class="bg-white rounded-xl border border-gray-200 p-10 text-center">
+<div class="text-5xl text-gray-300 mb-3">🗓</div>
+<h3 class="font-bold text-gray-700 mb-1">Aucun planning pour cette semaine</h3>
+<p class="text-sm text-gray-500">Les plannings seront disponibles après importation par votre superviseur.</p>
+</div>
+
+<div x-show="entrees.length>0" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+<template x-for="jour in jours" :key="jour.date">
+<div class="bg-white rounded-xl border p-0 overflow-hidden" :class="jour.estAujourdhui?'border-green-500 border-2':'border-gray-200'">
+<div class="px-3 py-2 text-sm font-semibold" :class="jour.estAujourdhui?'bg-green-100 text-green-800':'bg-gray-50 text-gray-700'" x-text="jour.label+(jour.estAujourdhui?' ⭐':'')"></div>
+<div class="p-2 min-h-20">
+<template x-if="jour.shifts.length===0"><div class="text-center text-gray-300 text-sm py-4">—</div></template>
+<template x-for="(s,i) in jour.shifts" :key="i">
+<div class="rounded p-2 mb-1.5" :style="'background:'+badge(s.type).bg+';border-left:3px solid '+badge(s.type).color">
+<div class="font-bold text-xs" :style="'color:'+badge(s.type).color" x-text="badge(s.type).icon+' '+(s.activite||s.horaire||'—')"></div>
+<div x-show="s.heure_debut" class="text-xs text-gray-600 mt-0.5" x-text="'🕒 '+s.heure_debut+' — '+s.heure_fin"></div>
+<div x-show="s.lieu" class="text-xs text-gray-500 mt-0.5" x-text="'📍 '+s.lieu"></div>
+</div>
+</template>
+</div>
+</div>
+</template>
+</div>
+
+</main></div>
+<script>
+function planning(){
+  const pad=n=>String(n).padStart(2,'0');
+  const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  const joursFr=['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
+  return {
+    lundi:null,
+    entrees:[],
+    jours:[],
+    stats:{travail:0,repos:0,permission:0,maladie:0},
+    labelSemaine:'',
+    chargement:true,
+    async init(){
+      await chargerSidebar('planning');
+      this.lundi=this.trouverLundi(new Date());
+      await this.charger();
+    },
+    trouverLundi(d){const x=new Date(d);const day=x.getDay();const diff=day===0?-6:1-day;x.setDate(x.getDate()+diff);x.setHours(0,0,0,0);return x;},
+    addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;},
+    navSemaine(dir){this.lundi=this.addDays(this.lundi,dir*7);this.charger();},
+    async charger(){
+      this.chargement=true;
+      const debut=ymd(this.lundi);
+      const fin=ymd(this.addDays(this.lundi,6));
+      const t=sessionStorage.getItem('kyc_token');
+      const pl=this.lundi,pd=this.addDays(this.lundi,6);
+      this.labelSemaine='<div class="text-sm font-bold text-gray-800">📅 Semaine du '+pad(pl.getDate())+'/'+pad(pl.getMonth()+1)+' au '+pad(pd.getDate())+'/'+pad(pd.getMonth()+1)+'/'+pd.getFullYear()+'</div>';
+      try{
+        const r=await fetch('/api/planning/mon?debut='+debut+'&fin='+fin,{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        if(r.ok){const d=await r.json();this.entrees=d.entrees||[]}else{this.entrees=[]}
+      }catch(e){this.entrees=[]}
+      this.construire();
+      this.chargement=false;
+    },
+    construire(){
+      const today=ymd(new Date());
+      const parDate={};
+      const st={travail:0,repos:0,permission:0,maladie:0};
+      this.entrees.forEach(e=>{
+        if(!parDate[e.date])parDate[e.date]=[];
+        parDate[e.date].push(e);
+        const a=(e.activite||e.type||'').toLowerCase();
+        if(e.type==='repos'||a.indexOf('repos')!==-1||a.indexOf('free')!==-1)st.repos++;
+        else if(a.indexOf('malad')!==-1)st.maladie++;
+        else if(a.indexOf('permiss')!==-1||a.indexOf('cong')!==-1)st.permission++;
+        else st.travail++;
+      });
+      this.stats=st;
+      const arr=[];
+      for(let i=0;i<7;i++){
+        const d=this.addDays(this.lundi,i);
+        const ds=ymd(d);
+        arr.push({date:ds,label:joursFr[d.getDay()]+' '+pad(d.getDate())+'/'+pad(d.getMonth()+1),estAujourdhui:ds===today,shifts:parDate[ds]||[]});
+      }
+      this.jours=arr;
+    },
+    badge(type){
+      const t=(type||'').toLowerCase();
+      if(t==='repos'||t.indexOf('repos')!==-1||t.indexOf('free')!==-1)return {color:'#198754',bg:'#d1e7dd',icon:'🟢'};
+      if(t.indexOf('malad')!==-1)return {color:'#dc3545',bg:'#f8d7da',icon:'🔴'};
+      if(t==='indispo'||t.indexOf('permiss')!==-1||t.indexOf('cong')!==-1)return {color:'#f0a500',bg:'#fff3cd',icon:'🟡'};
+      if(t.indexOf('format')!==-1)return {color:'#17a2b8',bg:'#cff4fc',icon:'📚'};
+      return {color:'#1f3a68',bg:'#cfe2ff',icon:'💼'};
+    }
+  };
+}
+</script>
+</body></html>

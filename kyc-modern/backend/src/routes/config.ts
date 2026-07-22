@@ -5,6 +5,27 @@ import { requireAuth, requireRole } from '../middleware/auth';
 export async function configRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
+  // GET /api/config/rejection-motifs
+  app.get('/api/config/rejection-motifs', async (_req, reply) => {
+    const motifs = await db.getRejectionMotifs();
+    return reply.send({ success: true, motifs });
+  });
+
+  // PUT /api/config/rejection-motifs (agent/superviseur/admin)
+  app.put('/api/config/rejection-motifs',
+    { preHandler: requireRole(['agent', 'superviseur', 'admin']) },
+    async (req, reply) => {
+      const body = req.body as { motifs?: string[] } | null;
+      if (!Array.isArray(body?.motifs)) {
+        return reply.code(400).send({ error: 'Liste de motifs attendue' });
+      }
+      await db.setRejectionMotifs(body.motifs);
+      const motifs = await db.getRejectionMotifs();
+      db.audit(req.user.matricule, 'CONFIG_REJECTION_MOTIFS', `${motifs.length} motif(s)`, req.ip);
+      return reply.send({ success: true, motifs });
+    }
+  );
+
   // GET /api/config/distribution-mode
   app.get('/api/config/distribution-mode', async (_req, reply) => {
     const mode = await db.getDistributionMode();

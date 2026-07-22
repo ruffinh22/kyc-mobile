@@ -1,9 +1,9 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fsp from 'fs/promises';
 import fs from 'fs';
-import Fastify from 'fastify';
-import cors       from '@fastify/cors';
+import cors from '@fastify/cors';
 
 const envPath = path.resolve(__dirname, '../.env');
 dotenv.config({ path: envPath });
@@ -24,7 +24,7 @@ const PORT     = parseInt(process.env.PORT || '3001', 10);
 const HOST     = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-const app = Fastify({
+const app: any = Fastify({
   logger: {
     level: NODE_ENV === 'production' ? 'info' : 'debug',
     transport: NODE_ENV !== 'production'
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   await app.register(websocket as any);
   await app.register(rateLimit, {
     global: true, max: 300, timeWindow: '1 minute',
-    keyGenerator: req => req.headers['x-forwarded-for']?.toString() || req.ip || 'unknown',
+    keyGenerator: (req: FastifyRequest) => req.headers?.['x-forwarded-for']?.toString() || req.ip || 'unknown',
   });
 
   // Fichiers statiques (photos CNI/GSM via /uploads/*)

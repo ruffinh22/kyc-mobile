@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Planning Manager</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+.pm-cell input{width:100%;border:1px solid #e5e7eb;border-radius:5px;padding:4px 6px;font-size:12px;text-align:center}
+.pm-cell input:focus{outline:none;border-color:#3b82f6;background:#eff6ff}
+.pm-meta input{border:1px solid #e5e7eb;border-radius:5px;padding:4px 6px;font-size:12px}
+.pm-meta input:focus{outline:none;border-color:#3b82f6}
+</style>
+<script>
+async function chargerSidebarSup(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/agent/dashboard';return}
+  const r=await fetch('/static/pages/_sidebar-sup.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0 p-6" x-data="planningManager()" x-init="init()">
+
+<div class="mb-4 border-b border-gray-200 pb-3"><h1 class="text-2xl font-bold text-gray-800">🧩 Planning Manager</h1><p class="text-gray-500 text-sm">Grille de planning de l'équipe managers / TL (créneau × jours)</p></div>
+
+<!-- Barre semaine + actions -->
+<div class="bg-white rounded-xl border border-gray-200 p-3 mb-4 flex flex-wrap items-center gap-3">
+<button @click="navSemaine(-1)" class="px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold">← Semaine préc.</button>
+<div class="font-bold text-gray-800 text-sm" x-text="labelSemaine"></div>
+<button @click="navSemaine(1)" class="px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 text-sm font-semibold">Semaine suiv. →</button>
+<span x-show="chargement" class="text-sm text-gray-400">⏳ Chargement…</span>
+<div class="flex-1"></div>
+<button @click="reinitGrille()" class="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-semibold">↺ Modèle</button>
+<button @click="enregistrer()" :disabled="sauvegarde" class="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg" x-text="sauvegarde?'Enregistrement…':'💾 Enregistrer'"></button>
+</div>
+
+<div x-show="message" :class="messageType==='ok'?'bg-green-50 text-green-800 border-green-200':'bg-red-50 text-red-800 border-red-200'" class="border rounded-lg px-4 py-2 text-sm font-semibold mb-4" x-text="message"></div>
+
+<!-- Titre optionnel -->
+<div class="mb-3"><input type="text" x-model="titre" placeholder="Titre du planning (ex : PLANNING DES MANAGERS …)" class="w-full md:w-2/3 px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>
+
+<!-- Datalist des noms connus -->
+<datalist id="pm-noms"><template x-for="n in nomsConnus" :key="n"><option :value="n"></option></template></datalist>
+
+<!-- Grille -->
+<div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+<div style="overflow-x:auto">
+<table class="w-full text-xs" style="min-width:1100px">
+<thead class="bg-gray-50 text-[11px] uppercase text-gray-500"><tr>
+<th class="px-2 py-3 text-left" style="width:120px">Vacation</th>
+<th class="px-2 py-3 text-left" style="width:130px">Horaire / Shift</th>
+<template x-for="(j,i) in 7" :key="i"><th class="px-2 py-3 text-center" x-text="jourEntete(i)"></th></template>
+<th class="px-2 py-3 text-center" style="width:50px"></th>
+</tr></thead>
+<tbody>
+<template x-for="(s,si) in shifts" :key="si">
+<tr class="border-t border-gray-100">
+<td class="px-2 py-2 pm-meta"><input type="text" x-model="s.vacation" placeholder="MATINÉE…" class="w-full"></td>
+<td class="px-2 py-2 pm-meta"><input type="text" x-model="s.horaire" placeholder="08H00-17H00" class="w-full"></td>
+<template x-for="(c,ci) in 7" :key="ci">
+<td class="px-1 py-2 pm-cell"><input type="text" list="pm-noms" x-model="s.cells[ci]" @input="majNomsConnus()" placeholder="—"></td>
+</template>
+<td class="px-2 py-2 text-center"><button @click="supprimerShift(si)" class="text-red-500 hover:text-red-700 font-bold" title="Supprimer">✕</button></td>
+</tr>
+</template>
+<tr x-show="shifts.length===0"><td :colspan="10" class="text-center text-gray-400 py-8">Aucun shift. Cliquez « + Ajouter un shift ».</td></tr>
+</tbody>
+</table>
+</div>
+<div class="p-3 border-t border-gray-100"><button @click="ajouterShift()" class="px-4 py-2 border border-dashed border-gray-300 text-gray-600 hover:bg-gray-50 rounded-lg text-sm font-semibold">+ Ajouter un shift</button></div>
+</div>
+
+<p class="text-xs text-gray-400 mt-3">Saisissez le nom du manager/TL dans chaque case (ex : ODILON, DAVI, CLEAVE…). Utilisez « FREE » ou « - » pour les repos. L'enregistrement écrase la grille de cette semaine.</p>
+
+</main></div>
+<script src="/static/pages/planning-manager-logic.js"></script>
+</body></html>

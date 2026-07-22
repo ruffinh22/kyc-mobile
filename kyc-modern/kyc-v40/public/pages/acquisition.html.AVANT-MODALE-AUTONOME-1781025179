@@ -1,0 +1,473 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Acquisition — Nouveau dossier</title><script src="https://cdn.tailwindcss.com"></script><script src="/static/pages/video-call.js"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  body{font-family:'Inter',system-ui,sans-serif}
+  .sec-title{font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#9ca3af;padding-bottom:8px;border-bottom:1px solid #e5e7eb;margin-bottom:18px}
+  .fld-label{display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px}
+  .fld-hint{font-size:11.5px;color:#9ca3af;margin-top:5px}
+  .inp{width:100%;padding:12px 14px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;color:#111;background:#fff;transition:border-color .15s,box-shadow .15s}
+  .inp:focus{outline:none;border-color:#f2b705;box-shadow:0 0 0 3px rgba(242,183,5,.25)}
+  .tab-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 12px;font-size:13.5px;font-weight:600;border-radius:9px;color:#6b7280;cursor:pointer;transition:all .15s}
+  .tab-btn.active{background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+</style>
+<style>[x-cloak]{display:none!important}</style></head><body class="bg-gray-100 min-h-screen">
+
+<div x-data="formAcq()" x-init="init(); $watch('form.wa_agent', v => { if((v||'').replace(/\D/g,'').length===9) connecterVideoTerrain(); })" @kyc-incoming-call.window="videoTerrain={ouvert:true,statut:'Appel entrant du back-office...',appelEntrant:true,enCours:false}">
+<div x-show="videoTerrain.ouvert" class="fixed inset-0 z-[200] flex flex-col" style="background:#0f172a;display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#1e293b">
+    <div style="color:#fff;font-weight:600;font-size:14px">📹 Verification video</div>
+    <div style="color:#94a3b8;font-size:13px" x-text="videoTerrain.statut"></div>
+  </div>
+  <div style="flex:1;position:relative;background:#000;overflow:hidden">
+    <video id="vt-distant" autoplay playsinline style="width:100%;height:100%;object-fit:contain;background:#000"></video>
+    <video id="vt-local" autoplay playsinline muted style="position:absolute;bottom:16px;right:16px;width:120px;height:160px;object-fit:cover;border:2px solid #fff;border-radius:10px;background:#334155"></video>
+  </div>
+  <div style="display:flex;justify-content:center;gap:12px;padding:16px;background:#1e293b">
+    <button x-show="videoTerrain.appelEntrant" @click="accepterAppelTerrain()" style="background:#22c55e;color:#fff;border:none;padding:14px 32px;border-radius:999px;font-weight:700;font-size:16px;cursor:pointer">✓ Accepter</button>
+    <button x-show="videoTerrain.appelEntrant" @click="refuserAppelTerrain()" style="background:#ef4444;color:#fff;border:none;padding:14px 32px;border-radius:999px;font-weight:700;font-size:16px;cursor:pointer">✕ Refuser</button>
+  </div>
+</div>
+
+<!-- Bandeau noir -->
+<header class="bg-[#161616] text-white relative">
+<div class="max-w-xl mx-auto px-4 py-3 text-center">
+<a href="/" class="absolute left-4 top-1/2 -translate-y-1/2 text-xl text-gray-400 hover:text-yellow-400">←</a>
+<p class="text-xs text-gray-300">Remplissez le formulaire pour envoyer l'enregistrement à certifier</p>
+</div>
+</header>
+
+<main class="max-w-xl mx-auto p-4 pb-24">
+
+<!-- Carte blanche -->
+<div class="bg-white rounded-2xl shadow-lg mt-4 overflow-hidden">
+
+<!-- Onglets -->
+<div class="p-3 border-b border-gray-100">
+<div class="flex gap-1 bg-gray-100 rounded-xl p-1">
+<div class="tab-btn" :class="tab==='form' && 'active'" @click="tab='form'">📋 <span>Enregistrer</span></div>
+<div class="tab-btn" :class="tab==='dash' && 'active'" @click="ouvrirDash()">📊 <span>Mon tableau de bord</span></div>
+</div>
+</div>
+
+<!-- ================= ONGLET FORMULAIRE ================= -->
+<div x-show="tab==='form'" class="p-5">
+
+<!-- Succès -->
+<div x-show="success" x-transition class="bg-green-50 border-2 border-green-500 rounded-2xl p-6 text-center my-2">
+<div class="text-6xl mb-3">✅</div>
+<h2 class="text-2xl font-bold text-green-800 mb-2">Enregistrement envoyé !</h2>
+<p class="text-green-700 mb-4">Votre numéro <strong x-text="numeroEnvoye"></strong> <span x-text="messageStatut"></span></p>
+<p class="text-sm text-gray-600 mb-4">Vous serez contacté via WhatsApp <strong x-text="form.wa_agent"></strong></p>
+<button @click="reset()" class="px-6 py-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg">Envoyer un autre enregistrement</button>
+</div>
+
+<!-- Formulaire -->
+<div x-show="!success">
+
+<!-- SECTION 1 : Infos agent -->
+<div class="mb-7">
+<div class="sec-title">Informations agent</div>
+
+<!-- Mode compact : agent memorise -->
+<div x-show="agentMemorise" class="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex justify-between items-start gap-3">
+  <div>
+    <div class="font-bold text-gray-800"><span x-text="form.wa_agent"></span> <span class="text-gray-500 font-normal text-sm" x-text="'(@'+form.username_agent+')'"></span> <span class="inline-block ml-1 text-green-600 text-xs font-semibold">✓ Enregistré</span></div>
+    <div class="text-sm text-gray-600 mt-1"><span x-text="form.fonction_agent"></span> • <span x-text="form.zone_agent"></span></div>
+    <div class="text-xs text-gray-400 mt-1">Votre numéro est mémorisé sur cet appareil</div>
+  </div>
+  <button type="button" @click="modifierAgent()" class="shrink-0 px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50">Modifier</button>
+</div>
+
+<!-- Mode complet : saisie des infos -->
+<div x-show="!agentMemorise">
+<div class="mb-5">
+<label class="fld-label">Numéro WhatsApp de l'agent acquisition <span class="text-red-500">*</span></label>
+<input x-model="form.wa_agent" type="tel" placeholder="ex: 064256205" maxlength="9" pattern="[0-9]{9}" inputmode="numeric" class="inp">
+<p class="fld-hint">Entrez votre numéro une seule fois — il sera mémorisé automatiquement</p>
+</div>
+
+<div class="mb-5">
+<label class="fld-label">Username <span class="text-red-500">*</span></label>
+<input x-model="form.username_agent" type="text" placeholder="ex: dav_centre" class="inp">
+<p class="fld-hint">Entrez votre username une seule fois — il sera mémorisé automatiquement</p>
+</div>
+
+<div class="mb-5">
+<label class="fld-label">Fonction <span class="text-red-500">*</span></label>
+<select x-model="form.fonction_agent" class="inp">
+<option value="">-- Selectionnez votre fonction --</option>
+<option>Agent Acquisition</option>
+<option>Agent EBU</option>
+<option>Agent Frontoffice</option>
+<option>Autre</option>
+</select>
+</div>
+
+<div>
+<label class="fld-label">Zone <span class="text-red-500">*</span></label>
+<select x-model="form.zone_agent" class="inp">
+<option value="">-- Selectionnez votre zone --</option>
+<option>Brazzaville</option>
+<option>Pointe-Noire</option>
+<option>Hinterland Nord</option>
+<option>Hinterland Sud</option>
+<option>Autre</option>
+</select>
+</div>
+</div>
+</div>
+
+<!-- SECTION 2 : Numéro -->
+<div class="mb-7">
+<div class="sec-title">Numéros à identifier</div>
+<div>
+<label class="fld-label">Numéro MTN vendu <span class="text-red-500">*</span></label>
+<input x-model="form.numero_mtn" type="tel" placeholder="06XXXXXXX" maxlength="9" pattern="[0-9]{9}" inputmode="numeric" class="inp font-mono text-lg">
+<p class="fld-hint">9 chiffres obligatoires</p>
+</div>
+</div>
+
+<!-- SECTION 3 : Photos -->
+<div class="mb-7">
+<div class="sec-title">Photos</div>
+<label class="fld-label">Photos — Recto CNI, Verso CNI, Photo live <span class="text-red-500">*</span></label>
+<p class="fld-hint mb-3">Cliquez sur chaque case pour ouvrir la caméra et prendre la photo</p>
+
+<div class="grid grid-cols-3 gap-3">
+<!-- Photo 1 recto -->
+<div>
+<label class="block aspect-square bg-gray-100 border border-gray-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-yellow-400 hover:bg-yellow-50 relative overflow-hidden">
+<input type="file" accept="image/*" capture="environment" @change="onPhoto($event,'recto')" class="hidden">
+<div x-show="!photos.recto" class="text-center px-1">
+<p class="text-3xl mb-1">📷</p>
+<p class="text-[11px] font-bold text-gray-700 leading-tight">PHOTO 1</p>
+<p class="text-[10px] text-gray-500 leading-tight">RECTO CNI</p>
+</div>
+<img x-show="photos.recto" :src="photos.recto?.preview" class="absolute inset-0 w-full h-full object-cover">
+<div x-show="photos.recto" class="absolute top-1 right-1 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">✓</div>
+</label>
+</div>
+<!-- Photo 2 verso -->
+<div>
+<label class="block aspect-square bg-gray-100 border border-gray-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-yellow-400 hover:bg-yellow-50 relative overflow-hidden">
+<input type="file" accept="image/*" capture="environment" @change="onPhoto($event,'verso')" class="hidden">
+<div x-show="!photos.verso" class="text-center px-1">
+<p class="text-3xl mb-1">📷</p>
+<p class="text-[11px] font-bold text-gray-700 leading-tight">PHOTO 2</p>
+<p class="text-[10px] text-gray-500 leading-tight">VERSO CNI</p>
+</div>
+<img x-show="photos.verso" :src="photos.verso?.preview" class="absolute inset-0 w-full h-full object-cover">
+<div x-show="photos.verso" class="absolute top-1 right-1 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">✓</div>
+</label>
+</div>
+<!-- Photo 3 live -->
+<div>
+<label class="block aspect-square bg-gray-100 border border-gray-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-yellow-400 hover:bg-yellow-50 relative overflow-hidden">
+<input type="file" accept="image/*" capture="user" @change="onPhoto($event,'live')" class="hidden">
+<div x-show="!photos.live" class="text-center px-1">
+<p class="text-3xl mb-1">🤳</p>
+<p class="text-[11px] font-bold text-gray-700 leading-tight">PHOTO 3</p>
+<p class="text-[10px] text-gray-500 leading-tight">PHOTO LIVE</p>
+</div>
+<img x-show="photos.live" :src="photos.live?.preview" class="absolute inset-0 w-full h-full object-cover">
+<div x-show="photos.live" class="absolute top-1 right-1 bg-green-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">✓</div>
+</label>
+</div>
+</div>
+
+<!-- Barre de progression -->
+<div class="mt-4">
+<div class="flex justify-between items-center mb-1.5">
+<span class="text-xs font-semibold text-gray-500">Progression :</span>
+<span class="text-xs font-bold text-yellow-600" x-text="pctPhotos()+'% ('+nbPhotos()+'/3)'"></span>
+</div>
+<div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+<div class="h-full bg-yellow-500 rounded-full transition-all duration-300" :style="`width:${pctPhotos()}%`"></div>
+</div>
+</div>
+</div>
+
+<!-- Erreur -->
+<div x-show="erreur" x-transition class="bg-red-50 border-l-4 border-red-500 p-4 rounded mb-4">
+<p class="text-red-700 text-sm" x-text="erreur"></p>
+</div>
+
+<!-- Bouton -->
+<button @click="soumettre()" :disabled="loading || !peutSoumettre()"
+  class="w-full bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl text-base shadow-lg transition-colors">
+<span x-show="!loading">Envoyer l'enregistrement à certifier</span>
+<span x-show="loading">Envoi en cours... <span x-text="progress + '%'"></span></span>
+</button>
+
+<p class="text-center text-[11px] text-gray-400 mt-3">* Tous les champs sont obligatoires</p>
+
+</div><!-- /!success -->
+</div><!-- /onglet form -->
+
+<!-- ================= ONGLET TABLEAU DE BORD (placeholder) ================= -->
+<div x-show="tab==='dash'" class="p-5">
+<div x-show="!form.wa_agent||form.wa_agent.length!==9" class="text-center py-8 text-gray-500 text-sm">Renseignez votre numéro WhatsApp dans l'onglet « Enregistrer » pour voir vos dossiers.</div>
+<div x-show="form.wa_agent&&form.wa_agent.length===9">
+  <div class="mb-3">
+    <div class="text-sm font-semibold text-gray-700 mb-2" x-text="libelleDate()"></div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-xs text-gray-500">Du</span>
+      <input type="date" x-model="dateDebut" class="px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-700">
+      <span class="text-xs text-gray-500">au</span>
+      <input type="date" x-model="dateFin" class="px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-700">
+      <button @click="dateDebut='';dateFin=''" x-show="dateDebut||dateFin" class="px-2 py-1.5 text-sm text-gray-500 hover:text-gray-700" title="Tout afficher">✕ Tout</button>
+    </div>
+  </div>
+  </div>
+  <div class="grid grid-cols-4 gap-2 mb-4">
+    <div class="bg-gray-50 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-gray-700" x-text="statsFiltrees().total"></div><div class="text-[11px] text-gray-500 uppercase">Total</div></div>
+    <div class="bg-orange-50 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-orange-600" x-text="statsFiltrees().en_attente+statsFiltrees().en_cours"></div><div class="text-[11px] text-gray-500 uppercase">En cours</div></div>
+    <div class="bg-green-50 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-green-600" x-text="statsFiltrees().accepte"></div><div class="text-[11px] text-gray-500 uppercase">Acceptés</div></div>
+    <div class="bg-red-50 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-red-600" x-text="statsFiltrees().rejete"></div><div class="text-[11px] text-gray-500 uppercase">Rejetés</div></div>
+  </div>
+  <div x-show="dashLoading&&dashDossiers.length===0" class="text-center py-6 text-gray-400 text-sm">Chargement...</div>
+  <div x-show="!dashLoading&&dossiersFiltres().length===0" class="text-center py-8 text-gray-400 text-sm">📭 Aucun dossier soumis pour le moment.</div>
+  <div class="space-y-2">
+    <template x-for="d in dossiersFiltres()" :key="d.id">
+      <div class="border rounded-xl p-3" :class="{'border-orange-200 bg-orange-50/40':d.statut==='en_attente'||d.statut==='en_cours','border-green-200 bg-green-50/40':d.statut==='accepte','border-red-200 bg-red-50/40':d.statut==='rejete'}">
+        <div class="flex justify-between items-center mb-1">
+          <span class="font-bold text-gray-800" x-text="d.numero_mtn"></span>
+          <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                :class="{'bg-orange-100 text-orange-700':d.statut==='en_attente'||d.statut==='en_cours','bg-green-100 text-green-700':d.statut==='accepte','bg-red-100 text-red-700':d.statut==='rejete'}"
+                x-text="libelleStatut(d.statut)"></span>
+        </div>
+        <div class="text-[11px] text-gray-500">📅 <span x-text="d.date"></span> <span x-show="d.heure_reception" x-text="'• '+d.heure_reception"></span></div>
+        <div x-show="d.statut==='rejete'&&d.raison_rejet" class="text-[11px] text-red-600 mt-1">❌ Motif : <span x-text="d.raison_rejet"></span></div>
+      </div>
+    </template>
+  </div>
+</div>
+</div>
+
+</div><!-- /carte -->
+</main>
+
+
+</div>
+
+<script>
+function formAcq(){return{
+  tab:'form',
+  videoTerrain:{ouvert:false,statut:'',appelEntrant:false,enCours:false},
+  form:{wa_agent:'',username_agent:'',fonction_agent:'',zone_agent:'',numero_mtn:''},
+  numeroEnvoye:'',
+  statutActuel:'en_attente',
+  suiviTimer:null,
+  photos:{recto:null,verso:null,live:null},
+  loading:false,erreur:'',success:false,dossierId:'',progress:0,
+  dashDossiers:[],dashStats:{total:0,en_attente:0,en_cours:0,accepte:0,rejete:0},dashLoading:false,dashTimer:null,
+  agentMemorise:false,
+  dateDebut:new Date().toLocaleDateString('en-CA'),
+  dateFin:new Date().toLocaleDateString('en-CA'),
+
+  init(){
+    try{
+      const saved=localStorage.getItem('kyc_acq_agent');
+      if(saved){
+        const a=JSON.parse(saved);
+        this.form.wa_agent=a.wa_agent||'';
+        this.form.username_agent=a.username_agent||'';
+        this.form.fonction_agent=a.fonction_agent||'';
+        this.form.zone_agent=a.zone_agent||'';
+        if(this.form.wa_agent&&this.form.username_agent&&this.form.fonction_agent&&this.form.zone_agent){
+          this.agentMemorise=true;
+        }
+      }
+    }catch(e){}
+    this.connecterVideoTerrain();
+  },
+  connecterVideoTerrain(){
+    const num=(this.form.wa_agent||'').replace(/\D/g,'');
+    console.log('[TERRAIN] connecterVideoTerrain appele - num:', num, 'len:', num.length, 'dejaConnecte:', this._videoConnecte);
+    if(num.length!==9) return;
+    if(this._videoConnecte && this._videoNum===num) return;
+    if(this._videoConnecte && this._videoNum!==num){
+      try{ VideoCall.deconnecter(); }catch(e){}
+      this._videoConnecte=false;
+    }
+    this._videoConnecte=true;
+    this._videoNum=num;
+    const self=this;
+    VideoCall.setOnStateChange((etat,extra)=>{
+      if(etat==='incoming-call'){
+        self.videoTerrain={ouvert:true,statut:'Appel entrant du back-office...',appelEntrant:true,enCours:false};
+      } else if(etat==='local-stream'){
+        const v=document.getElementById('vt-local'); if(v) v.srcObject=extra.stream;
+      } else if(etat==='remote-stream'){
+        const v=document.getElementById('vt-distant'); if(v) v.srcObject=extra.stream;
+        self.videoTerrain.statut='Connecte'; self.videoTerrain.appelEntrant=false; self.videoTerrain.enCours=true;
+      } else if(etat==='call-connected'){
+        self.videoTerrain.statut='Connecte'; self.videoTerrain.appelEntrant=false; self.videoTerrain.enCours=true;
+      } else if(etat==='remote-hangup'){
+        self.fermerVideoTerrain();
+      } else if(etat==='call-ended'){
+        self.videoTerrain.statut='Appel termine';
+      }
+    });
+    VideoCall.connecter('terrain', num);
+  },
+  async accepterAppelTerrain(){
+    this.videoTerrain.statut='Connexion...';
+    this.videoTerrain.appelEntrant=false;
+    this.videoTerrain.enCours=true;
+    await VideoCall.accepter();
+  },
+  refuserAppelTerrain(){
+    try{ VideoCall.envoyerRefus(); }catch(e){}
+    this.videoTerrain={ouvert:false,statut:'',appelEntrant:false,enCours:false};
+  },
+  fermerVideoTerrain(){
+    try{ VideoCall.terminer(true); }catch(e){}
+    this.videoTerrain={ouvert:false,statut:'',appelEntrant:false,enCours:false};
+  },
+  modifierAgent(){ this.agentMemorise=false; },
+
+  nbPhotos(){
+    return ['recto','verso','live'].filter(k=>this.photos[k]).length;
+  },
+  pctPhotos(){
+    return Math.round(this.nbPhotos()/3*100);
+  },
+
+  onPhoto(ev,type){
+    const f=ev.target.files[0];
+    if(!f)return;
+    if(f.size>5*1024*1024){this.erreur='Photo '+type+' trop volumineuse (max 5MB)';ev.target.value='';return;}
+    this.photos[type]={file:f,size:f.size,preview:URL.createObjectURL(f)};
+    this.erreur='';
+  },
+
+  peutSoumettre(){
+    return this.form.wa_agent.length===9 && this.form.username_agent && this.form.fonction_agent && this.form.zone_agent
+      && this.form.numero_mtn.length===9 && this.photos.recto && this.photos.verso && this.photos.live;
+  },
+
+  async soumettre(){
+    if(!this.peutSoumettre()){this.erreur='Tous les champs et photos sont obligatoires';return;}
+    this.erreur='';this.loading=true;this.progress=0;
+    try{
+      const fd=new FormData();
+      fd.append('wa_agent',this.form.wa_agent);
+      fd.append('username_agent',this.form.username_agent);
+      fd.append('fonction_agent',this.form.fonction_agent);
+      fd.append('zone_agent',this.form.zone_agent);
+      fd.append('numero_mtn',this.form.numero_mtn);
+      fd.append('photo_recto',this.photos.recto.file);
+      fd.append('photo_verso',this.photos.verso.file);
+      fd.append('photo_live',this.photos.live.file);
+
+      const xhr=new XMLHttpRequest();
+      xhr.upload.onprogress=(e)=>{if(e.lengthComputable)this.progress=Math.round((e.loaded/e.total)*100);};
+      xhr.onload=()=>{
+        this.loading=false;
+        if(xhr.status>=200 && xhr.status<300){
+          const data=JSON.parse(xhr.responseText);
+          this.dossierId=data.id;
+          this.numeroEnvoye=this.form.numero_mtn;
+          this.statutActuel='en_attente';
+          this.success=true;
+          this.lancerSuivi();
+          this.agentMemorise=true;
+          try{
+            localStorage.setItem('kyc_acq_agent',JSON.stringify({
+              wa_agent:this.form.wa_agent,
+              username_agent:this.form.username_agent,
+              fonction_agent:this.form.fonction_agent,
+              zone_agent:this.form.zone_agent
+            }));
+          }catch(e){}
+        }else{
+          try{this.erreur=JSON.parse(xhr.responseText).error||'Erreur '+xhr.status;}catch(e){this.erreur='Erreur '+xhr.status;}
+        }
+      };
+      xhr.onerror=()=>{this.loading=false;this.erreur='Erreur réseau';};
+      xhr.open('POST','/api/public/dossiers');
+      xhr.send(fd);
+    }catch(err){this.loading=false;this.erreur='Erreur: '+err.message;}
+  },
+
+  ouvrirDash(){
+    this.tab='dash';
+    this.chargerDashboard();
+    if(this.dashTimer)clearInterval(this.dashTimer);
+    this.dashTimer=setInterval(()=>{ if(this.tab==='dash')this.chargerDashboard(); },15000);
+  },
+  async chargerDashboard(){
+    const wa=this.form.wa_agent;
+    if(!wa||wa.length!==9){this.dashDossiers=[];return;}
+    this.dashLoading=true;
+    try{
+      const r=await fetch('/api/public/dossiers?wa_agent='+encodeURIComponent(wa));
+      if(r.ok){
+        const d=await r.json();
+        this.dashDossiers=d.dossiers||[];
+        const st={total:0,en_attente:0,en_cours:0,accepte:0,rejete:0};
+        for(const dos of this.dashDossiers){ st.total++; if(st[dos.statut]!==undefined)st[dos.statut]++; }
+        this.dashStats=st;
+      }
+    }catch(e){}
+    this.dashLoading=false;
+  },
+  libelleDate(){
+    if(!this.dateDebut&&!this.dateFin)return 'Tous les dossiers';
+    const auj=new Date().toLocaleDateString('en-CA');
+    const fmt=(ds)=>{ const d=new Date(ds+'T00:00:00'); return isNaN(d)?ds:d.toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'}); };
+    if(this.dateDebut&&this.dateFin){
+      if(this.dateDebut===this.dateFin){
+        return (this.dateDebut===auj?"Aujourd'hui — ":'')+fmt(this.dateDebut);
+      }
+      return 'Du '+fmt(this.dateDebut)+' au '+fmt(this.dateFin);
+    }
+    if(this.dateDebut)return 'Depuis le '+fmt(this.dateDebut);
+    return "Jusqu'au "+fmt(this.dateFin);
+  },
+  dossiersFiltres(){
+    return this.dashDossiers.filter(d=>{
+      if(!d.date)return (!this.dateDebut&&!this.dateFin);
+      if(this.dateDebut&&d.date<this.dateDebut)return false;
+      if(this.dateFin&&d.date>this.dateFin)return false;
+      return true;
+    });
+  },
+  statsFiltrees(){
+    const st={total:0,en_attente:0,en_cours:0,accepte:0,rejete:0};
+    for(const d of this.dossiersFiltres()){ st.total++; if(st[d.statut]!==undefined)st[d.statut]++; }
+    return st;
+  },
+  get messageStatut(){
+    return {en_attente:'est en attente de certification.',en_cours:'est en cours de traitement.',accepte:'a \u00e9t\u00e9 accept\u00e9.',rejete:'a \u00e9t\u00e9 rejet\u00e9.'}[this.statutActuel]||'est en attente de certification.';
+  },
+  lancerSuivi(){
+    if(this.suiviTimer)clearInterval(this.suiviTimer);
+    this.verifierStatut();
+    this.suiviTimer=setInterval(()=>{ this.verifierStatut(); }, 15000);
+  },
+  async verifierStatut(){
+    const wa=this.form.wa_agent;
+    if(!wa||wa.length!==9||!this.dossierId)return;
+    try{
+      const r=await fetch('/api/public/dossiers?wa_agent='+encodeURIComponent(wa));
+      if(r.ok){
+        const d=await r.json();
+        const dos=(d.dossiers||[]).find(x=>x.id===this.dossierId);
+        if(dos&&dos.statut){ this.statutActuel=dos.statut; if(dos.statut==='accepte'||dos.statut==='rejete'){ if(this.suiviTimer)clearInterval(this.suiviTimer); } }
+      }
+    }catch(e){}
+  },
+  libelleStatut(s){
+    return {en_attente:'En attente',en_cours:'En cours',accepte:'Accepté',rejete:'Rejeté'}[s]||s;
+  },
+  reset(){
+    this.success=false;
+    this.form.numero_mtn='';
+    this.photos={recto:null,verso:null,live:null};
+    this.progress=0;
+  }
+};}
+</script>
+
+</body></html>

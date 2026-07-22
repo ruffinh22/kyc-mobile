@@ -1,0 +1,248 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Historique</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+.btn-pho{width:26px;height:26px;border:1px solid #d1d5db;border-radius:5px;font-size:11px;font-weight:700;color:#475569;background:#f8fafc;cursor:pointer}
+.btn-pho:hover{background:#e2e8f0}
+.btn-pho:disabled{opacity:.3;cursor:not-allowed}
+.fheader{position:relative}
+.fbtn{margin-left:4px;cursor:pointer;color:#9ca3af;font-size:10px;user-select:none}
+.fbtn.actif{color:#2563eb}
+.fpop{position:absolute;top:100%;left:0;z-index:30;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);padding:8px;min-width:200px;max-height:280px;overflow:auto;margin-top:4px}
+.fpop label{display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:12px;text-transform:none;color:#374151;cursor:pointer;border-radius:4px}
+.fpop label:hover{background:#f3f4f6}
+.fpop .facts{display:flex;gap:6px;margin-bottom:6px;border-bottom:1px solid #eee;padding-bottom:6px}
+.fpop .facts button{flex:1;font-size:11px;padding:3px;border:1px solid #d1d5db;border-radius:5px;background:#f8fafc;cursor:pointer}
+</style>
+<script>
+async function chargerSidebarSup(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/agent/dashboard';return}
+  const r=await fetch('/static/pages/_sidebar-sup.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0 p-6" x-data="histo()" x-init="init()">
+<div class="mb-5 border-b border-gray-200 pb-3 flex items-center justify-between"><h1 class="text-2xl font-bold text-gray-800">📜 Historique</h1>
+<button @click="exporter()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold">⬇ Export Excel</button></div>
+
+<!-- Filtres -->
+<div class="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+<div class="flex flex-wrap gap-3 items-end">
+<div><label class="block text-[11px] font-semibold text-gray-500 uppercase mb-1">Numéro MTN</label><input x-model="fNumero" type="text" placeholder="065XXXXXXX" class="px-3 py-2 border border-gray-300 rounded-lg text-sm w-40"></div>
+<div><label class="block text-[11px] font-semibold text-gray-500 uppercase mb-1">À partir de la date</label><input x-model="debut" @change="charger()" type="date" class="px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>
+<div><label class="block text-[11px] font-semibold text-gray-500 uppercase mb-1">À ce jour</label><input x-model="fin" @change="charger()" type="date" class="px-3 py-2 border border-gray-300 rounded-lg text-sm"></div>
+<button @click="reinit()" class="px-4 py-2 border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-lg text-sm font-semibold">✕ Réinitialiser</button>
+<div class="flex-1 text-right text-sm text-gray-500"><span x-text="lignes().length"></span> résultat(s) <span x-show="nbFiltresActifs()>0" class="text-blue-600">(filtré)</span></div>
+</div>
+</div>
+
+<!-- Tableau -->
+<div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+<div style="overflow-x:auto">
+<table class="w-full text-xs" style="min-width:1560px">
+<thead class="bg-gray-50 text-[11px] uppercase text-gray-500"><tr>
+<th class="px-3 py-3 text-left">#</th>
+<th class="px-3 py-3 text-left">Numéro MTN</th>
+<th class="px-3 py-3 text-left">Reçu à</th>
+<th class="px-3 py-3 text-left">Clôturé à</th>
+<th class="px-3 py-3 text-left">Coach mobile</th>
+<th class="px-3 py-3 text-left fheader">Agent terrain (WA) <span class="fbtn" :class="{actif:fcol.wa_agent}" @click.stop="togglePop('wa_agent')">▼</span>
+<div class="fpop" x-show="pop==='wa_agent'" @click.stop style="text-transform:none"><div class="facts"><button @click="selAll('wa_agent')">Tout</button><button @click="selNone('wa_agent')">Aucun</button></div><template x-for="v in valeursDe('wa_agent')" :key="v"><label><input type="checkbox" :checked="estCoche('wa_agent',v)" @change="toggleVal('wa_agent',v)"><span x-text="v"></span></label></template></div></th>
+<th class="px-3 py-3 text-left fheader">Username <span class="fbtn" :class="{actif:fcol.username_agent}" @click.stop="togglePop('username_agent')">▼</span>
+<div class="fpop" x-show="pop==='username_agent'" @click.stop><div class="facts"><button @click="selAll('username_agent')">Tout</button><button @click="selNone('username_agent')">Aucun</button></div><template x-for="v in valeursDe('username_agent')" :key="v"><label><input type="checkbox" :checked="estCoche('username_agent',v)" @change="toggleVal('username_agent',v)"><span x-text="v"></span></label></template></div></th>
+<th class="px-3 py-3 text-left fheader">Fonction <span class="fbtn" :class="{actif:fcol.fonction_agent}" @click.stop="togglePop('fonction_agent')">▼</span>
+<div class="fpop" x-show="pop==='fonction_agent'" @click.stop><div class="facts"><button @click="selAll('fonction_agent')">Tout</button><button @click="selNone('fonction_agent')">Aucun</button></div><template x-for="v in valeursDe('fonction_agent')" :key="v"><label><input type="checkbox" :checked="estCoche('fonction_agent',v)" @change="toggleVal('fonction_agent',v)"><span x-text="v"></span></label></template></div></th>
+<th class="px-3 py-3 text-left fheader">Agent de saisie <span class="fbtn" :class="{actif:fcol.agent_saisie}" @click.stop="togglePop('agent_saisie')">▼</span>
+<div class="fpop" x-show="pop==='agent_saisie'" @click.stop><div class="facts"><button @click="selAll('agent_saisie')">Tout</button><button @click="selNone('agent_saisie')">Aucun</button></div><template x-for="v in valeursDe('agent_saisie')" :key="v"><label><input type="checkbox" :checked="estCoche('agent_saisie',v)" @change="toggleVal('agent_saisie',v)"><span x-text="v"></span></label></template></div></th>
+<th class="px-3 py-3 text-left fheader">Zone <span class="fbtn" :class="{actif:fcol.zone_agent}" @click.stop="togglePop('zone_agent')">▼</span>
+<div class="fpop" x-show="pop==='zone_agent'" @click.stop><div class="facts"><button @click="selAll('zone_agent')">Tout</button><button @click="selNone('zone_agent')">Aucun</button></div><template x-for="v in valeursDe('zone_agent')" :key="v"><label><input type="checkbox" :checked="estCoche('zone_agent',v)" @change="toggleVal('zone_agent',v)"><span x-text="v"></span></label></template></div></th>
+<th class="px-3 py-3 text-left fheader">Statut <span class="fbtn" :class="{actif:fcol.statut}" @click.stop="togglePop('statut')">▼</span>
+<div class="fpop" x-show="pop==='statut'" @click.stop><div class="facts"><button @click="selAll('statut')">Tout</button><button @click="selNone('statut')">Aucun</button></div><template x-for="v in valeursDe('statut')" :key="v"><label><input type="checkbox" :checked="estCoche('statut',v)" @change="toggleVal('statut',v)"><span x-text="libelleStatut(v)"></span></label></template></div></th>
+<th class="px-3 py-3 text-left">⏱ Attente</th>
+<th class="px-3 py-3 text-left">⏱ Durée traitement</th>
+<th class="px-3 py-3 text-left fheader">Motif de rejet <span class="fbtn" :class="{actif:fcol.raison_rejet}" @click.stop="togglePop('raison_rejet')">▼</span>
+<div class="fpop" x-show="pop==='raison_rejet'" @click.stop style="text-transform:none"><div class="facts"><button @click="selAll('raison_rejet')">Tout</button><button @click="selNone('raison_rejet')">Aucun</button></div><template x-for="v in valeursDe('raison_rejet')" :key="v"><label><input type="checkbox" :checked="estCoche('raison_rejet',v)" @change="toggleVal('raison_rejet',v)"><span x-text="v||'(vide)'"></span></label></template></div></th>
+<th class="px-3 py-3 text-left">Photos</th>
+</tr></thead>
+<tbody>
+<template x-for="d in lignes()" :key="d.id">
+<tr class="border-t border-gray-100 hover:bg-gray-50">
+<td class="px-3 py-2 font-mono text-[10px] text-gray-400" x-text="d.id"></td>
+<td class="px-3 py-2 font-bold text-gray-800" x-text="d.numero_mtn||'—'"></td>
+<td class="px-3 py-2 text-gray-500" x-text="d.heure_reception||'—'"></td>
+<td class="px-3 py-2 text-gray-500" x-text="d.heure_cloture||'En cours'"></td>
+<td class="px-3 py-2 text-gray-400">—</td>
+<td class="px-3 py-2 text-gray-600" x-text="d.wa_agent||'—'"></td>
+<td class="px-3 py-2 text-gray-600" x-text="d.username_agent||'—'"></td>
+<td class="px-3 py-2 text-gray-600" x-text="d.fonction_agent||'—'"></td>
+<td class="px-3 py-2 text-gray-600" x-text="d.agent_saisie||'—'"></td>
+<td class="px-3 py-2 text-gray-600" x-text="d.zone_agent||'—'"></td>
+<td class="px-3 py-2"><span class="text-[10px] px-2 py-0.5 rounded font-semibold" :class="{'bg-orange-100 text-orange-800':d.statut==='en_attente','bg-blue-100 text-blue-800':d.statut==='en_cours','bg-green-100 text-green-800':d.statut==='accepte','bg-red-100 text-red-800':d.statut==='rejete'}" x-text="libelleStatut(d.statut)"></span></td>
+<td class="px-3 py-2 text-gray-600" x-text="attente(d)"></td>
+<td class="px-3 py-2 text-gray-600" x-text="duree(d)"></td>
+<td class="px-3 py-2 text-[11px] text-red-600" x-text="d.raison_rejet||'—'"></td>
+<td class="px-3 py-2"><div class="flex gap-1">
+<button class="btn-pho" :disabled="!peutPhoto(d)" @click="voirPhoto(d,'recto')">R</button>
+<button class="btn-pho" :disabled="!peutPhoto(d)" @click="voirPhoto(d,'verso')">V</button>
+<button class="btn-pho" :disabled="!peutPhoto(d)" @click="voirPhoto(d,'live')">L</button>
+</div></td>
+</tr>
+</template>
+<tr x-show="lignes().length===0"><td colspan="15" class="text-center text-gray-400 py-12">Aucun dossier trouvé</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<!-- Lightbox -->
+<div x-show="lightbox" @click="lightbox=''" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4 cursor-zoom-out"><img :src="lightbox" class="max-h-full max-w-full rounded-lg shadow-2xl"></div>
+<div x-show="toast" class="fixed bottom-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white font-semibold z-50 bg-red-500"><span x-text="toast"></span></div>
+
+</main></div>
+<script>
+function histo(){
+  const pad=n=>String(n).padStart(2,'0');
+  const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  return {
+    user:{},
+    dossiers:[],
+    debut:'',
+    fin:'',
+    fNumero:'',
+    pop:'',
+    fcol:{wa_agent:null,username_agent:null,fonction_agent:null,agent_saisie:null,zone_agent:null,statut:null,raison_rejet:null},
+    lightbox:'',
+    toast:'',
+    loading:false,
+    async init(){
+      if(typeof chargerSidebarSup==='function'){ try{ await chargerSidebarSup('historique'); }catch(e){} }
+      try{this.user=JSON.parse(sessionStorage.getItem('kyc_user')||'{}')}catch(e){}
+      const now=new Date();
+      this.debut=ymd(now);
+      this.fin=ymd(now);
+      window.addEventListener('click',()=>{this.pop=''});
+      await this.charger();
+    },
+    async charger(){
+      this.loading=true;
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        let url='/api/dossiers?debut='+this.debut+'&fin='+this.fin;
+        const r=await fetch(url,{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        if(r.ok){const d=await r.json();this.dossiers=(d.dossiers||[]).sort((a,b)=>(b.created_at||0)-(a.created_at||0))}
+        this.fcol={wa_agent:null,username_agent:null,fonction_agent:null,agent_saisie:null,zone_agent:null,statut:null,raison_rejet:null};
+      }catch(e){console.error(e)}finally{this.loading=false}
+    },
+    reinit(){
+      this.fNumero='';
+      this.fcol={wa_agent:null,username_agent:null,fonction_agent:null,agent_saisie:null,zone_agent:null,statut:null,raison_rejet:null};
+      const now=new Date();this.debut=ymd(now);this.fin=ymd(now);
+      this.charger();
+    },
+    // ── Entonnoirs ──
+    togglePop(col){this.pop=this.pop===col?'':col;},
+    valeursDe(col){
+      const set=new Set();
+      this.dossiers.forEach(d=>{set.add(d[col]==null?'':String(d[col]))});
+      return Array.from(set).sort();
+    },
+    estCoche(col,v){
+      const sel=this.fcol[col];
+      if(sel===null)return true;
+      return sel.has(v==null?'':String(v));
+    },
+    toggleVal(col,v){
+      const key=v==null?'':String(v);
+      if(this.fcol[col]===null){this.fcol[col]=new Set(this.valeursDe(col));}
+      const s=this.fcol[col];
+      if(s.has(key))s.delete(key);else s.add(key);
+      if(s.size===this.valeursDe(col).length)this.fcol[col]=null;
+    },
+    selAll(col){this.fcol[col]=null;},
+    selNone(col){this.fcol[col]=new Set();},
+    nbFiltresActifs(){return Object.values(this.fcol).filter(s=>s!==null).length;},
+    lignes(){
+      let l=this.dossiers;
+      if(this.fNumero)l=l.filter(d=>d.numero_mtn&&(''+d.numero_mtn).includes(this.fNumero));
+      for(const col in this.fcol){
+        const sel=this.fcol[col];
+        if(sel!==null)l=l.filter(d=>sel.has(d[col]==null?'':String(d[col])));
+      }
+      return l;
+    },
+    libelleStatut(s){const m={en_attente:'En attente',en_cours:'En cours',accepte:'Accepté',rejete:'Rejeté'};return m[s]||s||'(vide)'},
+    duree(d){
+      if(!d.heure_prise||!d.heure_cloture)return '—';
+      const p=d.heure_prise.split(':'),c=d.heure_cloture.split(':');
+      if(p.length<2||c.length<2)return '—';
+      const mn=((+c[0])*60+(+c[1]))-((+p[0])*60+(+p[1]));
+      return mn>=0?mn+' min':'—';
+    },
+    attente(d){
+      if(!d.heure_reception||!d.heure_prise)return '—';
+      const r=d.heure_reception.split(':'),p=d.heure_prise.split(':');
+      if(r.length<2||p.length<2)return '—';
+      const mn=((+p[0])*60+(+p[1]))-((+r[0])*60+(+r[1]));
+      return mn>=0?mn+' min':'—';
+    },
+    peutPhoto(d){
+      return d.statut!=='en_attente'&&(d.photo_recto||d.photo_verso||d.photo_live);
+    },
+    async voirPhoto(d,type){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/dossiers/'+d.id+'/photo/'+type,{headers:{'Authorization':'Bearer '+t}});
+        if(r.ok){const b=await r.blob();this.lightbox=URL.createObjectURL(b)}
+        else{this.afficherToast('Photo indisponible')}
+      }catch(e){this.afficherToast('Erreur chargement photo')}
+    },
+    afficherToast(m){this.toast=m;setTimeout(()=>{this.toast=''},2500)},
+    // ── Export Excel (tout l'historique de la période, avant entonnoirs) ──
+    exporter(){
+      if(typeof XLSX==='undefined'){this.afficherToast('Librairie XLSX non chargée');return;}
+      const data=this.dossiers.map(d=>({
+        'ID':d.id,
+        'Numéro MTN':d.numero_mtn||'',
+        'Reçu à':d.heure_reception||'',
+        'Clôturé à':d.heure_cloture||'',
+        'Agent terrain (WA)':d.wa_agent||'',
+        'Username':d.username_agent||'',
+        'Fonction':d.fonction_agent||'',
+        'Agent de saisie':d.agent_saisie||'',
+        'Zone':d.zone_agent||'',
+        'Statut':this.libelleStatut(d.statut),
+        'Attente (min)':this.attente(d).replace(' min',''),
+        'Durée traitement (min)':this.duree(d).replace(' min',''),
+        'Motif de rejet':d.raison_rejet||''
+      }));
+      const ws=XLSX.utils.json_to_sheet(data);
+      ws['!cols']=[{wch:6},{wch:14},{wch:9},{wch:9},{wch:16},{wch:14},{wch:16},{wch:14},{wch:14},{wch:12},{wch:12},{wch:16},{wch:24}];
+      const wb=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb,ws,'Historique');
+      XLSX.writeFile(wb,'historique_'+this.debut+'_'+this.fin+'.xlsx');
+    }
+  };
+}
+</script>
+</body></html>

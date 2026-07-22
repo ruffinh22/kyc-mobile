@@ -2,7 +2,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -15,19 +15,19 @@ export async function gsmRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
   // GET /api/gsm/referentiels
-  app.get('/api/gsm/referentiels', async (_req, reply) => {
+  app.get('/api/gsm/referentiels', async (_req: FastifyRequest, reply: FastifyReply) => {
     const refs = await db.getReferentiels();
     return reply.send({ success: true, referentiels: refs });
   });
 
   // GET /api/gsm/mon-tableau
-  app.get('/api/gsm/mon-tableau', async (req, reply) => {
+  app.get('/api/gsm/mon-tableau', async (req: FastifyRequest, reply: FastifyReply) => {
     const stats = await db.getGsmStats(req.user.matricule);
     return reply.send({ success: true, ...stats });
   });
 
   // GET /api/gsm/mes-saisies?date=
-  app.get('/api/gsm/mes-saisies', async (req, reply) => {
+  app.get('/api/gsm/mes-saisies', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string,string>;
     const date = q.date || new Date().toISOString().slice(0,10);
     const saisies = await db.getGsmSaisies({ agent: req.user.matricule, date });
@@ -35,14 +35,14 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // GET /api/gsm/mes-historique?debut=&fin=
-  app.get('/api/gsm/mes-historique', async (req, reply) => {
+  app.get('/api/gsm/mes-historique', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string,string>;
     const saisies = await db.getGsmSaisies({ agent: req.user.matricule, debut: q.debut||undefined, fin: q.fin||undefined, limit: 500 });
     return reply.send({ success: true, count: saisies.length, saisies });
   });
 
   // GET /api/gsm/mes-perfs?debut=&fin=
-  app.get('/api/gsm/mes-perfs', async (req, reply) => {
+  app.get('/api/gsm/mes-perfs', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string,string>;
     if (!q.debut || !q.fin) return reply.code(400).send({ error: 'debut et fin requis (YYYY-MM-DD)' });
     const result = await db.getGsmPerfs(req.user.matricule, q.debut, q.fin);
@@ -52,7 +52,7 @@ export async function gsmRoutes(app: any): Promise<void> {
   // GET /api/gsm/compilation (sup/admin)
   app.get('/api/gsm/compilation',
     { preHandler: requireRole(['superviseur','admin']) },
-    async (req, reply) => {
+    async (req: FastifyRequest, reply: FastifyReply) => {
       const q = req.query as Record<string,string>;
       const saisies = await db.getGsmCompilation(q.debut||null, q.fin||null);
       return reply.send({ success: true, count: saisies.length, saisies });
@@ -60,7 +60,7 @@ export async function gsmRoutes(app: any): Promise<void> {
   );
 
   // POST /api/gsm/libre – saisie sans dossier
-  app.post('/api/gsm/libre', async (req, reply) => {
+  app.post('/api/gsm/libre', async (req: FastifyRequest, reply: FastifyReply) => {
     const body = req.body as Record<string,string>|null;
     if (!body?.numero || !body.type_id || !body.constat || !body.piece || !body.verbatim || !body.action) {
       return reply.code(400).send({ error: 'Champs obligatoires: numero, type_id, constat, piece, verbatim, action' });
@@ -83,8 +83,8 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // PUT /api/gsm/:id – modifier saisie
-  app.put('/api/gsm/:id', async (req, reply) => {
-    const id = parseInt(req.params.id, 10);
+  app.put('/api/gsm/:id', async (req: FastifyRequest, reply: FastifyReply) => {
+    const id = parseInt((req.params as any).id, 10);
     const gsm = await db.getGsmById(id);
     if (!gsm) return reply.code(404).send({ error: 'Saisie introuvable' });
     if (gsm.agent_ctrl !== req.user.matricule && req.user.role !== 'admin')
@@ -96,8 +96,8 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // DELETE /api/gsm/:id
-  app.delete('/api/gsm/:id', async (req, reply) => {
-    const id = parseInt(req.params.id, 10);
+  app.delete('/api/gsm/:id', async (req: FastifyRequest, reply: FastifyReply) => {
+    const id = parseInt((req.params as any).id, 10);
     const gsm = await db.getGsmById(id);
     if (!gsm) return reply.code(404).send({ error: 'Saisie introuvable' });
     if (gsm.agent_ctrl !== req.user.matricule && req.user.role !== 'admin')
@@ -108,9 +108,9 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // POST /api/gsm/:id/captures
-  app.post('/api/gsm/:id/captures', async (req, reply) => {
+  app.post('/api/gsm/:id/captures', async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.isMultipart()) return reply.code(400).send({ error: 'Multipart attendu' });
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt((req.params as any).id, 10);
     const gsm = await db.getGsmById(id);
     if (!gsm) return reply.code(404).send({ error: 'Saisie introuvable' });
     if (gsm.agent_ctrl !== req.user.matricule && req.user.role !== 'admin')
@@ -144,8 +144,8 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // GET /api/gsm/captures/:fname – servir image GSM sécurisée
-  app.get('/api/gsm/captures/:fname', async (req, reply) => {
-    const fname = path.basename(req.params.fname);
+  app.get('/api/gsm/captures/:fname', async (req: FastifyRequest, reply: FastifyReply) => {
+    const fname = path.basename((req.params as any).fname);
     const fpath = path.join(UPLOAD_GSM, fname);
     if (!fs.existsSync(fpath)) return reply.code(404).send({ error: 'Fichier introuvable' });
     const ext = path.extname(fname).toLowerCase();
@@ -156,7 +156,7 @@ export async function gsmRoutes(app: any): Promise<void> {
   });
 
   // GET /api/gsm – liste filtrée (sup/admin ou agent sur ses propres saisies)
-  app.get('/api/gsm', async (req, reply) => {
+  app.get('/api/gsm', async (req: FastifyRequest, reply: FastifyReply) => {
     const q = req.query as Record<string,string>;
     const agentFilter = req.user.role === 'agent' ? req.user.matricule : (q.agent||undefined);
     const saisies = await db.getGsmSaisies({

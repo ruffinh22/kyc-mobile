@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Gestion du planning</title><script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#0c1e3e 0%,#1e3a5f 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+</style>
+<script>
+async function chargerSidebarSup(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/agent/dashboard';return}
+  const r=await fetch('/static/pages/_sidebar-sup.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount"></div>
+<main class="flex-1 min-w-0 p-6">
+
+<div class="mb-5 border-b border-gray-200 pb-3"><h1 class="text-2xl font-bold text-gray-800">🗓 Gestion du planning</h1><p class="text-gray-500 text-sm">Importez le planning hebdomadaire (feuille « PLANNING DU … », 7 jours)</p></div>
+
+<!-- Import -->
+<div class="bg-white rounded-xl border border-gray-200 p-5 mb-5">
+<h3 class="font-bold text-gray-800 mb-3">📥 Importer un planning</h3>
+<div class="flex flex-wrap items-end gap-3 mb-3">
+<div class="flex-1 min-w-48"><label class="block text-xs font-semibold text-gray-500 mb-1">Fichier Excel (.xlsx)</label><input type="file" id="pl-file" accept=".xlsx,.xls" class="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold"></div>
+<button onclick="plImporter()" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg">⬆ Importer</button>
+<button onclick="plTemplate()" class="px-4 py-2 border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-semibold rounded-lg">⬇ Modèle Excel</button>
+</div>
+<div id="pl-status" style="display:none;border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600"></div>
+<p class="text-xs text-gray-400 mt-2">En-tête attendu : <strong>Nom et prénoms | STATUT | QUARTIER</strong> puis les <strong>7 dates</strong> de la semaine. Cellules : horaires (08h00-17h00), <strong>FREE</strong>, Maladie, Permissionnaire, Congé annuel.</p>
+</div>
+
+<!-- Liste -->
+<div class="bg-white rounded-xl border border-gray-200 p-5">
+<div class="flex items-center justify-between mb-3"><h3 class="font-bold text-gray-800">📋 Plannings importés</h3><button onclick="plChargerListe()" class="text-sm text-blue-600 hover:underline">🔄 Rafraîchir</button></div>
+<div id="pl-liste" style="overflow-x:auto"><div style="padding:20px;text-align:center;color:#6c757d">Chargement…</div></div>
+</div>
+
+</main></div>
+<script src="/static/pages/planning-logic.js"></script>
+<script>
+(function(){
+  function demarrer(){
+    if(typeof chargerSidebarSup==='function'){ try{ chargerSidebarSup('planning'); }catch(e){} }
+    if(typeof initPlanningSup==='function'){ try{ initPlanningSup(); }catch(e){} }
+  }
+  if(document.readyState==='loading'){ window.addEventListener('DOMContentLoaded',demarrer); }
+  else { setTimeout(demarrer,50); }
+})();
+</script>
+</body></html>

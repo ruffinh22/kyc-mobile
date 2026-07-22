@@ -1,0 +1,133 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Journal d'audit</title><script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+</style>
+<script>
+async function chargerSidebarAdm(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  const r=await fetch('/static/pages/_sidebar-admin.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head><body data-antiflash="1" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)" class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount" class="w-64 flex-shrink-0" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%);min-height:100vh"></div>
+<main class="flex-1 min-w-0 p-6" x-data="habil()" x-init="init()" style="background:#f3f4f6">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+<div><h1 style="font-size:24px;font-weight:800;color:#1f2937;margin:0">Habilitations superviseurs</h1>
+<p style="color:#9ca3af;font-size:14px;margin:2px 0 0">Definir l'acces de chaque superviseur aux menus</p></div>
+</div>
+
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;margin-bottom:16px;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px">Superviseur</label>
+<select x-model="selSup" @change="chargerNiveaux()" style="padding:9px 12px;border:1px solid #d1d5db;border-radius:10px;font-size:14px;min-width:240px">
+<option value="">-- Choisir un superviseur --</option>
+<template x-for="su in superviseurs" :key="su.matricule"><option :value="su.matricule" x-text="(su.prenom||'')+' '+(su.nom||'')+' ('+su.matricule+')'"></option></template>
+</select></div>
+</div>
+
+<div x-show="selSup" style="background:#fff;border:1px solid #e8e8ec;border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+<thead><tr style="background:#7f1d1d;color:#fff"><th style="padding:10px 12px;text-align:left;border-radius:8px 0 0 0">MENU</th><th style="padding:10px 12px;text-align:right;border-radius:0 8px 0 0">NIVEAU D'ACCES</th></tr></thead>
+<tbody>
+<template x-for="m in menus" :key="m.cle">
+<tr style="border-bottom:1px solid #f0f0f0">
+<td style="padding:10px 12px;font-weight:600;color:#1f2937"><span x-text="m.icone"></span> <span x-text="m.label"></span></td>
+<td style="padding:10px 12px;text-align:right">
+<select x-model="niveaux[m.cle]" :style="styleNiveau(niveaux[m.cle])" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:600">
+<option value="complet">Acces complet</option>
+<option value="lecture">Lecture seule</option>
+<option value="masque">Masque</option>
+</select>
+</td>
+</tr>
+</template>
+</tbody>
+</table>
+<div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+<button @click="enregistrer()" :disabled="loading" style="padding:10px 20px;border:none;border-radius:10px;background:#991b1b;color:#fff;font-weight:700;cursor:pointer" x-text="loading?'Enregistrement...':'Enregistrer'"></button>
+<button @click="toutComplet()" style="padding:10px 16px;border:1px solid #d1d5db;border-radius:10px;background:#fff;font-weight:600;cursor:pointer">Tout en acces complet</button>
+<span x-show="msg" :style="msgType==='ok'?'color:#15803d':'color:#b91c1c'" style="font-size:14px;font-weight:600" x-text="msg"></span>
+</div>
+</div>
+
+<div x-show="!selSup" style="background:#fff;border:1px solid #e8e8ec;border-radius:16px;padding:40px;text-align:center;color:#9ca3af">Choisissez un superviseur pour definir ses habilitations.</div>
+</main></div>
+<script>
+function habil(){
+  return {
+    superviseurs:[], habilitations:{}, selSup:'', niveaux:{}, loading:false, msg:'', msgType:'ok',
+    menus:[
+      {cle:'file-attente',label:"File d'attente",icone:''},
+      {cle:'dashboard',label:'Superviseur',icone:''},
+      {cle:'historique',label:'Historique',icone:''},
+      {cle:'compilation-gsm',label:'Compilation GSM',icone:''},
+      {cle:'flux',label:'Flux & Prediction',icone:''},
+      {cle:'donnees-heures',label:'Donnees par heures',icone:''},
+      {cle:'reporting',label:'Reporting',icone:''},
+      {cle:'notes-qualite',label:'Import Notes qualite',icone:''},
+      {cle:'planning',label:'Gestion du planning',icone:''},
+      {cle:'planning-manager',label:'Planning Manager',icone:''}
+    ],
+    async init(){
+      if(typeof chargerSidebarAdm==='function'){ try{ await chargerSidebarAdm('habilitations'); }catch(e){} }
+      await this.charger();
+    },
+    async charger(){
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/admin/habilitations',{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        const d=await r.json(); this.habilitations=d.habilitations||{}; this.superviseurs=d.superviseurs||[];
+      }catch(e){}
+    },
+    chargerNiveaux(){
+      this.msg='';
+      const exist=this.habilitations[this.selSup]||{};
+      const n={};
+      for(const m of this.menus){ n[m.cle]= exist[m.cle] || 'complet'; }
+      this.niveaux=n;
+    },
+    toutComplet(){ const n={}; for(const m of this.menus){ n[m.cle]='complet'; } this.niveaux=n; },
+    styleNiveau(v){
+      if(v==='masque') return 'background:#fee2e2;color:#b91c1c';
+      if(v==='lecture') return 'background:#fef3c7;color:#a16207';
+      return 'background:#dcfce7;color:#15803d';
+    },
+    async enregistrer(){
+      if(!this.selSup) return;
+      this.loading=true; this.msg='';
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/admin/habilitations/'+encodeURIComponent(this.selSup),{method:'PUT',headers:{'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({niveaux:this.niveaux})});
+        const d=await r.json();
+        if(r.ok){ this.habilitations[this.selSup]=Object.assign({},this.niveaux); this.msg='Habilitations enregistrees'; this.msgType='ok'; }
+        else { this.msg=d.error||'Erreur'; this.msgType='err'; }
+      }catch(e){ this.msg='Erreur reseau'; this.msgType='err'; }
+      finally{ this.loading=false; }
+    }
+  };
+}
+(function(){
+  function demarrer(){ if(typeof chargerSidebarAdm==='function'){ try{ chargerSidebarAdm('habilitations'); }catch(e){} } }
+  if(document.readyState==='loading'){ window.addEventListener('DOMContentLoaded',demarrer); }
+})();
+</script>
+</body></html>

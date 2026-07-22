@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useEffect, useState, FormEvent } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { GsmRecord } from '../../types';
@@ -49,6 +49,8 @@ export function GsmMonTableau() {
 const EMPTY_GSM = { numero:'', type_id:'', constat:'', piece:'', verbatim:'', action:'', statut_final:'', traitement:'', raison:'', nom_client:'', coach:'', date:'' };
 
 export function GsmSaisie() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const dossierId = searchParams.get('dossier') || localStorage.getItem('gsm_dossier_id') || '';
   const refs = useFetch(() => api.getReferentiels(), []);
   const R = refs.data?.referentiels ?? {};
   const [f, setF] = useState({ ...EMPTY_GSM });
@@ -61,6 +63,14 @@ export function GsmSaisie() {
   const saisies = listData?.saisies ?? [];
   const filteredSaisies = saisies.filter(g => !search || [g.numero, g.constat, g.type_id, g.action, g.statut_final].filter(Boolean).join(' ').toLowerCase().includes(search.toLowerCase()));
 
+  useEffect(() => {
+    if (dossierId) {
+      setF(x => ({ ...x, numero: x.numero || '' }));
+      // Nettoyer localStorage après lecture pour éviter les conflits
+      localStorage.removeItem('gsm_dossier_id');
+    }
+  }, [dossierId]);
+
   const chg = (k: string, v: string) => setF(x => ({ ...x, [k]: v }));
 
   const submit = async (e: FormEvent) => {
@@ -70,7 +80,8 @@ export function GsmSaisie() {
     setLoading(true);
     try {
       const today = todayISO();
-      const r = await api.createGsmLibre({ ...f, date: f.date || today });
+      const payload = { ...f, date: f.date || today, dossier_id: dossierId || undefined };
+      const r = await api.createGsmLibre(payload);
       setLastId(r.id);
       if (captures.a || captures.p || captures.aa) {
         const fd = new FormData();
@@ -103,7 +114,8 @@ export function GsmSaisie() {
 
   return (
     <>
-      <div className="page-header"><div><h1 className="page-title">Saisie GSM / Gross Add</h1><p className="page-sub">Enregistrez une nouvelle saisie Gross Add.</p></div></div>
+      <div className="page-header"><div><h1 className="page-title">Saisie GSM / Gross Add</h1><p className="page-sub">Enregistrez une nouvelle saisie Gross Add liée au dossier traité.</p></div></div>
+      {dossierId && <Alert kind="info">Dossier lié : {dossierId}</Alert>}
       {err     && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
       <div className="card" style={{ maxWidth: 700 }}>
@@ -185,6 +197,7 @@ export function GsmHistorique() {
   const [search, setSearch] = useState(''); const dSearch = useDebounce(search, 300);
   const [sel, setSel] = useState<GsmRecord|null>(null);
   const [delTarget, setDelTarget] = useState<GsmRecord|null>(null);
+  const [exporting, setExporting] = useState(false);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getGsmMesHistorique(debut, fin), [debut, fin]);
 
@@ -197,9 +210,22 @@ export function GsmHistorique() {
     finally { setBusy(false); }
   };
 
+  const handleExport = async () => {
+    setExporting(true); setErr(null);
+    try {
+      const csv = await api.exportGsmCsv({ du: debut, au: fin });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `gsm_${debut}_${fin}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Erreur export'); }
+    finally { setExporting(false); }
+  };
+
   return (
     <>
-      <div className="page-header"><div><h1 className="page-title">Mon historique GSM</h1><p className="page-sub">Toutes vos saisies sur la période sélectionnée.</p></div><button className="btn btn-ghost btn-sm" onClick={refetch}>↻</button></div>
+      <div className="page-header"><div><h1 className="page-title">Mon historique GSM</h1><p className="page-sub">Toutes vos saisies sur la période sélectionnée, avec détails et export.</p></div><div style={{ display:'flex', gap:'.5rem' }}><button className="btn btn-ghost btn-sm" onClick={handleExport} disabled={exporting}>{exporting ? 'Export…' : 'Export CSV'}</button><button className="btn btn-ghost btn-sm" onClick={refetch}>↻</button></div></div>
       {error && <Alert kind="error">{error}</Alert>}
       {err   && <Alert kind="error">{err}</Alert>}
       <div className="card">
@@ -244,6 +270,18 @@ export function GsmHistorique() {
             {(['numero','date_saisie','coach','type_id','constat','piece','verbatim','action','statut_final','traitement','raison','nom_client'] as (keyof typeof sel)[]).map(k => (
               <div className="detail-item" key={k}><span className="detail-label">{String(k).replace('_',' ')}</span><span className="detail-value">{String(sel[k] ?? '') || '—'}</span></div>
             ))}
+            {(sel.capture_a || sel.capture_p || sel.capture_aa) && (
+              <div className="detail-item" style={{ gridColumn: '1 / -1' }}>
+                <span className="detail-label">Captures</span>
+                <div style={{ display:'flex', gap:'.75rem', flexWrap:'wrap' }}>
+                  {['capture_a','capture_p','capture_aa'].map(key => {
+                    const value = sel[key as keyof GsmRecord] as string | null;
+                    if (!value) return null;
+                    return <img key={key} src={`/api/gsm/captures/${encodeURIComponent(value)}`} alt={key} style={{ maxWidth:180, maxHeight:140, borderRadius:8, objectFit:'cover' }} />;
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}

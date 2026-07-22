@@ -20,13 +20,17 @@ import {
   SupPerformance, SupDistribution, SupDonneesHeures, SupFlux,
   SupCompilationGsm, SupNotesQualite, SupPlanning, SupReporting,
 } from './pages/sup/SupPages';
+import { SupCapturesPage } from './pages/sup/CapturesPage';
+import { SupPlanningManagersPage } from './pages/sup/PlanningManagersPage';
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 import {
   AdminDashboard, AdminComptes, AdminSessions, AdminAudit,
   AdminDistribution, AdminHabilitations, AdminReferentiels,
-  AdminPurge, AdminStockage,
+  AdminPurge, AdminStockage, AdminReporting,
 } from './pages/admin/AdminPages';
+import { AdminCapturesPage } from './pages/admin/CapturesPage';
+import { AdminParametresPage } from './pages/admin/ParametresPage';
 
 function getRoute(): string {
   const p = window.location.pathname.replace(/\/$/, '') || '/';
@@ -73,7 +77,8 @@ function SupApp({ page }: { page: string }) {
     case 'compilation-gsm':   return <SupCompilationGsm />;
     case 'notes-qualite':     return <SupNotesQualite />;
     case 'planning':          return <SupPlanning />;
-    case 'planning-managers': return <SupPlanning />;
+    case 'planning-managers': return <SupPlanningManagersPage />;
+    case 'captures':          return <SupCapturesPage />;
     case 'reporting':         return <SupReporting />;
     default:                  return <SupDashboard />;
   }
@@ -90,6 +95,9 @@ function AdminApp({ page }: { page: string }) {
     case 'referentiels':   return <AdminReferentiels />;
     case 'stockage':       return <AdminStockage />;
     case 'purge':          return <AdminPurge />;
+    case 'reporting':      return <AdminReporting />;
+    case 'captures':       return <AdminCapturesPage />;
+    case 'parametres':     return <AdminParametresPage />;
     default:               return <AdminDashboard />;
   }
 }
@@ -98,6 +106,25 @@ function AdminApp({ page }: { page: string }) {
 function AuthenticatedShell() {
   const { user } = useAuth();
   const [page, setPage] = useState('dashboard');
+
+  // Synchroniser l'état page avec l'URL pathname
+  useEffect(() => {
+    const pathname = window.location.pathname.replace(/\/$/, '') || '/';
+    const pageMap: Record<string, string> = {
+      '/gsm-saisie': 'gsm-saisie',
+      '/gsm-tableau': 'gsm-tableau',
+      '/gsm-historique': 'gsm-historique',
+      '/gsm-perfs': 'gsm-perfs',
+      '/file-attente': 'file-attente',
+      '/mes-dossiers': 'mes-dossiers',
+      '/planning': 'planning',
+      '/qualite': 'qualite',
+      '/acquisition': 'acquisition',
+    };
+    if (pageMap[pathname]) {
+      setPage(pageMap[pathname]);
+    }
+  }, []);
 
   // Heartbeat toutes les 60s pour les agents
   useHeartbeat(user?.role === 'agent', 60_000);

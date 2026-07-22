@@ -38,36 +38,4 @@ export async function planningRoutes(app: any): Promise<void> {
       return reply.send({ success: true, count });
     }
   );
-
-  // GET /api/planning-managers?semaine=
-  app.get('/api/planning-managers',
-    { preHandler: requireRole(['superviseur', 'admin']) },
-    async (req, reply) => {
-      const q = req.query as Record<string, string>;
-      if (q.semaine) {
-        const row = await db.getPlanningManager(q.semaine);
-        if (!row) return reply.send({ success: true, data: null });
-        const parsed = JSON.parse(row.data || '{}');
-        return reply.send({ success: true, semaine: row.semaine, titre: row.titre, ...parsed });
-      }
-      const semaines = await db.listPlanningManagerSemaines();
-      return reply.send({ success: true, semaines });
-    }
-  );
-
-  // POST /api/planning-managers (sup/admin)
-  app.post('/api/planning-managers',
-    { preHandler: requireRole(['superviseur', 'admin']) },
-    async (req, reply) => {
-      const body = req.body as { semaine?: string; titre?: string; shifts?: unknown[] } | null;
-      const semaine = body?.semaine ?? '';
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(semaine))
-        return reply.code(400).send({ error: 'semaine invalide (YYYY-MM-DD)' });
-      const titre = String(body?.titre ?? '');
-      const shifts = Array.isArray(body?.shifts) ? body!.shifts : [];
-      await db.upsertPlanningManager(semaine, titre, JSON.stringify({ titre, shifts }));
-      db.audit(req.user.matricule, 'SAVE_PLANNING_MANAGER', semaine, req.ip);
-      return reply.send({ success: true, semaine });
-    }
-  );
 }

@@ -1,0 +1,265 @@
+// ============================================================================
+// KYC Congo V3 - Serveur principal
+// ============================================================================
+
+'use strict';
+
+require('dotenv').config({ path: '/opt/kyc-v3/.env', quiet: true });
+
+const fastify = require('fastify');
+const path = require('path');
+const fs = require('fs');
+
+const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const RATE_LIMIT_LOGIN_MAX = parseInt(process.env.RATE_LIMIT_LOGIN_MAX || '5', 10);
+const RATE_LIMIT_LOGIN_WINDOW = parseInt(process.env.RATE_LIMIT_LOGIN_WINDOW || '60000', 10);
+const PUBLIC_DIR = '/opt/kyc-v3/public';
+const PAGES_DIR = path.join(PUBLIC_DIR, 'pages');
+
+const app = fastify({
+  logger: {
+    level: NODE_ENV === 'production' ? 'info' : 'debug',
+    transport: NODE_ENV === 'development' ? {
+      target: 'pino-pretty',
+      options: { colorize: true, translateTime: 'HH:MM:ss' }
+    } : undefined
+  },
+  trustProxy: true,
+  bodyLimit: 10 * 1024 * 1024
+});
+
+// Helper pour servir un fichier HTML
+function serveHtmlPage(reply, filename) {
+  const fullPath = path.join(PAGES_DIR, filename);
+  try {
+    const content = fs.readFileSync(fullPath, 'utf8');
+    reply.type('text/html; charset=utf-8');
+    return content;
+  } catch (err) {
+    app.log.error('serveHtmlPage: ' + err.message);
+    reply.code(404);
+    return '<h1>Page introuvable</h1>';
+  }
+}
+
+async function registerPlugins() {
+  await app.register(require('@fastify/helmet'), {
+    contentSecurityPolicy: false
+  });
+
+  await app.register(require('@fastify/cookie'));
+
+  // Multipart pour upload de fichiers (GSM captures)
+  await app.register(require('@fastify/multipart'), {
+    limits: {
+      fileSize: 5 * 1024 * 1024,
+      files: 5
+    }
+  });
+
+  await app.register(require('@fastify/rate-limit'), {
+    global: false,
+    max: 100,
+    timeWindow: '1 minute'
+  });
+
+  // Servir les assets statiques (CSS, JS, images)
+  await app.register(require('@fastify/static'), {
+    root: PUBLIC_DIR,
+    prefix: '/static/',
+    decorateReply: false
+  });
+}
+
+async function registerRoutes() {
+  // Healthcheck
+  app.get('/health', async (request, reply) => {
+    return {
+      status: 'ok',
+      version: '0.1.0',
+      timestamp: new Date().toISOString(),
+      env: NODE_ENV,
+      node: process.version
+    };
+  });
+
+  // Racine -> redirige vers /login
+  app.get('/', async (request, reply) => {
+    return serveHtmlPage(reply, 'accueil.html');
+  });
+
+  // Page Acquisition (publique, agent terrain)
+  app.get('/acquisition', async (request, reply) => {
+    return serveHtmlPage(reply, 'acquisition.html');
+  });
+
+  // Page Login
+  app.get('/login', async (request, reply) => {
+    return serveHtmlPage(reply, 'login.html');
+  });
+
+  // Page Change Password
+  app.get('/change-password', async (request, reply) => {
+    return serveHtmlPage(reply, 'change-password.html');
+  });
+
+  // Page Home
+  app.get('/home', async (request, reply) => {
+    return serveHtmlPage(reply, 'home.html');
+  });  // Page Agent - Tableau de bord
+  app.get('/agent/dashboard', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-dashboard.html');
+  });
+
+  // Page Agent - File d'attente
+  app.get('/agent/file-attente', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-file-attente.html');
+  });
+
+  // Page Agent - Liste GSM a faire
+  app.get('/agent/gsm', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-gsm-liste.html');
+  });
+
+  // Page Agent - Formulaire GSM (dossier_id dans l'URL)
+  app.get('/agent/gsm/:dossier_id', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-gsm.html');
+  });
+
+  // Page Agent - Performance
+  app.get('/agent/performance', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-performance.html');
+  });
+
+  // Page Agent - Planning
+  app.get('/agent/planning', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-planning.html');
+  });
+
+  // Page Agent - Qualite
+  app.get('/agent/qualite', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-qualite.html');
+  });
+
+  // Page Agent - Mes GSM et captures
+  app.get('/agent/mes-gsm', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-mes-gsm.html');
+  });
+
+  // Page Agent - Gross Add GSM (saisie libre)
+  app.get('/agent/gross-add', async (request, reply) => {
+    return serveHtmlPage(reply, 'agent-gross-add.html');
+  });
+
+  // Pages Superviseur / Admin
+  app.get('/sup/dashboard', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-dashboard.html');
+  });
+  app.get('/sup/historique', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-historique.html');
+  });
+  app.get('/sup/performance', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-performance.html');
+  });
+  app.get('/sup/distribution', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-distribution.html');
+  });
+  app.get('/sup/reporting', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-reporting.html');
+  });
+  app.get('/sup/recherche', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-recherche.html');
+  });
+  app.get('/sup/presence', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-presence.html');
+  });
+
+  // --- Nouveaux menus Superviseur (V3) ---
+  app.get('/sup/file-attente', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-file-attente.html');
+  });
+  app.get('/sup/compilation-gsm', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-compilation-gsm.html');
+  });
+  app.get('/sup/flux', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-flux.html');
+  });
+  app.get('/sup/notes-qualite', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-notes-qualite.html');
+  });
+  app.get('/sup/planning', async (request, reply) => {
+    return serveHtmlPage(reply, 'sup-planning.html');
+  });
+
+  // Pages Admin
+  app.get('/admin/dashboard', async (request, reply) => {
+    return serveHtmlPage(reply, 'admin-dashboard.html');
+  });
+  app.get('/admin/comptes', async (request, reply) => {
+    return serveHtmlPage(reply, 'admin-comptes.html');
+  });
+  app.get('/admin/audit', async (request, reply) => {
+    return serveHtmlPage(reply, 'admin-audit.html');
+  });
+  app.get('/admin/sessions', async (request, reply) => {
+    return serveHtmlPage(reply, 'admin-sessions.html');
+  });
+  app.get('/admin/parametres', async (request, reply) => {
+    return serveHtmlPage(reply, 'admin-parametres.html');
+  });
+
+  // Routes API auth avec rate-limit specifique sur login
+  await app.register(async function (instance) {
+    instance.register(require('./routes/auth'));
+
+    instance.addHook('onRoute', (routeOptions) => {
+      if (routeOptions.url === '/api/auth/login' && routeOptions.method === 'POST') {
+        routeOptions.config = routeOptions.config || {};
+        routeOptions.config.rateLimit = {
+          max: RATE_LIMIT_LOGIN_MAX,
+          timeWindow: RATE_LIMIT_LOGIN_WINDOW
+        };
+      }
+    });
+  });
+
+  // Routes API dossiers (necessitent auth)
+  await app.register(require('./routes/dossiers'));
+
+  // Routes API GSM (necessitent auth)
+  await app.register(require('./routes/gsm'));
+
+  // Route Tableau de bord Agent (necessite auth)
+  await app.register(require('./routes/agent-tableau'));
+
+  // Route Gross Add GSM saisie libre (necessite auth)
+  await app.register(require('./routes/agent-gross'));
+
+  // Routes Superviseur : liste agents + transfert (necessite auth)
+  await app.register(require('./routes/sup-file'));
+
+  // Route Config : seuil d'alerte (necessite auth)
+  await app.register(require('./routes/config'));
+
+  // Routes API publiques (agent terrain, sans auth)
+  await app.register(require('./routes/public-dossiers'));
+
+  // Routes API Admin (necessitent role admin)
+  await app.register(require('./routes/admin'));
+}
+
+const start = async () => {
+  try {
+    await registerPlugins();
+    await registerRoutes();
+    await app.listen({ port: PORT, host: HOST });
+    app.log.info('KYC V3 demarre sur http://' + HOST + ':' + PORT);
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+};
+
+start();

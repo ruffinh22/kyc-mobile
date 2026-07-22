@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vérification Faciale — KYC</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- MediaPipe Face Mesh via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --dark: #0f172a;
+    --card: #1e293b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--dark); font-family: 'Inter', system-ui, sans-serif; color: #f1f5f9; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+
+  .kyc-wrap { width: 100%; max-width: 480px; padding: 16px; }
+
+  /* Header */
+  .kyc-header { text-align: center; margin-bottom: 20px; }
+  .kyc-header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; color: #f8fafc; }
+  .kyc-header p  { font-size: 0.78rem; color: #94a3b8; margin-top: 4px; }
+
+  /* Viewfinder */
+  .viewfinder-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    background: #000;
+    border-radius: 20px;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 0 0 3px var(--card), 0 0 0 6px #334155;
+  }
+  #video  { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #canvas-overlay { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+
+  /* Oval guide */
+  .oval-guide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .oval-svg { width: 55%; max-width: 200px; }
+
+  /* Oval border SVG path transition */
+  #oval-border { transition: stroke 0.3s, filter 0.3s; }
+
+  /* Flash de capture */
+  .flash {
+    position: absolute;
+    inset: 0;
+    background: white;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.05s;
+  }
+  .flash.active { opacity: 0.8; }
+
+  /* Step cards */
+  .steps { display: flex; gap: 10px; margin-bottom: 18px; justify-content: center; }
+  .step {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 2px solid #334155;
+    border-radius: 14px;
+    flex: 1;
+    transition: border-color 0.3s, background 0.3s;
+    min-width: 0;
+  }
+  .step.active  { border-color: var(--yellow); background: #1c1a09; }
+  .step.done    { border-color: var(--green);  background: #051a0e; }
+  .step .icon   { font-size: 1.4rem; }
+  .step .label  { font-size: 0.65rem; font-weight: 600; color: #94a3b8; text-align: center; letter-spacing: 0.03em; text-transform: uppercase; }
+  .step.active .label { color: var(--yellow); }
+  .step.done   .label { color: var(--green);  }
+
+  /* Instruction banner */
+  .instruction {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 14px 18px;
+    text-align: center;
+    margin-bottom: 18px;
+    transition: all 0.4s;
+    border: 2px solid transparent;
+  }
+  .instruction.waiting { border-color: #334155; }
+  .instruction.locked  { border-color: var(--yellow); background: #1c1a09; }
+  .instruction.success { border-color: var(--green);  background: #051a0e; }
+  .instruction h2 { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+  .instruction p  { font-size: 0.78rem; color: #94a3b8; }
+
+  /* Hold bar */
+  .hold-bar-wrap { margin-top: 10px; }
+  .hold-bar-track { background: #334155; border-radius: 99px; height: 6px; overflow: hidden; }
+  .hold-bar-fill  { height: 100%; border-radius: 99px; background: var(--green); transition: width 0.1s linear; }
+
+  /* Result */
+  .result-panel {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 18px;
+    text-align: center;
+    border: 2px solid #334155;
+    margin-bottom: 18px;
+  }
+  .result-panel.success { border-color: var(--green); background: #051a0e; }
+  .result-panel.fail    { border-color: var(--red);   background: #1a0505; }
+  .result-panel h2 { font-size: 1.1rem; font-weight: 700; margin-bottom: 6px; }
+  .result-panel p  { font-size: 0.78rem; color: #94a3b8; }
+
+  /* Score bar */
+  .score-track { background: #334155; border-radius: 99px; height: 10px; overflow: hidden; margin: 10px 0; }
+  .score-fill  { height: 100%; border-radius: 99px; transition: width 0.6s ease; }
+
+  /* Capture thumbnails */
+  .thumbs { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; }
+  .thumb  {
+    width: 72px; height: 54px; border-radius: 10px; overflow: hidden;
+    border: 2px solid #334155; background: #0f172a;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem; color: #475569;
+    transition: border-color 0.3s;
+  }
+  .thumb.done    { border-color: var(--green); }
+  .thumb img     { width: 100%; height: 100%; object-fit: cover; }
+
+  /* CTA */
+  .btn-primary {
+    width: 100%; padding: 15px;
+    background: linear-gradient(135deg, #22c55e, #16a34a);
+    color: white; font-weight: 700; font-size: 1rem;
+    border: none; border-radius: 14px; cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    margin-bottom: 8px;
+  }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
+
+  .btn-sec {
+    width: 100%; padding: 11px;
+    background: transparent; color: #64748b;
+    border: 2px solid #334155; border-radius: 14px;
+    cursor: pointer; font-size: 0.85rem; font-weight: 600;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .btn-sec:hover { border-color: #64748b; color: #94a3b8; }
+
+  /* Error */
+  .err { background: #1a0505; border: 1px solid var(--red); border-radius: 10px; padding: 10px 14px; font-size: 0.8rem; color: #fca5a5; margin-bottom: 14px; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.2); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Pulse ring on oval when locked */
+  @keyframes pulseRing {
+    0%   { stroke-opacity: 0.9; }
+    50%  { stroke-opacity: 0.3; }
+    100% { stroke-opacity: 0.9; }
+  }
+  .oval-pulsing { animation: pulseRing 0.7s ease-in-out infinite; }
+
+  /* Head tilt arrow overlay */
+  #tilt-arrow {
+    position: absolute;
+    font-size: 2.8rem;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    transition: opacity 0.3s;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.8));
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<div class="kyc-wrap" id="app">
+
+  <!-- Header -->
+  <div class="kyc-header">
+    <h1>🔐 Vérification Faciale</h1>
+    <p id="header-sub">Suivi automatique — suivez les instructions ci-dessous</p>
+  </div>
+
+  <!-- Viewfinder -->
+  <div class="viewfinder-wrap" id="viewfinder">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas-overlay"></canvas>
+
+    <!-- SVG Oval guide -->
+    <div class="oval-guide">
+      <svg class="oval-svg" viewBox="0 0 200 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <ellipse cx="100" cy="130" rx="90" ry="120"
+          id="oval-border"
+          stroke="#475569"
+          stroke-width="4"
+          stroke-dasharray="8 4"
+        />
+      </svg>
+    </div>
+
+    <!-- Flash -->
+    <div class="flash" id="flash"></div>
+
+    <!-- Tilt arrow -->
+    <div id="tilt-arrow" style="opacity:0; left: 10px;">←</div>
+  </div>
+
+  <!-- Step indicators -->
+  <div class="steps">
+    <div class="step" id="step-0">
+      <span class="icon">😐</span>
+      <span class="label">Face</span>
+    </div>
+    <div class="step" id="step-1">
+      <span class="icon">↩️</span>
+      <span class="label">Gauche</span>
+    </div>
+    <div class="step" id="step-2">
+      <span class="icon">↪️</span>
+      <span class="label">Droite</span>
+    </div>
+  </div>
+
+  <!-- Instruction banner -->
+  <div class="instruction waiting" id="instruction-box">
+    <h2 id="instruction-title">Initialisation…</h2>
+    <p id="instruction-sub">Chargement de la caméra</p>
+    <div class="hold-bar-wrap" id="hold-bar-wrap" style="display:none">
+      <div class="hold-bar-track"><div class="hold-bar-fill" id="hold-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Thumbnails -->
+  <div class="thumbs">
+    <div class="thumb" id="thumb-0">😐</div>
+    <div class="thumb" id="thumb-1">↩️</div>
+    <div class="thumb" id="thumb-2">↪️</div>
+  </div>
+
+  <!-- Error -->
+  <div class="err" id="err-box" style="display:none"></div>
+
+  <!-- Result panel (shown after verify) -->
+  <div class="result-panel" id="result-panel" style="display:none">
+    <h2 id="result-title"></h2>
+    <p  id="result-sub"></p>
+    <div class="score-track"><div class="score-fill" id="score-fill" style="width:0%"></div></div>
+    <p id="score-label" style="font-size:0.75rem;color:#94a3b8;margin-top:4px;"></p>
+  </div>
+
+  <!-- CTA -->
+  <button class="btn-primary" id="btn-create" style="display:none" onclick="createDossier()">
+    ✅ Créer le dossier
+  </button>
+  <button class="btn-sec" id="btn-retry" style="display:none" onclick="retryAll()">
+    🔄 Recommencer
+  </button>
+
+</div>
+
+<script>
+// ============================================================================
+// URL params
+// ============================================================================
+const params = new URLSearchParams(window.location.search);
+const P = {
+  session   : params.get('session'),
+  recto     : params.get('recto'),
+  verso     : params.get('verso'),
+  numero    : params.get('numero'),
+  wa        : params.get('wa'),
+  username  : params.get('username'),
+  fonction  : params.get('fonction'),
+  zone      : params.get('zone'),
+};
+
+// ============================================================================
+// State machine
+// ============================================================================
+const STEPS = [
+  { id: 0, label: 'Face',   dir: 'center', icon: '😐', arrow: null,   range: [-0.1, 0.1]  },
+  { id: 1, label: 'Gauche', dir: 'left',   icon: '↩️', arrow: '←',    range: [-0.35, -0.18] },
+  { id: 2, label: 'Droite', dir: 'right',  icon: '↪️', arrow: '→',    range: [0.18, 0.35]  },
+];
+
+let currentStep  = 0;
+let captures     = [];       // { blob, dataUrl }[]
+let holdTimer    = null;
+let holdProgress = 0;
+let isHolding    = false;
+let verifyScore  = null;
+let verifyMatch  = false;
+let isCreating   = false;
+let retryCount   = 0;
+const MAX_RETRY  = 3;
+
+const HOLD_MS    = 1000;     // temps de maintien avant capture auto (ms)
+const TICK_MS    = 50;       // intervalle de tick hold bar
+
+// ============================================================================
+// DOM refs
+// ============================================================================
+const video       = document.getElementById('video');
+const canvasOv    = document.getElementById('canvas-overlay');
+const ctxOv       = canvasOv.getContext('2d');
+const ovalBorder  = document.getElementById('oval-border');
+const flashEl     = document.getElementById('flash');
+const tiltArrow   = document.getElementById('tilt-arrow');
+const holdBarEl   = document.getElementById('hold-bar');
+const holdBarWrap = document.getElementById('hold-bar-wrap');
+const instrBox    = document.getElementById('instruction-box');
+const instrTitle  = document.getElementById('instruction-title');
+const instrSub    = document.getElementById('instruction-sub');
+const errBox      = document.getElementById('err-box');
+const resultPanel = document.getElementById('result-panel');
+const btnCreate   = document.getElementById('btn-create');
+const btnRetry    = document.getElementById('btn-retry');
+
+// ============================================================================
+// Step UI helpers
+// ============================================================================
+function setStepDone(idx) {
+  const el = document.getElementById('step-' + idx);
+  el.classList.remove('active');
+  el.classList.add('done');
+  el.querySelector('.icon').textContent = '✅';
+}
+function setStepActive(idx) {
+  STEPS.forEach((_, i) => {
+    const el = document.getElementById('step-' + i);
+    el.classList.remove('active', 'done');
+    if (i < idx) { el.classList.add('done'); el.querySelector('.icon').textContent = '✅'; }
+  });
+  if (idx < STEPS.length) document.getElementById('step-' + idx).classList.add('active');
+}
+
+function setInstruction(title, sub, state = 'waiting') {
+  instrTitle.textContent = title;
+  instrSub.textContent   = sub;
+  instrBox.className     = 'instruction ' + state;
+}
+
+function setOval(color, pulsing = false) {
+  ovalBorder.setAttribute('stroke', color);
+  ovalBorder.style.filter = color === '#22c55e'
+    ? 'drop-shadow(0 0 8px #22c55e)'
+    : color === '#eab308' ? 'drop-shadow(0 0 6px #eab308)' : 'none';
+  pulsing
+    ? ovalBorder.classList.add('oval-pulsing')
+    : ovalBorder.classList.remove('oval-pulsing');
+}
+
+function showArrow(dir) {
+  if (!dir) { tiltArrow.style.opacity = '0'; return; }
+  tiltArrow.textContent = dir;
+  if (dir === '←') {
+    tiltArrow.style.left  = '10px';
+    tiltArrow.style.right = 'auto';
+  } else {
+    tiltArrow.style.right = '10px';
+    tiltArrow.style.left  = 'auto';
+  }
+  tiltArrow.style.opacity = '1';
+}
+
+function showErr(msg) {
+  errBox.textContent   = '⚠️ ' + msg;
+  errBox.style.display = msg ? 'block' : 'none';
+}
+
+function setThumb(idx, dataUrl) {
+  const el = document.getElementById('thumb-' + idx);
+  el.classList.add('done');
+  el.innerHTML = `<img src="${dataUrl}" alt="Capture ${idx + 1}">`;
+}
+
+// ============================================================================
+// Hidden capture canvas
+// ============================================================================
+const captureCanvas = document.createElement('canvas');
+captureCanvas.width  = 640;
+captureCanvas.height = 480;
+const captureCtx = captureCanvas.getContext('2d');
+
+// ============================================================================
+// Head‑pose estimation via MediaPipe Face Mesh
+// nose tip = LM 1, left cheek = LM 234, right cheek = LM 454
+// yaw ≈ (left_x – right_x) / face_width  → negative = head left, positive = head right
+// ============================================================================
+let faceMesh = null;
+let lastYaw  = 0;
+let faceDetected = false;
+
+async function initFaceMesh() {
+  return new Promise((resolve) => {
+    const fm = new FaceMesh({
+      locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+    });
+    fm.setOptions({
+      maxNumFaces       : 1,
+      refineLandmarks   : false,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence : 0.5,
+    });
+    fm.onResults((results) => {
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const lm = results.multiFaceLandmarks[0];
+        // Face width = distance between outer left (LM234) and outer right (LM454)
+        const leftX  = lm[234].x;
+        const rightX = lm[454].x;
+        const faceW  = Math.abs(leftX - rightX);
+        // Nose tip relative to center of face
+        const noseX  = lm[1].x;
+        const centerX = (leftX + rightX) / 2;
+        // Yaw: positive = head turned right (nose to right of center)
+        lastYaw = faceW > 0.01 ? (noseX - centerX) / faceW : 0;
+        faceDetected = true;
+      } else {
+        faceDetected = false;
+        lastYaw = 0;
+      }
+    });
+    faceMesh = fm;
+    resolve();
+  });
+}
+
+// Send frames to MediaPipe
+let animFrame;
+async function tick() {
+  if (faceMesh && video.readyState >= 2) {
+    await faceMesh.send({ image: video });
+  }
+  processPose();
+  animFrame = requestAnimationFrame(tick);
+}
+
+// ============================================================================
+// Pose processor — called every frame
+// ============================================================================
+function processPose() {
+  if (captures.length >= STEPS.length) return;  // All done
+  const step = STEPS[currentStep];
+  const [minY, maxY] = step.range;
+  const inRange = faceDetected && lastYaw >= minY && lastYaw <= maxY;
+
+  // Update oval color
+  if (!faceDetected) {
+    setOval('#ef4444', false);
+    setInstruction(
+      `Visage non détecté`,
+      'Rapprochez-vous et centrez votre visage dans l\'ovale.',
+      'waiting'
+    );
+    holdBarWrap.style.display = 'none';
+    resetHold();
+    return;
+  }
+
+  if (inRange) {
+    setOval('#22c55e', isHolding);
+    holdBarWrap.style.display = 'block';
+    setInstruction(
+      inRangeTitle(step),
+      'Maintenez immobile…',
+      isHolding ? 'success' : 'locked'
+    );
+    if (!isHolding) startHold();
+  } else {
+    setOval('#eab308', false);
+    holdBarWrap.style.display = 'none';
+    setInstruction(
+      outOfRangeTitle(step),
+      outOfRangeSub(step),
+      'locked'
+    );
+    resetHold();
+  }
+}
+
+function inRangeTitle(step) {
+  if (step.dir === 'center') return '😐 Parfait — regardez droit devant';
+  if (step.dir === 'left')   return '↩️ Bonne position — tête à gauche';
+  return '↪️ Bonne position — tête à droite';
+}
+function outOfRangeTitle(step) {
+  if (step.dir === 'center') return '😐 Regardez droit devant vous';
+  if (step.dir === 'left')   return '↩️ Inclinez la tête vers la gauche';
+  return '↪️ Inclinez la tête vers la droite';
+}
+function outOfRangeSub(step) {
+  if (step.dir === 'center') return 'Centrez votre regard face à la caméra.';
+  if (step.dir === 'left')   return 'Tournez doucement la tête vers votre gauche.';
+  return 'Tournez doucement la tête vers votre droite.';
+}
+
+// ============================================================================
+// Hold logic — count HOLD_MS of in-range frames, then auto-capture
+// ============================================================================
+function startHold() {
+  if (isHolding) return;
+  isHolding    = true;
+  holdProgress = 0;
+  holdTimer = setInterval(() => {
+    holdProgress += TICK_MS;
+    const pct = Math.min((holdProgress / HOLD_MS) * 100, 100);
+    holdBarEl.style.width = pct + '%';
+    if (holdProgress >= HOLD_MS) {
+      clearInterval(holdTimer);
+      holdTimer = null;
+      autoCapture();
+    }
+  }, TICK_MS);
+}
+
+function resetHold() {
+  if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+  isHolding    = false;
+  holdProgress = 0;
+  holdBarEl.style.width = '0%';
+}
+
+// ============================================================================
+// Auto-capture
+// ============================================================================
+async function autoCapture() {
+  // Flash
+  flashEl.classList.add('active');
+  setTimeout(() => flashEl.classList.remove('active'), 150);
+
+  // Draw frame (mirrored — undo CSS scaleX(-1))
+  captureCtx.save();
+  captureCtx.translate(captureCanvas.width, 0);
+  captureCtx.scale(-1, 1);
+  captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  captureCtx.restore();
+
+  const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.92);
+  const blob    = await new Promise(r => captureCanvas.toBlob(r, 'image/jpeg', 0.92));
+
+  captures.push({ blob, dataUrl });
+  setThumb(currentStep, dataUrl);
+  setStepDone(currentStep);
+
+  currentStep++;
+  resetHold();
+
+  if (currentStep < STEPS.length) {
+    // Advance to next step
+    setStepActive(currentStep);
+    const nextStep = STEPS[currentStep];
+    showArrow(nextStep.arrow);
+    setInstruction(
+      outOfRangeTitle(nextStep),
+      outOfRangeSub(nextStep),
+      'waiting'
+    );
+    setOval('#475569', false);
+  } else {
+    // All 3 captured — send to API
+    showArrow(null);
+    setOval('#22c55e', false);
+    setInstruction('📤 Envoi en cours…', 'Comparaison avec la CNI en cours…', 'success');
+    await verifyWithAPI();
+  }
+}
+
+// ============================================================================
+// API call — verify-face-realtime (3rd frame = best pose, frontal)
+// ============================================================================
+async function verifyWithAPI() {
+  try {
+    // Use capture 0 (frontal face) as the live photo for comparison
+    const formData = new FormData();
+    formData.append('video_frame', captures[0].blob, 'live-front.jpg');
+    formData.append('recto_path', P.recto);
+
+    const res    = await fetch('/api/dossiers/verify-face-realtime', { method: 'POST', body: formData });
+    const result = await res.json();
+
+    if (result.success) {
+      verifyScore = result.score;
+      verifyMatch = result.match;
+      showResult(result.score, result.match, result.message);
+    } else {
+      showErr(result.error || 'Erreur lors de la vérification');
+      showRetry();
+    }
+  } catch (e) {
+    showErr('Erreur réseau : ' + e.message);
+    showRetry();
+  }
+}
+
+// ============================================================================
+// Show result
+// ============================================================================
+function showResult(score, match, msg) {
+  resultPanel.style.display = 'block';
+  resultPanel.className = 'result-panel success';
+  document.getElementById('result-title').textContent = '✅ Vérification enregistrée';
+  document.getElementById('result-sub').textContent   = msg || '';
+
+  const fill  = document.getElementById('score-fill');
+  const label = document.getElementById('score-label');
+  fill.style.width      = Math.min(score, 100) + '%';
+  fill.style.background = '#22c55e';
+  label.textContent     = `Score de similarité : ${score.toFixed(1)}%`;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VALIDATION MANUELLE UNIQUEMENT
+  // Tous les dossiers peuvent être créés, peu importe le score
+  // Les agents feront la décision finale (acceptation/rejet)
+  // ══════════════════════════════════════════════════════════════════════════
+  setInstruction('✅ Vérification enregistrée', 'Vous pouvez créer le dossier. Un agent validera manuellement.', 'success');
+  btnCreate.style.display = 'block';
+}
+
+function showRetry() {
+  btnRetry.style.display = 'block';
+}
+
+// ============================================================================
+// Create dossier
+// ============================================================================
+async function createDossier() {
+  if (isCreating) return;
+  isCreating = true;
+  btnCreate.disabled = true;
+  btnCreate.innerHTML = '<span class="spinner"></span> Création en cours…';
+
+  try {
+    const formData = new FormData();
+    formData.append('video_frame',     captures[0].blob, 'live-front.jpg');
+    formData.append('numero_mtn',      P.numero   || '');
+    formData.append('wa_agent',        P.wa       || '');
+    formData.append('username_agent',  P.username || '');
+    formData.append('fonction_agent',  P.fonction || '');
+    formData.append('zone_agent',      P.zone     || '');
+    formData.append('recto_path',      P.recto    || '');
+    formData.append('verso_path',      P.verso    || '');
+    formData.append('score_visage',    verifyScore != null ? verifyScore : '');
+    formData.append('visage_match',    'null');  // VALIDATION MANUELLE : pas de décision automatique
+    formData.append('visage_motif',    'verification_manuelle_interactive');
+
+    const res    = await fetch('/api/dossiers/complete-with-face-verify', { method: 'POST', body: formData });
+    const result = await res.json();
+
+    if (result.success) {
+      setInstruction('🎉 Dossier créé !', 'ID : ' + result.id + ' — redirection…', 'success');
+      btnCreate.innerHTML = '✅ Dossier créé !';
+      setTimeout(() => { window.location.href = '/acquisition'; }, 2500);
+    } else {
+      showErr(result.error || 'Erreur création dossier');
+      btnCreate.disabled = false;
+      btnCreate.innerHTML = '✅ Créer le dossier';
+      isCreating = false;
+    }
+  } catch (e) {
+    showErr('Erreur réseau : ' + e.message);
+    btnCreate.disabled = false;
+    btnCreate.innerHTML = '✅ Créer le dossier';
+    isCreating = false;
+  }
+}
+
+// ============================================================================
+// Retry
+// ============================================================================
+function retryAll() {
+  currentStep  = 0;
+  captures     = [];
+  verifyScore  = null;
+  verifyMatch  = false;
+  isCreating   = false;
+  holdProgress = 0;
+  isHolding    = false;
+  if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+
+  // Reset UI
+  STEPS.forEach((s, i) => {
+    const el = document.getElementById('step-' + i);
+    el.classList.remove('active', 'done');
+    el.querySelector('.icon').textContent = s.icon;
+    const thumb = document.getElementById('thumb-' + i);
+    thumb.classList.remove('done');
+    thumb.innerHTML = s.icon;
+  });
+  document.getElementById('step-0').classList.add('active');
+  resultPanel.style.display = 'none';
+  btnCreate.style.display   = 'none';
+  btnRetry.style.display    = 'none';
+  errBox.style.display      = 'none';
+  holdBarEl.style.width     = '0%';
+  holdBarWrap.style.display = 'none';
+  showArrow(null);
+  setOval('#475569', false);
+  setInstruction('😐 Regardez droit devant vous', 'Centrez votre visage dans l\'ovale.', 'waiting');
+}
+
+// ============================================================================
+// Init
+// ============================================================================
+async function init() {
+  // Param check
+  if (!P.recto || !P.numero) {
+    showErr('Session incomplète — données de l\'étape 1 manquantes. Revenez en arrière.');
+    setInstruction('Erreur de session', 'Données manquantes — recommencez depuis l\'étape 1.', 'waiting');
+    return;
+  }
+
+  setInstruction('Chargement…', 'Initialisation de la caméra et du modèle IA…', 'waiting');
+
+  // Camera
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+  } catch (e) {
+    showErr('Erreur caméra : ' + e.message + '. Autorisez l\'accès à la caméra.');
+    return;
+  }
+
+  // Resize overlay canvas
+  canvasOv.width  = video.videoWidth  || 640;
+  canvasOv.height = video.videoHeight || 480;
+
+  // MediaPipe
+  try {
+    await initFaceMesh();
+  } catch (e) {
+    showErr('Erreur modèle IA : ' + e.message);
+    return;
+  }
+
+  // Start
+  setStepActive(0);
+  showArrow(null);
+  setInstruction('😐 Regardez droit devant vous', 'Centrez votre visage dans l\'ovale.', 'waiting');
+  tick();
+}
+
+window.addEventListener('load', init);
+</script>
+</body>
+</html>

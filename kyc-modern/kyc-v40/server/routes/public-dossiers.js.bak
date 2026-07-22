@@ -1,0 +1,146 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const util = require('util');
+const pipeline = util.promisify(require('stream').pipeline);
+const { db, audit } = require('../db');
+
+const UPLOAD_CNI = '/opt/kyc-v3/uploads/cni';
+const MAX_SIZE = 5 * 1024 * 1024;
+const ALLOWED = ['image/jpeg', 'image/png', 'image/webp'];
+
+async function routes(fastify, opts) {
+
+  // POST /api/public/dossiers - Nouveau dossier (sans auth, agent terrain)
+  fastify.post('/api/public/dossiers', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: 60 * 1000  // 10 dossiers max par minute par IP
+      }
+    }
+  }, async (request, reply) => {
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+
+    if (!request.isMultipart()) {
+      return reply.code(400).send({ error: 'Format multipart attendu' });
+    }
+
+    const data = { fields: {}, photos: {} };
+    
+    try {
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type === 'field') {
+          data.fields[part.fieldname] = part.value;
+        } else if (part.type === 'file') {
+          const label = part.fieldname; // photo_recto, photo_verso, photo_live
+          if (!['photo_recto', 'photo_verso', 'photo_live'].includes(label)) {
+            part.file.resume();
+            continue;
+          }
+          if (!ALLOWED.includes(part.mimetype)) {
+            part.file.resume();
+            continue;
+          }
+          // Lire le fichier en buffer pour pouvoir verifier taille avant ecriture finale
+          const chunks = [];
+          for await (const chunk of part.file) {
+            chunks.push(chunk);
+            const total = chunks.reduce((s, c) => s + c.length, 0);
+            if (total > MAX_SIZE) {
+              return reply.code(413).send({ error: 'Fichier ' + label + ' trop volumineux (max 5MB)' });
+            }
+          }
+          data.photos[label] = {
+            buffer: Buffer.concat(chunks),
+            mimetype: part.mimetype
+          };
+        }
+      }
+
+      // Validation des champs
+      const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn } = data.fields;
+      if (!wa_agent || !/^[0-9]{9}$/.test(wa_agent)) {
+        return reply.code(400).send({ error: 'WhatsApp agent invalide (9 chiffres)' });
+      }
+      if (!numero_mtn || !/^[0-9]{9}$/.test(numero_mtn)) {
+        return reply.code(400).send({ error: 'Numero MTN invalide (9 chiffres)' });
+      }
+      if (!username_agent || !fonction_agent || !zone_agent) {
+        return reply.code(400).send({ error: 'Champs obligatoires manquants' });
+      }
+      if (!data.photos.photo_recto || !data.photos.photo_verso || !data.photos.photo_live) {
+        return reply.code(400).send({ error: 'Les 3 photos sont obligatoires' });
+      }
+
+      // Generer ID dossier
+      const id = 'D' + Date.now() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+      const now = new Date();
+      const date = now.toISOString().slice(0, 10);
+      const heure = now.toTimeString().slice(0, 5);
+      const ts = Math.floor(Date.now() / 1000);
+
+      // Creer dossier disque par date
+      const dateDir = path.join(UPLOAD_CNI, date);
+      if (!fs.existsSync(dateDir)) {
+        fs.mkdirSync(dateDir, { recursive: true, mode: 0o755 });
+      }
+
+      // Sauver les 3 photos
+      const photoPaths = {};
+      for (const label of ['photo_recto', 'photo_verso', 'photo_live']) {
+        const ext = data.photos[label].mimetype === 'image/png' ? 'png' : (data.photos[label].mimetype === 'image/webp' ? 'webp' : 'jpg');
+        const suffix = label.replace('photo_', '');
+        const filename = id + '_' + suffix + '.' + ext;
+        const fullPath = path.join(dateDir, filename);
+        fs.writeFileSync(fullPath, data.photos[label].buffer, { mode: 0o644 });
+        photoPaths[label] = date + '/' + filename;
+      }
+
+      // Inserer dossier
+      db.prepare(`
+        INSERT INTO dossiers (
+          id, numero_mtn, wa_agent, username_agent, fonction_agent, zone_agent,
+          ligne, date, heure_reception, statut,
+          photo_recto, photo_verso, photo_live, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)
+      `).run(
+        id, numero_mtn, wa_agent, username_agent, fonction_agent, zone_agent,
+        'Formulaire Web', date, heure,
+        photoPaths.photo_recto, photoPaths.photo_verso, photoPaths.photo_live, ts
+      );
+
+      audit(null, 'DOSSIER_PUBLIC_CREATE', 'id=' + id + ' numero=' + numero_mtn + ' wa=' + wa_agent, ip, ua);
+
+      return reply.send({ success: true, id: id, numero: numero_mtn });
+
+    } catch (err) {
+      fastify.log.error('POST /api/public/dossiers error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+
+  // GET /api/public/dossiers - Liste par WhatsApp (pour tableau de bord agent terrain)
+  fastify.get('/api/public/dossiers', async (request, reply) => {
+    const wa = request.query.wa_agent;
+    if (!wa || !/^[0-9]{9}$/.test(wa)) {
+      return reply.code(400).send({ error: 'wa_agent requis (9 chiffres)' });
+    }
+    try {
+      const rows = db.prepare(`
+        SELECT id, numero_mtn, statut, date, heure_reception, heure_cloture, raison_rejet, agent_saisie
+        FROM dossiers
+        WHERE wa_agent = ?
+        ORDER BY created_at DESC LIMIT 50
+      `).all(wa);
+      return reply.send({ success: true, count: rows.length, dossiers: rows });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+}
+
+module.exports = routes;

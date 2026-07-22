@@ -1,0 +1,177 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Agent</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+body{font-family:'Inter',system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#1A1A1A 0%,#2a2a2a 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#d1d5db;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#374151;color:#fff}
+.sb-link.active{background:#eab308;color:#111827;font-weight:600}
+
+/* Sidebar reduite (icones seulement) */
+body.sb-reduit .sidebar{width:68px !important;overflow:hidden}
+body.sb-reduit .sidebar .sb-link{justify-content:center;padding:.625rem 0}
+body.sb-reduit .sidebar .sb-link span{margin-right:0 !important}
+body.sb-reduit .sidebar a.sb-link{font-size:0 !important}
+body.sb-reduit .sidebar a.sb-link span{font-size:1.25rem !important}
+body.sb-reduit .sidebar h1,body.sb-reduit .sidebar p,body.sb-reduit .sidebar #sb-nom,body.sb-reduit .sidebar #sb-matricule,body.sb-reduit .sidebar #sb-role{display:none !important}
+body.sb-reduit .sidebar .p-5{padding:.75rem !important;display:flex;justify-content:center}
+body.sb-reduit .sidebar .sb-toggle-txt{display:none !important}
+</style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+<div class="flex min-h-screen">
+<div id="sidebar-mount"></div>
+<div id="spa-view" class="flex-1 min-w-0"></div>
+</div>
+<script>
+const SPA={intervals:[]};
+const _setInterval=window.setInterval.bind(window);
+window.setInterval=function(fn,d){const id=_setInterval(fn,d);SPA.intervals.push(id);return id};
+function nettoyerTimers(){SPA.intervals.forEach(id=>clearInterval(id));SPA.intervals=[]}
+
+async function chargerSidebar(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='agent'&&u.role!=='superviseur'&&u.role!=='admin'){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  document.querySelectorAll('#sidebar-mount a[href^="/agent/"]').forEach(a=>{
+    a.addEventListener('click',ev=>{ev.preventDefault();naviguer(a.getAttribute('href'))});
+  });
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  // BLOCAGE : saisie GSM a finaliser -> pas de deconnexion
+  try{
+    if(sessionStorage.getItem('gsm_a_finaliser')){
+      window.dispatchEvent(new CustomEvent('bloc-gsm-finaliser'));
+      return;
+    }
+  }catch(e){}
+  // BLOCAGE : pas de deconnexion si dossier en cours
+  if(t){
+    try{
+      const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+      const r=await fetch('/api/dossiers',{headers:{'Authorization':'Bearer '+t}});
+      if(r.ok){
+        const d=await r.json();
+        const moi=u.matricule;
+        const enCours=(d.dossiers||[]).filter(x=>x.statut==='en_cours'&&x.agent_saisie===moi);
+        if(enCours.length>0){
+          window.dispatchEvent(new CustomEvent('bloc-deconnexion'));
+          return;
+        }
+      }
+    }catch(e){}
+  }
+  if(t){try{fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+function routeVersFichier(route){
+  const seg=route.replace(/^\/agent\//,'').replace(/\/+$/,'');
+  return 'agent-'+(seg||'dashboard')+'.html';
+}
+function menuDepuisRoute(route){return route.replace(/^\/agent\//,'').replace(/\/.*$/,'')||'dashboard'}
+function chargerScriptExterne(src){
+  return new Promise((res)=>{
+    if([...document.scripts].some(s=>s.src&&s.src.includes(src))){res();return}
+    const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=res;document.head.appendChild(s);
+  });
+}
+
+let enCours=false;
+async function naviguer(route,remplaceHistorique){
+  // BLOCAGE : saisie GSM a finaliser -> interdit de quitter gross-add
+  try{
+    const aFinaliser=sessionStorage.getItem('gsm_a_finaliser');
+    if(aFinaliser && route.indexOf('/agent/gross-add')!==0){
+      window.dispatchEvent(new CustomEvent('bloc-gsm-finaliser'));
+      return;
+    }
+  }catch(e){}
+  if(enCours)return; enCours=true;
+  const fichier=routeVersFichier(route);
+  const vue=document.getElementById('spa-view');
+  try{
+    const r=await fetch('/static/pages/'+fichier);
+    if(!r.ok){vue.innerHTML='<div class="p-10 text-center text-gray-400">Page introuvable</div>';enCours=false;return}
+    const html=await r.text();
+    const mMain=html.match(/<main[\s\S]*?<\/main>/i);
+    const main=mMain?mMain[0]:'<div class="p-10">Contenu vide</div>';
+    // TOUS les scripts externes de la page (head + body), sauf Tailwind/Alpine deja dans la coquille
+    const tousExternes=[...html.matchAll(/<script[^>]*src=["']([^"']+)["'][^>]*>/gi)]
+      .map(m=>m[1])
+      .filter(src=>!/tailwindcss\.com|alpinejs/i.test(src));
+    // Scripts inline APRES </main> (la logique x-data de la page)
+    const apres=html.split(/<\/main>/i)[1]||'';
+    const inlines=[...apres.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map(m=>m[1]);
+
+    // 1) Charger les libs + logic externes AVANT tout
+    for(const src of tousExternes){await chargerScriptExterne(src)}
+
+    // 2) Nettoyer timers de l'ancienne page
+    nettoyerTimers();
+
+    // 3) Construire la nouvelle vue invisible, detachee
+    const temp=document.createElement('div');
+    temp.className='flex-1 min-w-0';
+    temp.style.visibility='hidden';
+    temp.innerHTML=main;
+
+    // 4) Executer les scripts inline (definit/complete les fonctions x-data)
+    for(const code of inlines){
+      const s=document.createElement('script');s.textContent=code;document.head.appendChild(s);s.remove();
+    }
+
+    // 5) Remplacer en une operation
+    vue.replaceWith(temp);
+    temp.id='spa-view';
+
+    // 6) Initialiser Alpine sur la nouvelle vue
+    if(window.Alpine&&window.Alpine.initTree){
+      try{window.Alpine.initTree(temp)}catch(e){console.error('initTree',e)}
+    }
+
+    // 7) Afficher a la frame suivante (Alpine a applique x-show/x-text)
+    requestAnimationFrame(()=>{ temp.style.visibility=''; });
+
+    // 8) URL + menu actif
+    if(remplaceHistorique){history.replaceState({route},'',route)}else{history.pushState({route},'',route)}
+    document.querySelectorAll('#sidebar-mount a[data-menu]').forEach(a=>a.classList.remove('active'));
+    const act=document.querySelector('#sidebar-mount a[data-menu="'+menuDepuisRoute(route)+'"]');
+    if(act)act.classList.add('active');
+    window.scrollTo(0,0);
+  }catch(e){console.error('naviguer',e)}
+  enCours=false;
+}
+
+window.addEventListener('popstate',ev=>{
+  const route=(ev.state&&ev.state.route)||location.pathname;
+  if(route.startsWith('/agent/'))naviguer(route,true);
+});
+window.addEventListener('DOMContentLoaded',async function(){
+  await chargerSidebar();
+  const route=location.pathname.startsWith('/agent/')?location.pathname:'/agent/dashboard';
+  await naviguer(route,true);
+});
+</script>
+<script>
+function toggleSidebarReduit(){
+  document.body.classList.toggle('sb-reduit');
+  try{ localStorage.setItem('kyc_sidebar_reduit', document.body.classList.contains('sb-reduit')?'1':'0'); }catch(e){}
+}
+(function(){
+  try{ if(localStorage.getItem('kyc_sidebar_reduit')==='1'){ document.body.classList.add('sb-reduit'); } }catch(e){}
+})();
+</script>
+</body></html>

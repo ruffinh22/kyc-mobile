@@ -118,6 +118,12 @@ const NAV: Record<Role, NavSection[]> = {
       ],
     },
     {
+      label: 'Captures',
+      items: [
+        { key: 'captures', icon: '🔍', label: 'Recherche captures' },
+      ],
+    },
+    {
       label: 'Export',
       items: [
         { key: 'reporting', icon: '📤', label: 'Reporting / Export' },
@@ -147,6 +153,18 @@ const NAV: Record<Role, NavSection[]> = {
       items: [
         { key: 'stockage', icon: '💾', label: 'Stockage' },
         { key: 'purge',    icon: '🗑',  label: 'Purge données' },
+      ],
+    },
+    {
+      label: 'Captures',
+      items: [
+        { key: 'captures', icon: '🔍', label: 'Recherche captures' },
+      ],
+    },
+    {
+      label: 'Reporting',
+      items: [
+        { key: 'reporting', icon: '📊', label: 'Reporting admin' },
       ],
     },
   ],

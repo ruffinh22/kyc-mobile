@@ -1,0 +1,93 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Mes notes qualité</title><script src="https://cdn.tailwindcss.com"></script><script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#1a1a1a 0%,#2d2d2d 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#d1d5db;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#3d3d3d;color:#fff}
+.sb-link.active{background:#FFC300;color:#1a1a1a;font-weight:600}
+</style>
+<script>
+async function chargerSidebar(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+</head><body data-antiflash="1" style="background:linear-gradient(180deg,#1a1a1a 0%,#2d2d2d 100%)" class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount" class="w-64 flex-shrink-0" style="background:linear-gradient(180deg,#1a1a1a 0%,#2d2d2d 100%);min-height:100vh"></div>
+<main class="flex-1 min-w-0 p-6" x-data="qualite()" x-init="init()">
+
+<div class="mb-4 border-b border-gray-200 pb-3"><h1 class="text-2xl font-bold text-gray-800">⭐ Mes notes qualité</h1><p class="text-gray-500 text-sm">Vos évaluations hebdomadaires par campagne</p></div>
+
+<div x-show="!chargement&&notes.length===0" class="bg-white rounded-xl border border-gray-200 p-10 text-center">
+<div class="text-5xl text-gray-300 mb-3">⭐</div>
+<h3 class="font-bold text-gray-700 mb-1">Aucune note disponible</h3>
+<p class="text-sm text-gray-500">Vos notes qualité apparaîtront ici après importation par votre superviseur.</p>
+</div>
+
+<div x-show="notes.length>0" class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+<div style="overflow-x:auto">
+<table class="w-full text-sm">
+<thead class="bg-gray-50 text-xs uppercase text-gray-500"><tr>
+<th class="px-3 py-3 text-left">Campagne</th><th class="px-3 py-3 text-left">Équipe</th><th class="px-3 py-3 text-left">Période</th>
+<th class="px-3 py-3 text-center">W1</th><th class="px-3 py-3 text-center">W2</th><th class="px-3 py-3 text-center">W3</th><th class="px-3 py-3 text-center">W4</th><th class="px-3 py-3 text-center">Moyenne</th>
+</tr></thead>
+<tbody>
+<template x-for="n in notes" :key="n.id">
+<tr class="border-t border-gray-100">
+<td class="px-3 py-2 font-semibold text-gray-800" x-text="campLabel(n.campagne)"></td>
+<td class="px-3 py-2 text-gray-600" x-text="n.equipe||'—'"></td>
+<td class="px-3 py-2 text-gray-600" x-text="moisLabel(n.mois)+' '+n.annee"></td>
+<td class="px-3 py-2 text-center" x-html="cell(n.note_w1,n.statut_w1)"></td>
+<td class="px-3 py-2 text-center" x-html="cell(n.note_w2,n.statut_w2)"></td>
+<td class="px-3 py-2 text-center" x-html="cell(n.note_w3,n.statut_w3)"></td>
+<td class="px-3 py-2 text-center" x-html="cell(n.note_w4,n.statut_w4)"></td>
+<td class="px-3 py-2 text-center font-bold" :style="'color:'+moyColor(n.moyenne)" x-text="n.moyenne==null?'—':(n.moyenne*100).toFixed(0)+'%'"></td>
+</tr>
+</template>
+</tbody>
+</table>
+</div>
+</div>
+
+</main></div>
+<script>
+function qualite(){
+  return {
+    notes:[],
+    chargement:true,
+    async init(){
+      await chargerSidebar('qualite');
+      const t=sessionStorage.getItem('kyc_token');
+      try{
+        const r=await fetch('/api/notes-qualite/mes',{headers:{'Authorization':'Bearer '+t}});
+        if(r.status===401){window.location.href='/login';return}
+        if(r.ok){const d=await r.json();this.notes=d.notes||[]}
+      }catch(e){this.notes=[]}
+      this.chargement=false;
+    },
+    campLabel(c){const m={'BO_MTN':'BO MTN','AIRTEL_MONEY':'Airtel Money','HVC_COMBO':'HVC Combo'};return m[c]||c||'—';},
+    moisLabel(m){const a=['','Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];return a[m]||'';},
+    cell(v,s){
+      if(s)return '<span style="color:#dc3545;font-size:11px">'+s+'</span>';
+      if(v===null||v===undefined||isNaN(v))return '<span style="color:#adb5bd">—</span>';
+      return (v*100).toFixed(0)+'%';
+    },
+    moyColor(m){if(m==null)return '#6c757d';if(m>=0.95)return '#198754';if(m>=0.90)return '#d97706';return '#dc3545';}
+  };
+}
+</script>
+</body></html>

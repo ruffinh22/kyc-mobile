@@ -1,0 +1,305 @@
+// ============================================================================
+// KYC V3 - Routes API GSM (Gross Add GSM)
+// ============================================================================
+// POST   /api/gsm                 - Creer un GSM (apres accepter/rejeter dossier)
+// GET    /api/gsm/:id             - Detail d'un GSM
+// GET    /api/gsm                 - Liste (optionnel ?dossier_id=X ou ?date=Y)
+// POST   /api/gsm/:id/captures    - Upload captures A/P/AA
+// GET    /api/gsm/captures/:fname - Servir une image (autorisation requise)
+// ============================================================================
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const util = require('util');
+const pipeline = util.promisify(require('stream').pipeline);
+
+const { db, audit } = require('../db');
+const { requireAuth } = require('../middleware/auth');
+
+const UPLOAD_DIR = '/opt/kyc-v3/uploads/gsm';
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB par capture
+const ALLOWED_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+
+async function routes(fastify, opts) {
+
+  // Toutes les routes ici exigent l'auth
+  fastify.addHook('preHandler', requireAuth);
+
+  // GET /api/gsm/referentiels - Listes de valeurs des menus deroulants (tout agent connecte)
+  fastify.get('/api/gsm/referentiels', async (request, reply) => {
+    try {
+      const row = db.prepare("SELECT valeur FROM config WHERE cle='referentiels_gsm'").get();
+      let data = {};
+      if (row && row.valeur) { try { data = JSON.parse(row.valeur); } catch(e){ data = {}; } }
+      return reply.send({ referentiels: data });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/gsm - Creer un GSM lie a un dossier
+  // --------------------------------------------------------------------------
+  fastify.post('/api/gsm', async (request, reply) => {
+    const { matricule } = request.user;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+
+    const {
+      dossier_id, numero, coach, nom_client, type_id, constat,
+      piece, verbatim, action, statut_final, traitement, observations
+    } = request.body || {};
+
+    // Validation minimale
+    if (!dossier_id || !numero) {
+      return reply.code(400).send({ error: 'dossier_id et numero obligatoires' });
+    }
+
+    if (!type_id || !constat || !piece || !verbatim || !action || !statut_final) {
+      return reply.code(400).send({
+        error: 'Champs obligatoires manquants',
+        requis: ['type_id', 'constat', 'piece', 'verbatim', 'action', 'statut_final']
+      });
+    }
+
+    // Verifier que le dossier existe et a ete traite par cet agent
+    const dossier = db.prepare('SELECT id, agent_saisie, statut FROM dossiers WHERE id = ?').get(dossier_id);
+    if (!dossier) {
+      return reply.code(404).send({ error: 'Dossier introuvable' });
+    }
+    if (dossier.agent_saisie !== matricule && request.user.role !== 'admin') {
+      return reply.code(403).send({ error: 'Vous n\'etes pas l\'agent de ce dossier' });
+    }
+    if (!['accepte', 'rejete'].includes(dossier.statut)) {
+      return reply.code(409).send({ error: 'Le dossier doit etre accepte ou rejete avant le GSM' });
+    }
+
+    // Verifier qu'il n'y a pas deja un GSM pour ce dossier
+    const existant = db.prepare('SELECT id FROM gsm WHERE dossier_id = ?').get(dossier_id);
+    if (existant) {
+      return reply.code(409).send({ error: 'Un GSM existe deja pour ce dossier', gsm_id: existant.id });
+    }
+
+    // Generer ID GSM
+    const id = 'G' + Date.now() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const now = new Date();
+    const date_saisie = now.toISOString().slice(0, 10);
+    const heure_saisie = now.toTimeString().slice(0, 5);
+
+    try {
+      db.prepare(`
+        INSERT INTO gsm (
+          id, numero, agent_ctrl, agent_creation, coach, date_saisie, heure_saisie,
+          dossier_id, nom_client, type_id, constat, piece, verbatim, action,
+          statut_final, traitement, observations, payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, numero, matricule, matricule, coach || null,
+        date_saisie, heure_saisie, dossier_id, nom_client || null,
+        type_id, constat, piece, verbatim, action,
+        statut_final, traitement || null, observations || null,
+        JSON.stringify({ date_creation: date_saisie })
+      );
+
+      audit(matricule, 'GSM_CREATE', 'id=' + id + ' dossier=' + dossier_id + ' numero=' + numero, ip, ua);
+
+      return reply.send({ success: true, id: id, numero: numero });
+    } catch (err) {
+      fastify.log.error('POST /api/gsm error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/gsm/:id - Detail GSM
+  // --------------------------------------------------------------------------
+  fastify.get('/api/gsm/:id', async (request, reply) => {
+    const { id } = request.params;
+    const { matricule, role } = request.user;
+    try {
+      const gsm = db.prepare('SELECT * FROM gsm WHERE id = ?').get(id);
+      if (!gsm) return reply.code(404).send({ error: 'GSM introuvable' });
+      if (role === 'agent' && gsm.agent_ctrl !== matricule) {
+        return reply.code(403).send({ error: 'Acces refuse' });
+      }
+      return reply.send({ success: true, gsm });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm/:id error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/gsm - Liste
+  // --------------------------------------------------------------------------
+  fastify.get('/api/gsm/recherche', async (request, reply) => {
+    const { matricule, role } = request.user;
+    const num = (request.query && request.query.numero || '').trim();
+    if (!num || num.length < 3) { return reply.code(400).send({ error: 'Numero requis (min 3 chiffres)' }); }
+    let sql = 'SELECT id, numero, nom_client, agent_ctrl, coach, date_saisie, heure_saisie, constat, piece, verbatim, action, statut_final, traitement, type_id, raison, capture_a, capture_p, capture_aa FROM gsm WHERE numero LIKE ?';
+    const params = ['%' + num + '%'];
+    if (role === 'agent') { sql += ' AND agent_ctrl = ?'; params.push(matricule); }
+    sql += ' ORDER BY created_at DESC LIMIT 50';
+    try {
+      const rows = db.prepare(sql).all(...params);
+      return reply.send({ success: true, count: rows.length, resultats: rows });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm/recherche error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  fastify.get('/api/gsm', async (request, reply) => {
+    const { matricule, role } = request.user;
+    const { dossier_id, date } = request.query || {};
+
+    let sql = 'SELECT id, numero, agent_ctrl, dossier_id, date_saisie, heure_saisie, statut_final, capture_a, capture_p, capture_aa FROM gsm WHERE 1=1';
+    const params = [];
+
+    if (dossier_id) { sql += ' AND dossier_id = ?'; params.push(dossier_id); }
+    if (date) { sql += ' AND date_saisie = ?'; params.push(date); }
+    if (role === 'agent') { sql += ' AND agent_ctrl = ?'; params.push(matricule); }
+
+    sql += ' ORDER BY created_at DESC LIMIT 100';
+
+    try {
+      const rows = db.prepare(sql).all(...params);
+      return reply.send({ success: true, count: rows.length, gsm: rows });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/gsm/:id/captures - Upload des captures A/P/AA
+  // --------------------------------------------------------------------------
+  // multipart/form-data avec champs:
+  //   - capture_a : fichier image (obligatoire)
+  //   - capture_p : fichier image (obligatoire si Avec Parrainage)
+  //   - capture_aa: fichier image (obligatoire)
+  // --------------------------------------------------------------------------
+  fastify.post('/api/gsm/:id/captures', async (request, reply) => {
+    const { id } = request.params;
+    const { matricule } = request.user;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+
+    const gsm = db.prepare('SELECT id, numero, agent_ctrl, type_id, capture_a, capture_p, capture_aa FROM gsm WHERE id = ?').get(id);
+    if (!gsm) return reply.code(404).send({ error: 'GSM introuvable' });
+    if (gsm.agent_ctrl !== matricule && request.user.role !== 'admin') {
+      return reply.code(403).send({ error: 'Vous n\'etes pas l\'agent de ce GSM' });
+    }
+
+    // Creer dossier date si absent
+    const today = new Date().toISOString().slice(0, 10);
+    const dateDir = path.join(UPLOAD_DIR, today);
+    if (!fs.existsSync(dateDir)) {
+      fs.mkdirSync(dateDir, { recursive: true, mode: 0o755 });
+    }
+
+    const fichiersSauves = { a: null, p: null, aa: null };
+    const erreurs = [];
+
+    try {
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type !== 'file') continue;
+
+        // Verifier le label (capture_a, capture_p, capture_aa)
+        const label = part.fieldname.replace('capture_', '').toLowerCase();
+        if (!['a', 'p', 'aa'].includes(label)) {
+          erreurs.push('Label invalide: ' + part.fieldname);
+          part.file.resume();
+          continue;
+        }
+
+        // Verifier mime
+        if (!ALLOWED_MIMES.includes(part.mimetype)) {
+          erreurs.push('Type non autorise pour ' + label + ': ' + part.mimetype);
+          part.file.resume();
+          continue;
+        }
+
+        // Determiner extension
+        const ext = part.mimetype === 'image/jpeg' ? 'jpg' : (part.mimetype === 'image/png' ? 'png' : 'webp');
+        const filename = gsm.numero + '_' + label.toUpperCase() + '.' + ext;
+        const fullPath = path.join(dateDir, filename);
+        const relPath = today + '/' + filename;
+
+        await pipeline(part.file, fs.createWriteStream(fullPath, { mode: 0o644 }));
+
+        // Verifier taille (apres ecriture)
+        const stats = fs.statSync(fullPath);
+        if (stats.size > MAX_FILE_SIZE) {
+          fs.unlinkSync(fullPath);
+          erreurs.push('Fichier ' + label + ' trop volumineux (' + stats.size + ' octets)');
+          continue;
+        }
+        if (stats.size === 0) {
+          fs.unlinkSync(fullPath);
+          erreurs.push('Fichier ' + label + ' vide');
+          continue;
+        }
+
+        fichiersSauves[label] = relPath;
+      }
+
+      if (Object.values(fichiersSauves).every(v => v === null)) {
+        return reply.code(400).send({ error: 'Aucun fichier valide recu', erreurs });
+      }
+
+      // Maj DB
+      const updates = [];
+      const params = [];
+      if (fichiersSauves.a) { updates.push('capture_a = ?'); params.push(fichiersSauves.a); }
+      if (fichiersSauves.p) { updates.push('capture_p = ?'); params.push(fichiersSauves.p); }
+      if (fichiersSauves.aa) { updates.push('capture_aa = ?'); params.push(fichiersSauves.aa); }
+      updates.push('updated_at = strftime(\'%s\',\'now\')');
+      params.push(id);
+
+      db.prepare('UPDATE gsm SET ' + updates.join(', ') + ' WHERE id = ?').run(...params);
+
+      const labels = Object.keys(fichiersSauves).filter(k => fichiersSauves[k]).map(k => k.toUpperCase()).join(',');
+      audit(matricule, 'GSM_CAPTURES', 'id=' + id + ' labels=' + labels, ip, ua);
+
+      return reply.send({
+        success: true,
+        message: 'Captures enregistrees',
+        fichiers: fichiersSauves,
+        erreurs: erreurs.length > 0 ? erreurs : undefined
+      });
+
+    } catch (err) {
+      fastify.log.error('POST captures error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur upload', details: err.message });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/gsm/captures/:filename - Servir une image
+  // --------------------------------------------------------------------------
+  fastify.get('/api/gsm/captures/*', async (request, reply) => {
+    const relPath = request.params['*'];
+    if (!relPath || relPath.includes('..')) {
+      return reply.code(400).send({ error: 'Chemin invalide' });
+    }
+    const fullPath = path.join(UPLOAD_DIR, relPath);
+    if (!fullPath.startsWith(UPLOAD_DIR)) {
+      return reply.code(403).send({ error: 'Acces refuse' });
+    }
+    if (!fs.existsSync(fullPath)) {
+      return reply.code(404).send({ error: 'Image introuvable' });
+    }
+    const ext = path.extname(fullPath).toLowerCase();
+    const mimes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+    reply.type(mimes[ext] || 'application/octet-stream');
+    return reply.send(fs.createReadStream(fullPath));
+  });
+
+}
+
+module.exports = routes;

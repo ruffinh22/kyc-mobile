@@ -1,0 +1,242 @@
+// ============================================================================
+// KYC V3 - Routes d'authentification
+// POST /api/auth/login              - Login (matricule + password)
+// POST /api/auth/change-password    - Changement mot de passe (force au 1er login)
+// POST /api/auth/logout             - Deconnexion (revoke JWT)
+// GET  /api/auth/me                 - Infos user courant
+// ============================================================================
+
+'use strict';
+
+const db = require('../db');
+const auth = require('../utils/auth');
+
+const ACCOUNT_LOCK_AFTER_FAILS = parseInt(process.env.ACCOUNT_LOCK_AFTER_FAILS || '5', 10);
+const ACCOUNT_LOCK_DURATION = parseInt(process.env.ACCOUNT_LOCK_DURATION || '900', 10);
+
+async function routes(fastify, opts) {
+
+  // --------------------------------------------------------------------------
+  // POST /api/auth/login
+  // --------------------------------------------------------------------------
+  fastify.post('/api/auth/login', async (request, reply) => {
+    const ip = request.ip || 'unknown';
+    const ua = request.headers['user-agent'] || 'unknown';
+    const { matricule, password } = request.body || {};
+
+    // Validation basique
+    if (!matricule || !password) {
+      db.audit(matricule || null, 'LOGIN_FAIL', 'matricule ou password manquant', ip, ua);
+      return reply.code(400).send({ error: 'Matricule et mot de passe obligatoires' });
+    }
+
+    if (!auth.validateMatricule(matricule)) {
+      db.audit(matricule, 'LOGIN_FAIL', 'matricule format invalide', ip, ua);
+      return reply.code(400).send({ error: 'Format matricule invalide' });
+    }
+
+    // Recherche compte
+    const compte = db.getCompteByMatricule(matricule.toUpperCase());
+
+    if (!compte) {
+      db.audit(matricule, 'LOGIN_FAIL', 'matricule inconnu', ip, ua);
+      // Reponse identique pour ne pas reveler si le matricule existe
+      return reply.code(401).send({ error: 'Identifiants invalides' });
+    }
+
+    if (!compte.actif) {
+      db.audit(matricule, 'LOGIN_FAIL', 'compte desactive', ip, ua);
+      return reply.code(403).send({ error: 'Compte desactive. Contactez admin.' });
+    }
+
+    // Verifier blocage temporaire
+    const now = Math.floor(Date.now() / 1000);
+    if (compte.locked_until && compte.locked_until > now) {
+      const restant = compte.locked_until - now;
+      db.audit(matricule, 'LOGIN_FAIL', 'compte verrouille (' + restant + 's restant)', ip, ua);
+      return reply.code(423).send({
+        error: 'Compte verrouille. Reessayez dans ' + Math.ceil(restant / 60) + ' min.'
+      });
+    }
+
+    // Verifier mot de passe
+    const passwordOk = await auth.verifyPassword(password, compte.password_hash);
+
+    if (!passwordOk) {
+      db.incrementFailedLogin(compte.matricule);
+      const newFailCount = (compte.failed_login_count || 0) + 1;
+
+      // Verrouiller si trop d'echecs
+      if (newFailCount >= ACCOUNT_LOCK_AFTER_FAILS) {
+        db.lockAccount(compte.matricule, ACCOUNT_LOCK_DURATION);
+        db.audit(matricule, 'ACCOUNT_LOCKED', 'verrouille apres ' + newFailCount + ' echecs', ip, ua);
+        return reply.code(423).send({
+          error: 'Compte verrouille pour ' + Math.ceil(ACCOUNT_LOCK_DURATION / 60) + ' min apres ' + newFailCount + ' echecs.'
+        });
+      }
+
+      db.audit(matricule, 'LOGIN_FAIL', 'mauvais password (' + newFailCount + '/' + ACCOUNT_LOCK_AFTER_FAILS + ')', ip, ua);
+      return reply.code(401).send({
+        error: 'Identifiants invalides',
+        tentatives_restantes: ACCOUNT_LOCK_AFTER_FAILS - newFailCount
+      });
+    }
+
+    // Connexion OK : reset compteur echecs
+    db.resetFailedLogin(compte.matricule);
+
+    // Generer JWT
+    const jti = auth.generateJti();
+    const token = auth.signToken({
+      matricule: compte.matricule,
+      role: compte.role,
+      jti: jti
+    });
+
+    // Connexion unique : revoquer toutes les sessions actives precedentes de ce compte
+    db.revokeAllSessions(compte.matricule);
+    // Enregistrer la nouvelle session
+    const expiresAt = auth.getExpiresAtTimestamp();
+    db.insertSession(jti, compte.matricule, ip, ua, expiresAt);
+
+    db.audit(matricule, 'LOGIN_SUCCESS', 'role=' + compte.role, ip, ua);
+
+    return reply.send({
+      success: true,
+      token: token,
+      must_change_password: compte.must_change_password === 1,
+      user: {
+        matricule: compte.matricule,
+        nom: compte.nom,
+        prenom: compte.prenom,
+        role: compte.role
+      }
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/auth/change-password
+  // --------------------------------------------------------------------------
+  fastify.post('/api/auth/change-password', async (request, reply) => {
+    const ip = request.ip || 'unknown';
+    const ua = request.headers['user-agent'] || 'unknown';
+    const { current_password, new_password } = request.body || {};
+
+    // Recuperer le token depuis le header Authorization
+    const authHeader = request.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+    if (!token) {
+      return reply.code(401).send({ error: 'Token manquant' });
+    }
+
+    const decoded = auth.verifyToken(token);
+    if (!decoded) {
+      return reply.code(401).send({ error: 'Token invalide ou expire' });
+    }
+
+    if (!db.isSessionValid(decoded.jti)) {
+      return reply.code(401).send({ error: 'Session revoquee' });
+    }
+
+    if (!current_password || !new_password) {
+      return reply.code(400).send({ error: 'Mot de passe actuel et nouveau obligatoires' });
+    }
+
+    // Verifier mot de passe actuel
+    const compte = db.getCompteByMatricule(decoded.matricule);
+    if (!compte) {
+      return reply.code(404).send({ error: 'Compte introuvable' });
+    }
+
+    const currentOk = await auth.verifyPassword(current_password, compte.password_hash);
+    if (!currentOk) {
+      db.audit(decoded.matricule, 'PASSWORD_CHANGE_FAIL', 'mauvais current_password', ip, ua);
+      return reply.code(401).send({ error: 'Mot de passe actuel incorrect' });
+    }
+
+    // Verifier force du nouveau mot de passe
+    const strength = auth.validatePasswordStrength(new_password);
+    if (!strength.valid) {
+      return reply.code(400).send({
+        error: 'Mot de passe trop faible',
+        details: strength.errors
+      });
+    }
+
+    // Verifier qu'on ne reutilise pas le meme
+    const sameAsOld = await auth.verifyPassword(new_password, compte.password_hash);
+    if (sameAsOld) {
+      return reply.code(400).send({ error: 'Le nouveau mot de passe doit etre different de l\'ancien' });
+    }
+
+    // Mettre a jour
+    const newHash = await auth.hashPassword(new_password);
+    db.updatePasswordHash(decoded.matricule, newHash);
+
+    db.audit(decoded.matricule, 'PASSWORD_CHANGED', 'changement reussi', ip, ua);
+
+    return reply.send({
+      success: true,
+      message: 'Mot de passe modifie avec succes'
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/auth/logout
+  // --------------------------------------------------------------------------
+  fastify.post('/api/auth/logout', async (request, reply) => {
+    const ip = request.ip || 'unknown';
+    const ua = request.headers['user-agent'] || 'unknown';
+
+    const authHeader = request.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+    if (token) {
+      const decoded = auth.verifyToken(token);
+      if (decoded && decoded.jti) {
+        db.revokeSession(decoded.jti);
+        db.audit(decoded.matricule, 'LOGOUT', 'session revoquee', ip, ua);
+      }
+    }
+
+    return reply.send({ success: true });
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/auth/me
+  // --------------------------------------------------------------------------
+  fastify.get('/api/auth/me', async (request, reply) => {
+    const authHeader = request.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+    if (!token) {
+      return reply.code(401).send({ error: 'Token manquant' });
+    }
+
+    const decoded = auth.verifyToken(token);
+    if (!decoded) {
+      return reply.code(401).send({ error: 'Token invalide ou expire' });
+    }
+
+    if (!db.isSessionValid(decoded.jti)) {
+      return reply.code(401).send({ error: 'Session revoquee' });
+    }
+
+    const compte = db.getCompteByMatricule(decoded.matricule);
+    if (!compte || !compte.actif) {
+      return reply.code(404).send({ error: 'Compte introuvable ou desactive' });
+    }
+
+    return reply.send({
+      matricule: compte.matricule,
+      nom: compte.nom,
+      prenom: compte.prenom,
+      role: compte.role,
+      must_change_password: compte.must_change_password === 1
+    });
+  });
+
+}
+
+module.exports = routes;

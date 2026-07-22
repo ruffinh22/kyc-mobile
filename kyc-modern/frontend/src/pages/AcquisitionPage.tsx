@@ -7,6 +7,27 @@
 //   [FIX-2] prepareSession() passe l'id du dossier dans l'URL → face-verify
 //           pourra uploader la photo live via /api/public/dossiers/:id/live
 //   [FIX-3] prepareSession() transmet country en plus des autres champs
+//
+//   [FIX-4] OCR — refonte de la chaîne d'extraction (voir détail plus bas) :
+//     a) `normalizeOcrText` (texte affiché à l'agent) filtrait les lignes
+//        contenant les libellés ("nom", "prénom", "naissance", "nation"...)
+//        pour ne garder que des lignes "propres". Or `extractFieldsFromOcr`
+//        cherchait ces mêmes libellés dans CE texte déjà filtré → il ne
+//        pouvait structurellement jamais les trouver. On sépare maintenant
+//        clairement : le texte BRUT (avec libellés) sert à l'extraction de
+//        champs, le texte normalisé ne sert plus qu'à l'affichage humain.
+//     b) Recherche de valeur par proximité de libellé : sur une CNI, le
+//        libellé et sa valeur ne sont pas toujours sur la même ligne après
+//        OCR (mise en page en colonnes) → on regarde la ligne courante puis
+//        les 2 suivantes.
+//     c) Correction des confusions de caractères OCR classiques (O/0, I/1,
+//        S/5, B/8) sur le numéro de CNI, via un motif regex dédié plutôt
+//        que le filtre générique "propreté de ligne".
+//     d) Correction floue (distance de Levenshtein) de la nationalité
+//        contre une liste de valeurs attendues.
+//     e) Suppression de `rotateAuto: true`, option non reconnue par
+//        `Tesseract.recognize()` dans tesseract.js (silencieusement
+//        ignorée) — retirée pour éviter toute confusion.
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -98,6 +119,72 @@ function scoreCandidateText(text: string) {
   return score;
 }
 
+// [FIX-4c/d] Corrections de confusions OCR classiques -----------------------
+
+// Distance de Levenshtein simple, utilisée pour le rapprochement flou de
+// tokens face à un référentiel de valeurs attendues (nationalités, etc.)
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Numéro de CNI : 1 à 3 lettres suivies de 8 à 10 chiffres (ex. CI0001945307
+// pour la Côte d'Ivoire). On corrige les confusions lettre/chiffre typiques
+// UNIQUEMENT dans la portion numérique, jamais dans le préfixe alphabétique,
+// pour ne pas transformer un vrai "O" de préfixe en "0".
+function corrigerNumeroCni(rawText: string): string | null {
+  const upper = rawText.toUpperCase();
+  const match = upper.match(/([A-Z]{1,3})[\s.:\-]{0,3}([0-9OIlSBZ]{8,10})/);
+  if (!match) return null;
+  const prefixe = match[1];
+  const corps = match[2]
+    .replace(/O/g, '0')
+    .replace(/[Il]/g, '1')
+    .replace(/S/g, '5')
+    .replace(/B/g, '8')
+    .replace(/Z/g, '2');
+  return `${prefixe}${corps}`;
+}
+
+// Rapproche un token OCR bruité d'une valeur connue (nationalité) si la
+// distance d'édition reste faible par rapport à la longueur du mot — évite
+// les faux positifs sur mots courts (tolérance ~25%, plafonnée).
+const NATIONALITES_CONNUES = [
+  'IVOIRIENNE', 'BENINOISE', 'CONGOLAISE', 'CAMEROUNAISE',
+  'GUINEENNE', 'BISSAU-GUINEENNE',
+];
+
+function corrigerNationalite(token: string): string | null {
+  const clean = token.toUpperCase().replace(/[^A-Z-]/g, '');
+  if (clean.length < 6) return null;
+  let best: string | null = null;
+  let bestDist = Infinity;
+  for (const candidate of NATIONALITES_CONNUES) {
+    const dist = levenshtein(clean, candidate);
+    if (dist < bestDist) { bestDist = dist; best = candidate; }
+  }
+  if (best && bestDist <= Math.max(2, Math.round(best.length * 0.25))) return best;
+  return null;
+}
+
+// ── Texte affiché à l'agent (aperçu) ─────────────────────────────────────────
+// Ce texte est volontairement filtré pour ne garder que les lignes qui
+// ressemblent à des informations utiles (peu de bruit). Il ne doit PLUS être
+// utilisé comme source pour l'extraction de champs structurés : les lignes
+// de libellés ("Nom", "Prénoms", "Nationalité"...) y sont retirées par
+// construction (voir filtre ci-dessous), donc `extractFieldsFromOcr` doit
+// travailler sur le texte BRUT, pas sur celui-ci. [FIX-4a]
+
 function normalizeOcrText(raw: string) {
   const lines = raw
     .replace(/[|{}\[\]<>]/g, '')
@@ -123,12 +210,135 @@ function normalizeOcrText(raw: string) {
     return alpha >= 4 && (spaceCount <= 2 || clean.length <= 22);
   });
 
-  const ranked = keep
+  // Corrige les tokens de nationalité repérables avant tri final, pour
+  // éviter de perdre "IVOIRIENNE" mal lue ("IVOIMIENNE") en aval.
+  const corrected = keep.map(line => {
+    const words = line.split(' ');
+    const fixedWords = words.map(w => corrigerNationalite(w) ?? w);
+    return fixedWords.join(' ');
+  });
+
+  const ranked = corrected
     .map(line => ({ line, score: (line.match(/[A-ZÀ-Ö]/g) ?? []).length * 3 + line.length }))
     .sort((a, b) => b.score - a.score)
     .map(item => item.line);
 
   return ranked.slice(0, 4).join('\n');
+}
+
+function cleanOcrValue(value: string) {
+  return value.replace(/\s+/g, ' ').replace(/^[\s:;.-]+|[\s:;.-]+$/g, '').trim();
+}
+
+function toDateInput(value: string) {
+  const m = value.match(/(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
+  if (!m) return '';
+  let day = parseInt(m[1], 10);
+  let month = parseInt(m[2], 10);
+  let year = parseInt(m[3], 10);
+  if (year < 100) year += year < 70 ? 2000 : 1900;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return '';
+  return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+}
+
+// Un mot "valeur plausible" pour un champ nom/prénom/lieu : au moins 2
+// lettres majuscules consécutives possibles, pas un libellé lui-même.
+function ressembleValeurTexte(line: string): boolean {
+  const clean = line.trim();
+  if (clean.length < 2) return false;
+  if (LABEL_REGEXES.some(({ re }) => re.test(clean))) return false;
+  const letters = (clean.match(/[A-ZÀ-Ö]/gi) ?? []).length;
+  return letters >= 2;
+}
+
+const LABEL_REGEXES: { key: string; re: RegExp }[] = [
+  { key: 'prenom',        re: /PRENOM/ },
+  { key: 'nom',           re: /\bNOM\b/ },
+  { key: 'date_naissance',re: /NAISSANCE|NE\s*LE|NEE\s*LE/ },
+  { key: 'lieu_naissance',re: /LIEU/ },
+  { key: 'sexe',          re: /SEXE/ },
+  { key: 'nationalite',   re: /NATIONALIT/ },
+  { key: 'numero_cni',    re: /^N[°ºO]|CARTE|IDENTIT|CNI/ },
+  { key: 'expiration',    re: /EXPIRATION|VALIDE/ },
+];
+
+// [FIX-4b] Extraction structurée à partir du texte BRUT (avec libellés),
+// avec recherche de la valeur sur la ligne du libellé puis, si absente, sur
+// les 1-2 lignes suivantes (mise en page en colonnes après OCR).
+function extractFieldsFromOcr(raw: string) {
+  const normalized = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  const lines = normalized
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const updates: Record<string, string> = {};
+
+  const valeurApresLabel = (line: string, labelRe: RegExp): string | null => {
+    const idx = line.search(labelRe);
+    if (idx < 0) return null;
+    const after = line.slice(idx).replace(labelRe, '').replace(/^[\s:;.°ºO'-]+/, '');
+    return after.length >= 2 ? cleanOcrValue(after) : null;
+  };
+
+  const chercherValeur = (i: number, labelRe: RegExp, maxLookahead = 2): string | null => {
+    const direct = valeurApresLabel(lines[i], labelRe);
+    if (direct && ressembleValeurTexte(direct)) return direct;
+    for (let j = 1; j <= maxLookahead && i + j < lines.length; j++) {
+      const candidate = lines[i + j];
+      if (ressembleValeurTexte(candidate)) return cleanOcrValue(candidate);
+    }
+    return null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (!updates.prenom_titulaire && LABEL_REGEXES.find(l => l.key === 'prenom')!.re.test(line)) {
+      const v = chercherValeur(i, /PRENOMS?/);
+      if (v) updates.prenom_titulaire = v;
+    }
+    // "NOM" seul (pas "PRENOM") pour ne pas capturer deux fois la même valeur
+    if (!updates.nom_titulaire && /\bNOM\b/.test(line) && !/PRENOM/.test(line)) {
+      const v = chercherValeur(i, /\bNOM\b/);
+      if (v) updates.nom_titulaire = v;
+    }
+    if (!updates.nationalite && /NATIONALIT/.test(line)) {
+      const v = chercherValeur(i, /NATIONALIT[EÉ]?/);
+      if (v) updates.nationalite = corrigerNationalite(v) ?? v;
+    }
+    if (!updates.sexe && /SEXE/.test(line)) {
+      const m = line.match(/SEXE\s*[:.]?\s*([MF])\b/);
+      if (m) updates.sexe = m[1];
+    }
+    if (!updates.lieu_naissance && /LIEU/.test(line)) {
+      const v = chercherValeur(i, /LIEU(?:\s+DE)?\s+NAISSANCE/);
+      if (v) updates.lieu_naissance = v.replace(/\s*\([A-Z]{2,4}\)\s*$/, '').trim();
+    }
+    if (!updates.numero_cni && /^N[°ºO]|CNI|CARTE|IDENTIT/.test(line)) {
+      const numero = corrigerNumeroCni(line) ?? corrigerNumeroCni(lines[i + 1] ?? '');
+      if (numero) updates.numero_cni = numero;
+    }
+  }
+
+  // Filet de sécurité : si aucun numéro CNI n'a été trouvé via les libellés,
+  // on cherche le motif dans l'ensemble du texte (le numéro figure souvent
+  // en haut de carte sans libellé "CNI" reconnu par l'OCR).
+  if (!updates.numero_cni) {
+    const numero = corrigerNumeroCni(normalized);
+    if (numero) updates.numero_cni = numero;
+  }
+
+  const dateMatch = normalized.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/);
+  if (dateMatch && !updates.date_naissance) {
+    const dateValue = toDateInput(dateMatch[1]);
+    if (dateValue) updates.date_naissance = dateValue;
+  }
+
+  return updates;
 }
 
 function preprocessForOcr(imageDataUrl: string): Promise<{ imageDataUrl: string; rectangle: { left: number; top: number; width: number; height: number } }> {
@@ -206,6 +416,7 @@ async function extractRectoText(imageDataUrl: string, onProgress: (progress: num
 
     let bestText = '';
     let bestScore = -1;
+    let bestRaw = '';
     for (const attempt of attempts) {
       await worker.setParameters({
         tessedit_pageseg_mode: attempt.pageseg,
@@ -213,22 +424,54 @@ async function extractRectoText(imageDataUrl: string, onProgress: (progress: num
         tessedit_ocr_engine_mode: '1',
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÆŒ0123456789/.-,()\' ',
       });
+      // [FIX-4e] "rotateAuto" retiré : option non reconnue par
+      // Tesseract.recognize() dans tesseract.js, silencieusement ignorée.
       const { data } = await worker.recognize(preparedImage.imageDataUrl, {
         rectangle: preparedImage.rectangle,
-        rotateAuto: true,
       });
-      const text = normalizeOcrText(data?.text ?? '');
+      const rawText = data?.text ?? '';
+      const text = normalizeOcrText(rawText);
       const score = scoreCandidateText(text);
-      if (text && score > bestScore) {
+      // On garde le texte BRUT du meilleur essai (score le plus élevé sur le
+      // texte normalisé), pour que l'extraction de champs structurés parte
+      // toujours de la version la plus fiable de l'OCR.
+      if (rawText && score > bestScore) {
         bestText = text;
         bestScore = score;
+        bestRaw = rawText;
+      }
+      // Filet de sécurité : si aucun essai ne produit de texte normalisé
+      // exploitable, on garde quand même le premier texte brut non vide.
+      if (!bestRaw && rawText) bestRaw = rawText;
+    }
+
+    // [FIX-4c] Extraction ciblée du numéro de CNI par motif regex sur le
+    // texte BRUT (avant filtrage), car normalizeOcrText peut exclure la
+    // ligne du numéro si elle ne correspond pas aux heuristiques de "nom
+    // propre". On l'ajoute au texte affiché s'il n'y figure pas déjà.
+    const numeroCorrige = corrigerNumeroCni(bestRaw);
+    let finalText = bestText;
+    if (numeroCorrige) {
+      const dejaPresent = finalText.toUpperCase().includes(numeroCorrige);
+      if (!dejaPresent) {
+        finalText = finalText ? `${numeroCorrige}\n${finalText}` : numeroCorrige;
+      } else {
+        finalText = finalText
+          .split('\n')
+          .map(line => (corrigerNumeroCni(line) ? numeroCorrige : line))
+          .join('\n');
       }
     }
 
-    return { text: bestText, status: bestText ? 'done' as OcrStatus : 'error' as OcrStatus, progress: 100 };
+    return {
+      text: finalText,
+      raw: bestRaw,
+      status: (finalText || bestRaw) ? 'done' as OcrStatus : 'error' as OcrStatus,
+      progress: 100,
+    };
   } catch (err) {
     console.error('OCR recto impossible', err);
-    return { text: '', status: 'error' as OcrStatus, progress: 0 };
+    return { text: '', raw: '', status: 'error' as OcrStatus, progress: 0 };
   } finally {
     await worker.terminate();
   }
@@ -243,6 +486,9 @@ export function AcquisitionPage() {
   const [form, setForm]         = useState({
     wa_agent: '', username_agent: '', fonction_agent: '',
     zone_agent: '', numero_mtn: '', country: '',
+    nom_titulaire: '', prenom_titulaire: '', date_naissance: '', lieu_naissance: '',
+    autre_numero: '', nom_pere: '', nom_mere: '', adresse_complete: '', numero_cni: '',
+    sexe: '', nationalite: '', profession: '', ocr_overrides: '',
   });
   const [photos, setPhotos]     = useState<{ recto: PhotoState | null; verso: PhotoState | null }>({ recto: null, verso: null });
   const [photoErr, setPhotoErr] = useState({ recto: false, verso: false });
@@ -267,7 +513,7 @@ export function AcquisitionPage() {
   const [preview, setPreview] = useState<{
     open: boolean; type: 'recto' | 'verso'; url: string;
     blob: Blob | null; quality: QualityResult;
-    ocrText: string; ocrStatus: OcrStatus; ocrProgress: number;
+    ocrText: string; ocrRaw: string; ocrStatus: OcrStatus; ocrProgress: number;
   } | null>(null);
 
   // Dashboard
@@ -328,9 +574,12 @@ export function AcquisitionPage() {
     const num = form.numero_mtn.replace(/\D/g, '');
     const conf = paysConf;
     const waOk = !!conf && wa.length === conf.digitCount;
+    const titulaireOk = !!form.nom_titulaire.trim() && !!form.prenom_titulaire.trim() &&
+      !!form.date_naissance.trim() && !!form.lieu_naissance.trim() &&
+      !!form.nom_pere.trim() && !!form.nom_mere.trim();
     return form.country && waOk && form.username_agent && form.fonction_agent &&
            form.zone_agent && conf && num.length === conf.digitCount &&
-           photos.recto && photos.verso;
+           titulaireOk && photos.recto && photos.verso;
   };
 
   // ── Caméra ────────────────────────────────────────────────────────────────
@@ -445,6 +694,7 @@ export function AcquisitionPage() {
       blob,
       quality,
       ocrText: '',
+      ocrRaw: '',
       ocrStatus: t === 'recto' ? 'running' as OcrStatus : 'idle' as OcrStatus,
       ocrProgress: 0,
     };
@@ -458,6 +708,7 @@ export function AcquisitionPage() {
         setPreview(prev => prev && prev.type === 'recto' ? {
           ...prev,
           ocrText: result.text,
+          ocrRaw: result.raw,
           ocrStatus: result.status,
           ocrProgress: result.progress,
         } : prev);
@@ -468,6 +719,23 @@ export function AcquisitionPage() {
   const validerPhoto = () => {
     if (!preview?.blob) return;
     const url = URL.createObjectURL(preview.blob);
+    // [FIX-4a] L'extraction de champs part désormais du texte BRUT
+    // (préservant les libellés "Nom", "Prénoms", "Nationalité"...), et non
+    // plus du texte normalisé affiché à l'agent (qui filtre ces libellés).
+    if (preview.type === 'recto' && preview.ocrRaw.trim()) {
+      const parsed = extractFieldsFromOcr(preview.ocrRaw.trim());
+      setForm(f => {
+        const updates: Record<string, string> = { ocr_overrides: preview.ocrText.trim() };
+        if (!f.nom_titulaire && parsed.nom_titulaire) updates.nom_titulaire = parsed.nom_titulaire;
+        if (!f.prenom_titulaire && parsed.prenom_titulaire) updates.prenom_titulaire = parsed.prenom_titulaire;
+        if (!f.date_naissance && parsed.date_naissance) updates.date_naissance = parsed.date_naissance;
+        if (!f.lieu_naissance && parsed.lieu_naissance) updates.lieu_naissance = parsed.lieu_naissance;
+        if (!f.numero_cni && parsed.numero_cni) updates.numero_cni = parsed.numero_cni;
+        if (!f.nationalite && parsed.nationalite) updates.nationalite = parsed.nationalite;
+        if (!f.sexe && parsed.sexe) updates.sexe = parsed.sexe;
+        return { ...f, ...updates };
+      });
+    }
     setPhotos(p => ({ ...p, [preview.type]: { file: preview.blob!, preview: url } }));
     setPhotoErr(e => ({ ...e, [preview.type]: false }));
     setPreview(null);
@@ -548,6 +816,23 @@ export function AcquisitionPage() {
       fd.append('username_agent', form.username_agent);
       fd.append('fonction_agent', form.fonction_agent);
       fd.append('zone_agent',     form.zone_agent);
+      for (const [key, value] of Object.entries({
+        nom_titulaire: form.nom_titulaire,
+        prenom_titulaire: form.prenom_titulaire,
+        date_naissance: form.date_naissance,
+        lieu_naissance: form.lieu_naissance,
+        autre_numero: form.autre_numero,
+        nom_pere: form.nom_pere,
+        nom_mere: form.nom_mere,
+        adresse_complete: form.adresse_complete,
+        numero_cni: form.numero_cni,
+        sexe: form.sexe,
+        nationalite: form.nationalite,
+        profession: form.profession,
+        ocr_overrides: form.ocr_overrides,
+      })) {
+        if (typeof value === 'string' && value.trim()) fd.append(key, value.trim());
+      }
       fd.append('photo_recto',    photos.recto!.file, 'recto.jpg');
       fd.append('photo_verso',    photos.verso!.file, 'verso.jpg');
 
@@ -785,10 +1070,56 @@ export function AcquisitionPage() {
                   </Fld>
                 </Card>
 
+                {/* Informations titulaire */}
+                <SectionLabel label="Identité du client" />
+                <Card>
+                  <StepHeader num="03" title="Titulaire" sub="Informations obligatoires" />
+                  <Fld label="Nom titulaire" req>
+                    <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder="Nom du titulaire" style={inpSt} />
+                  </Fld>
+                  <Fld label="Prénom titulaire" req>
+                    <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder="Prénom du titulaire" style={inpSt} />
+                  </Fld>
+                  <Fld label="Date de naissance" req>
+                    <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} style={inpSt} />
+                  </Fld>
+                  <Fld label="Lieu de naissance" req>
+                    <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder="Lieu de naissance" style={inpSt} />
+                  </Fld>
+                  <Fld label="Nom du père" req>
+                    <input value={form.nom_pere} onChange={e => setForm(f => ({ ...f, nom_pere: e.target.value }))} placeholder="Nom du père" style={inpSt} />
+                  </Fld>
+                  <Fld label="Nom de la mère" req>
+                    <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder="Nom de la mère" style={inpSt} />
+                  </Fld>
+                  <Fld label="Adresse complète">
+                    <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder="Adresse complète" style={inpSt} />
+                  </Fld>
+                  <Fld label="Numéro CNI">
+                    <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder="Numéro CNI" style={inpSt} />
+                  </Fld>
+                  <Fld label="Sexe">
+                    <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} style={inpSt}>
+                      <option value="">— Sélectionnez —</option>
+                      <option value="M">Masculin</option>
+                      <option value="F">Féminin</option>
+                    </select>
+                  </Fld>
+                  <Fld label="Nationalité">
+                    <input value={form.nationalite} onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))} placeholder="Nationalité" style={inpSt} />
+                  </Fld>
+                  <Fld label="Profession">
+                    <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder="Profession" style={inpSt} />
+                  </Fld>
+                  <Fld label="Autre numéro">
+                    <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder="Autre numéro" style={inpSt} />
+                  </Fld>
+                </Card>
+
                 {/* Photos CNI */}
                 <SectionLabel label="Documents" />
                 <Card>
-                  <StepHeader num="03" title="Photos CNI" sub="Recto et verso" />
+                  <StepHeader num="04" title="Photos CNI" sub="Recto et verso" />
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
                     {(['recto', 'verso'] as const).map(type => (
                       <div key={type} onClick={() => ouvrirCamera(type)} style={{ aspectRatio: '85/54', borderRadius: 12, overflow: 'hidden', position: 'relative', background: photos[type] ? 'transparent' : '#EDF1F8', border: `2px ${photos[type] ? 'solid #16A34A' : photoErr[type] ? 'solid #DC2626' : 'dashed rgba(0,48,135,.25)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>

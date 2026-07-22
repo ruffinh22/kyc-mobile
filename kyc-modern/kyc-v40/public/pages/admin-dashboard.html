@@ -1,0 +1,136 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Dashboard Admin</title><script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#cbd5e1;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#1e293b;color:#fff}
+.sb-link.active{background:#3b82f6;color:#fff;font-weight:600}
+</style>
+<script>
+async function chargerSidebarAdm(m){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  const r=await fetch('/static/pages/_sidebar-admin.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  if(m){const e=document.querySelector('[data-menu="'+m+'"]');if(e)e.classList.add('active')}
+}
+async function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+</script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head><body data-antiflash="1" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)" class="bg-gray-100 min-h-screen"><div class="flex min-h-screen"><div id="sidebar-mount" class="w-64 flex-shrink-0" style="background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%);min-height:100vh"></div>
+<main class="flex-1 min-w-0 p-6" x-data="adminDash()" x-init="init()" style="background:#f3f4f6">
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px">
+<div><h1 style="font-size:24px;font-weight:800;color:#1f2937;margin:0">Dashboard Admin</h1>
+<p style="color:#9ca3af;font-size:14px;margin:2px 0 0">Vue d ensemble du systeme</p></div>
+<button @click="charger()" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:10px;background:#fff;font-size:13px;font-weight:600;color:#374151;cursor:pointer">Actualiser</button>
+</div>
+
+<!-- Compteurs cles -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px">
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#991b1b" x-text="stats.comptesActifs">0</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Comptes actifs</div>
+<div style="font-size:11px;color:#9ca3af;margin-top:6px"><span x-text="(parRole.agent||0)+' agents'"></span> &middot; <span x-text="(parRole.superviseur||0)+' sup'"></span> &middot; <span x-text="(parRole.admin||0)+' admin'"></span></div>
+</div>
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#15803d" x-text="presence.en_ligne">0</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Agents en ligne</div>
+<div style="font-size:11px;color:#9ca3af;margin-top:6px"><span x-text="(presence.en_pause||0)+' en pause'"></span></div>
+</div>
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#1d4ed8" x-text="stats.dossiersJour">0</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Dossiers du jour</div>
+<div style="font-size:11px;color:#9ca3af;margin-top:6px"><span x-text="(dossiers.accepte||0)+' acc.'"></span> &middot; <span x-text="(dossiers.rejete||0)+' rej.'"></span></div>
+</div>
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#a16207" x-text="tauxAcceptation()+'%'">0%</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Taux d acceptation</div>
+<div style="font-size:11px;color:#9ca3af;margin-top:6px">sur dossiers traites du jour</div>
+</div>
+</div>
+
+<!-- 2e rangee : sessions + distribution -->
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#7c3aed" x-text="stats.sessionsActives">0</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Sessions actives</div>
+</div>
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:28px;font-weight:800;color:#0891b2" x-text="stats.auditJour">0</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Actions (24h)</div>
+</div>
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<div style="font-size:20px;font-weight:800;color:#1f2937;text-transform:uppercase" x-text="distributionMode">-</div>
+<div style="font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;margin-top:4px">Mode distribution</div>
+</div>
+</div>
+
+<!-- Dernieres actions -->
+<div style="background:#fff;border:1px solid #e8e8ec;border-radius:16px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+<h3 style="font-size:15px;font-weight:700;color:#1f2937;margin:0 0 14px">Dernieres actions</h3>
+<div style="overflow-x:auto">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+<thead><tr style="background:#7f1d1d;color:#fff">
+<th style="padding:9px 8px;text-align:left;border-radius:8px 0 0 0">QUAND</th>
+<th style="padding:9px 8px;text-align:left">UTILISATEUR</th>
+<th style="padding:9px 8px;text-align:left">ACTION</th>
+<th style="padding:9px 8px;text-align:left;border-radius:0 8px 0 0">IP</th>
+</tr></thead>
+<tbody>
+<template x-for="a in dernieresActions" :key="a.id">
+<tr style="border-bottom:1px solid #f0f0f0">
+<td style="padding:8px;color:#6b7280;white-space:nowrap" x-text="a.quand"></td>
+<td style="padding:8px;font-weight:600;color:#1f2937" x-text="a.user_matricule||'-'"></td>
+<td style="padding:8px;color:#374151" x-text="a.action||''"></td>
+<td style="padding:8px;color:#9ca3af;font-family:monospace;font-size:11px" x-text="a.ip||''"></td>
+</tr>
+</template>
+<tr x-show="dernieresActions.length===0"><td colspan="4" style="padding:16px;text-align:center;color:#9ca3af">Aucune action recente</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</main></div>
+<script>
+function adminDash(){
+  return {
+    stats:{comptesActifs:0,sessionsActives:0,dossiersJour:0,auditJour:0},
+    parRole:{}, presence:{en_ligne:0,en_pause:0},
+    dossiers:{accepte:0,rejete:0,total:0},
+    dernieresActions:[], distributionMode:'-',
+    async init(){
+      if(typeof chargerSidebarAdm==='function'){ try{ await chargerSidebarAdm('dashboard'); }catch(e){} }
+      await this.charger();
+    },
+    tauxAcceptation(){
+      const a=this.dossiers.accepte||0, r=this.dossiers.rejete||0;
+      const t=a+r; if(!t) return 0;
+      return Math.round((a/t)*100);
+    },
+    async charger(){
+      const t=sessionStorage.getItem('kyc_token');
+      const H={headers:{'Authorization':'Bearer '+t}};
+      try{const r=await fetch('/api/admin/stats',H);if(r.status===401){window.location.href='/login';return}if(r.ok){const d=await r.json();this.stats=d.stats||this.stats;this.parRole=d.parRole||{};this.dernieresActions=d.dernieresActions||[];}}catch(e){}
+      try{const r=await fetch('/api/presence/resume',H);if(r.ok){const d=await r.json();this.presence={en_ligne:d.en_ligne||0,en_pause:d.en_pause||0};}}catch(e){}
+      try{const r=await fetch('/api/dossiers/stats',H);if(r.ok){const d=await r.json();this.dossiers={accepte:d.accepte||0,rejete:d.rejete||0,total:d.total||0};}}catch(e){}
+      try{const r=await fetch('/api/config/distribution-mode',H);if(r.ok){const d=await r.json();this.distributionMode=d.valeur||d.mode||'-';}}catch(e){}
+    }
+  };
+}
+(function(){
+  function demarrer(){ if(typeof chargerSidebarAdm==='function'){ try{ chargerSidebarAdm('dashboard'); }catch(e){} } }
+  if(document.readyState==='loading'){ window.addEventListener('DOMContentLoaded',demarrer); }
+})();
+</script>
+</body></html>

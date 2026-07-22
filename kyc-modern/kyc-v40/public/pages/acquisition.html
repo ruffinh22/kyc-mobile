@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>KYC — Nouveau dossier</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="/static/pages/video-call.js"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+[x-cloak]{display:none!important}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+
+:root{
+  /* ── Fond clair / charte MTN-pro ── */
+  --bg:        #F0F4FA;
+  --bg2:       #E8EDF5;
+  --surface:   #FFFFFF;
+  --surface2:  #F6F8FC;
+  --surface3:  #EDF1F8;
+
+  --border:    rgba(0,75,147,0.10);
+  --border2:   rgba(0,75,147,0.18);
+
+  /* Bleu principal Palladium */
+  --blue:      #004B93;
+  --blue-mid:  #1A6BB5;
+  --blue-light:#E8F1FB;
+  --blue-dim:  rgba(0,75,147,0.08);
+  --blue-glow: rgba(0,75,147,0.20);
+
+  /* Or accent */
+  --gold:         #EFA125;
+  --gold-dim:     rgba(239,161,37,0.10);
+  --gold-glow:    rgba(239,161,37,0.28);
+  --gold-border:  rgba(239,161,37,0.40);
+
+  /* Statuts */
+  --green:     #16A34A;
+  --green-dim: rgba(22,163,74,0.10);
+  --red:       #DC2626;
+  --red-dim:   rgba(220,38,38,0.08);
+
+  /* Texte */
+  --text:      #0F172A;
+  --text2:     #475569;
+  --text3:     #94A3B8;
+
+  --mono:'JetBrains Mono',monospace;
+  --r:14px;
+  --r-sm:10px;
+  --r-lg:20px;
+
+  --shadow-sm: 0 1px 3px rgba(0,75,147,0.08),0 1px 2px rgba(0,75,147,0.06);
+  --shadow:    0 4px 16px rgba(0,75,147,0.10),0 1px 4px rgba(0,75,147,0.06);
+  --shadow-lg: 0 8px 32px rgba(0,75,147,0.14),0 2px 8px rgba(0,75,147,0.08);
+}
+
+html{scroll-behavior:smooth}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);min-height:100vh;color:var(--text);padding-bottom:env(safe-area-inset-bottom)}
+
+/* Subtle grid texture on bg */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:radial-gradient(circle at 80% 0%,rgba(239,161,37,0.06) 0%,transparent 55%),
+                   radial-gradient(circle at 10% 90%,rgba(0,75,147,0.06) 0%,transparent 55%);
+  pointer-events:none;z-index:0
+}
+
+.shell{max-width:480px;margin:0 auto;position:relative;z-index:1}
+
+/* ── Topbar ── */
+.topbar{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:13px 18px;
+  display:flex;align-items:center;gap:12px;
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  box-shadow:var(--shadow-sm)
+}
+.topbar-back{color:var(--text2);font-size:16px;text-decoration:none;padding:6px;border-radius:8px;line-height:1;transition:all .15s;display:flex;align-items:center}
+.topbar-back:hover{color:var(--text);background:var(--surface3)}
+.topbar-logo{
+  width:36px;height:36px;
+  background:linear-gradient(135deg,var(--blue) 0%,var(--gold) 100%);
+  border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:800;color:#fff;
+  flex-shrink:0;letter-spacing:-.5px;
+  box-shadow:0 2px 8px rgba(239,161,37,0.35)
+}
+.topbar-info{flex:1;min-width:0}
+.topbar-title{font-size:14px;font-weight:700;color:var(--text);letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-sub{font-size:11px;color:var(--text3);margin-top:1px}
+.topbar-status{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--green);white-space:nowrap}
+.topbar-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── Tabs ── */
+.tabs{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:0 16px;
+  display:flex;gap:2px;
+  position:sticky;top:63px;z-index:40;
+}
+.tab-btn{
+  flex:1;padding:13px 8px 11px;
+  font-size:12.5px;font-weight:600;color:var(--text3);
+  cursor:pointer;text-align:center;border:none;background:transparent;
+  transition:all .15s;border-bottom:2px solid transparent;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  border-radius:6px 6px 0 0
+}
+.tab-btn .tab-icon{font-size:14px}
+.tab-btn.active{color:var(--gold);border-bottom-color:var(--gold);background:var(--gold-dim)}
+.tab-btn:not(.active):hover{color:var(--text2);background:var(--surface3)}
+
+/* ── Cards ── */
+.card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r-lg);
+  padding:20px;
+  margin:12px 12px 0;
+  box-shadow:var(--shadow-sm);
+  transition:box-shadow .2s
+}
+.card:last-of-type{margin-bottom:0}
+.card:hover{box-shadow:var(--shadow)}
+
+/* ── Step header ── */
+.step-header{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.step-num{
+  width:30px;height:30px;border-radius:50%;
+  background:var(--blue);
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:800;color:#fff;
+  flex-shrink:0;font-family:var(--mono);
+  box-shadow:0 2px 8px rgba(0,75,147,0.28)
+}
+.step-title{font-size:12.5px;font-weight:700;color:var(--text);letter-spacing:.3px;text-transform:uppercase}
+.step-title-line{display:flex;flex-direction:column}
+.step-subtitle{font-size:11px;color:var(--text3);margin-top:2px;font-weight:400;text-transform:none;letter-spacing:0}
+.step-divider{flex:1;height:1px;background:var(--border2)}
+
+/* ── Fields ── */
+.fld{margin-bottom:14px}
+.fld:last-child{margin-bottom:0}
+.fld-label{display:block;font-size:11px;font-weight:700;color:var(--text2);margin-bottom:7px;letter-spacing:.7px;text-transform:uppercase}
+.fld-label .req{color:var(--gold);margin-left:2px}
+.inp{
+  width:100%;padding:12px 15px;
+  border:1.5px solid var(--border2);
+  border-radius:var(--r-sm);
+  font-size:14px;color:var(--text);
+  background:var(--surface2);
+  transition:border-color .15s,box-shadow .15s,background .15s;
+  outline:none;appearance:none;-webkit-appearance:none;
+  font-family:'Inter',sans-serif
+}
+.inp::placeholder{color:var(--text3)}
+.inp:focus{
+  border-color:var(--blue);
+  box-shadow:0 0 0 3px rgba(0,75,147,0.12);
+  background:var(--surface)
+}
+.inp option{background:var(--surface);color:var(--text)}
+.inp-hint{font-size:11px;color:var(--text3);margin-top:5px}
+.inp.num-inp{font-family:var(--mono);font-size:20px;font-weight:700;letter-spacing:4px;color:var(--blue)}
+
+/* ── Agent memorized card ── */
+.agent-saved{
+  background:var(--blue-dim);
+  border:1.5px solid var(--border2);
+  border-radius:var(--r);
+  padding:14px 16px;
+  display:flex;justify-content:space-between;align-items:flex-start;gap:10px
+}
+.agent-saved-wa{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--blue)}
+.agent-saved-meta{font-size:12px;color:var(--text2);margin-top:4px;line-height:1.6}
+.agent-saved-badge{
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:10px;font-weight:700;color:var(--green);
+  background:var(--green-dim);border:1px solid rgba(22,163,74,0.25);
+  border-radius:99px;padding:2px 8px;margin-top:6px
+}
+.btn-ghost{
+  background:var(--surface);
+  border:1.5px solid var(--border2);
+  color:var(--text2);
+  font-size:12px;font-weight:600;
+  border-radius:8px;padding:7px 13px;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+  box-shadow:var(--shadow-sm)
+}
+.btn-ghost:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
+
+/* ── Camera cards ── */
+.cam-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.cam-card{
+  aspect-ratio:85/54;
+  border-radius:var(--r);overflow:hidden;position:relative;
+  background:var(--surface2);
+  border:2px dashed var(--border2);
+  cursor:pointer;transition:all .2s;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px
+}
+.cam-card:hover{border-color:var(--blue);background:var(--blue-dim);border-style:dashed}
+.cam-card.has-photo{border-style:solid;border-color:var(--green);border-width:2px}
+.cam-card.error{border-color:var(--red);border-style:solid;background:var(--red-dim)}
+.cam-card.capturing{border-color:var(--gold);border-style:solid}
+.cam-icon-wrap{
+  width:40px;height:40px;
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:16px;box-shadow:var(--shadow-sm)
+}
+.cam-label{font-size:10px;font-weight:700;color:var(--text2);text-align:center;letter-spacing:.8px;text-transform:uppercase;line-height:1.5}
+.cam-card.has-photo .cam-icon-wrap,.cam-card.has-photo .cam-label{display:none}
+.cam-preview{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cam-badge{position:absolute;top:7px;right:7px;background:var(--green);color:#fff;font-size:9px;font-weight:800;border-radius:99px;padding:2px 8px;letter-spacing:.5px}
+.cam-badge-err{position:absolute;top:7px;right:7px;background:var(--red);color:#fff;font-size:9px;font-weight:800;border-radius:99px;padding:2px 8px}
+.cam-retake{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.55);color:#fff;font-size:10px;font-weight:600;border-radius:99px;padding:3px 10px;white-space:nowrap;backdrop-filter:blur(4px)}
+
+/* ── Progress arc / bar ── */
+.prog-arc-wrap{display:flex;justify-content:center;padding:10px 0 6px}
+.prog-ring{transform:rotate(-90deg)}
+.prog-ring-bg{fill:none;stroke:var(--surface3)}
+.prog-ring-fill{fill:none;stroke:var(--blue);stroke-linecap:round;transition:stroke-dashoffset .4s ease}
+.prog-bar-wrap{margin-top:10px}
+.prog-bar-header{display:flex;justify-content:space-between;margin-bottom:6px}
+.prog-bar-lbl{font-size:11px;font-weight:600;color:var(--text2)}
+.prog-bar-val{font-size:11px;font-weight:700;color:var(--blue);font-family:var(--mono)}
+.prog-track{height:5px;background:var(--surface3);border-radius:99px;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--blue) 0%,var(--blue-mid) 100%);border-radius:99px;transition:width .3s ease}
+
+/* ── Live hint ── */
+.live-hint{
+  background:linear-gradient(135deg,rgba(0,75,147,0.05) 0%,rgba(0,75,147,0.02) 100%);
+  border:1px solid var(--border2);
+  border-left:3px solid var(--blue);
+  border-radius:var(--r-sm);
+  padding:12px 14px;
+  display:flex;align-items:flex-start;gap:10px;
+  margin-bottom:0
+}
+.live-hint-icon{font-size:16px;flex-shrink:0;margin-top:1px}
+.live-hint-text{font-size:12px;color:var(--text2);line-height:1.55}
+.live-hint-text strong{color:var(--blue);font-weight:600;display:block;margin-bottom:2px}
+
+/* ── Camera modal ── */
+.cam-modal{position:fixed;inset:0;z-index:200;background:#000;display:flex;flex-direction:column}
+.cam-modal-header{
+  padding:14px 18px;
+  background:rgba(255,255,255,0.96);
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(8px)
+}
+.cam-modal-title{font-size:14px;font-weight:700;color:var(--text)}
+.cam-modal-close{background:var(--surface2);border:1.5px solid var(--border2);color:var(--text2);border-radius:8px;padding:7px 13px;font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s}
+.cam-modal-close:hover{border-color:var(--red);color:var(--red)}
+.cam-modal-video-wrap{flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#050508}
+.cam-modal-video{width:100%;height:100%;object-fit:cover}
+.cam-guide-overlay{position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center}
+.cam-guide-rect{width:88%;max-width:340px;aspect-ratio:85/54;border:2px solid var(--gold);border-radius:10px;box-shadow:0 0 0 2000px rgba(0,0,0,0.52)}
+.cam-guide-label{position:absolute;bottom:11%;left:50%;transform:translateX(-50%);font-size:11.5px;font-weight:600;color:#fff;background:rgba(0,0,0,0.6);padding:5px 14px;border-radius:99px;white-space:nowrap;backdrop-filter:blur(4px)}
+.cam-quality-badge{position:absolute;top:14px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:700;border-radius:99px;padding:5px 14px;backdrop-filter:blur(4px);transition:all .2s}
+.cam-quality-badge.ok{background:rgba(22,163,74,0.90);color:#fff}
+.cam-quality-badge.warn{background:rgba(239,161,37,0.92);color:#000}
+.cam-quality-badge.bad{background:rgba(220,38,38,0.90);color:#fff}
+.cam-modal-footer{padding:18px 24px;background:rgba(255,255,255,0.97);border-top:1px solid var(--border);display:flex;gap:10px;justify-content:center;backdrop-filter:blur(8px)}
+.btn-capture{background:var(--blue);color:#fff;font-size:14px;font-weight:700;border:none;border-radius:50px;padding:14px 36px;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:8px;letter-spacing:.2px;box-shadow:0 4px 16px rgba(0,75,147,0.35)}
+.btn-capture:disabled{opacity:.35;cursor:not-allowed}
+.btn-capture:not(:disabled):hover{transform:scale(1.02);box-shadow:0 6px 20px rgba(0,75,147,0.45)}
+.btn-switch{background:var(--surface);border:1.5px solid var(--border2);color:var(--text2);font-size:13px;font-weight:600;border-radius:50px;padding:14px 18px;cursor:pointer;transition:all .15s}
+.btn-switch:hover{border-color:var(--blue);color:var(--blue)}
+
+/* ── Preview modal ── */
+.preview-modal{position:fixed;inset:0;z-index:300;background:rgba(15,23,42,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:14px;backdrop-filter:blur(12px)}
+.preview-img{width:100%;max-width:400px;border-radius:var(--r);border:1px solid rgba(255,255,255,0.15);display:block;box-shadow:var(--shadow-lg)}
+.preview-actions{display:flex;gap:10px;width:100%;max-width:400px}
+.btn-accept{flex:1;background:var(--green);color:#fff;font-size:14px;font-weight:700;border:none;border-radius:var(--r-sm);padding:14px;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(22,163,74,0.35)}
+.btn-accept:hover{opacity:.9;transform:scale(1.01)}
+.btn-reject{flex:1;background:var(--surface);border:1.5px solid var(--border2);color:var(--text2);font-size:14px;font-weight:600;border-radius:var(--r-sm);padding:14px;cursor:pointer;transition:all .15s}
+.btn-reject:hover{border-color:var(--red);color:var(--red)}
+.preview-quality{text-align:center;font-size:12px;padding:7px 16px;border-radius:99px;font-weight:600}
+.preview-quality.ok{background:var(--green-dim);color:var(--green);border:1px solid rgba(22,163,74,0.25)}
+.preview-quality.warn{background:var(--gold-dim);color:var(--gold);border:1px solid var(--gold-border)}
+.preview-quality.bad{background:var(--red-dim);color:var(--red);border:1px solid rgba(220,38,38,0.25)}
+
+/* ── Error banner ── */
+.err-banner{background:var(--red-dim);border:1px solid rgba(220,38,38,0.22);border-left:3px solid var(--red);border-radius:var(--r-sm);padding:12px 16px;font-size:13px;color:var(--red);margin:12px 12px 0;display:flex;align-items:center;gap:8px}
+
+/* ── Submit btn ── */
+.btn-submit{
+  width:calc(100% - 24px);margin:16px 12px;
+  background:linear-gradient(135deg,var(--gold) 0%,#E89A1E 100%);
+  color:#fff;font-size:15px;font-weight:700;
+  border:none;border-radius:var(--r);padding:17px;
+  cursor:pointer;transition:all .2s;
+  display:block;text-align:center;letter-spacing:.2px;
+  box-shadow:0 6px 24px rgba(239,161,37,0.40);
+  position:relative;overflow:hidden
+}
+.btn-submit::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(255,255,255,0.10) 0%,transparent 100%)}
+.btn-submit:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-submit:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 10px 32px rgba(239,161,37,0.50)}
+.btn-submit:active:not(:disabled){transform:translateY(0)}
+
+/* ── Gold accent for MTN number ── */
+.mtn-card{
+  background:linear-gradient(135deg,rgba(239,161,37,0.06) 0%,rgba(239,161,37,0.02) 100%);
+  border-color:var(--gold-border)
+}
+.mtn-card .step-num{background:var(--gold);box-shadow:0 2px 8px rgba(239,161,37,0.35)}
+
+/* ── Success ── */
+.success-card{
+  background:var(--surface);
+  border:1px solid rgba(22,163,74,0.20);
+  border-radius:var(--r-lg);
+  padding:36px 24px;text-align:center;
+  margin:20px 12px;
+  box-shadow:var(--shadow)
+}
+.success-ring{
+  width:84px;height:84px;border-radius:50%;
+  background:var(--green-dim);
+  border:2px solid rgba(22,163,74,0.28);
+  display:flex;align-items:center;justify-content:center;font-size:38px;
+  margin:0 auto 20px;
+  animation:pop-in .4s ease
+}
+@keyframes pop-in{0%{transform:scale(0.6);opacity:0}80%{transform:scale(1.07)}100%{transform:scale(1);opacity:1}}
+.success-title{font-size:22px;font-weight:800;color:var(--green);margin-bottom:8px;letter-spacing:-.3px}
+.success-sub{font-size:13.5px;color:var(--text2);line-height:1.7}
+.success-num{font-family:var(--mono);font-weight:700;color:var(--blue);font-size:15px}
+.btn-new{
+  margin-top:24px;
+  background:linear-gradient(135deg,var(--gold) 0%,#E89A1E 100%);
+  color:#fff;font-size:14px;font-weight:700;
+  border:none;border-radius:var(--r-sm);padding:13px 28px;
+  cursor:pointer;transition:all .15s;display:inline-block;
+  box-shadow:0 4px 14px rgba(239,161,37,0.35)
+}
+.btn-new:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(239,161,37,0.45)}
+
+/* ── Dashboard ── */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+.stat-cell{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r-sm);
+  padding:14px 6px;text-align:center;
+  box-shadow:var(--shadow-sm);
+  transition:box-shadow .15s
+}
+.stat-cell:hover{box-shadow:var(--shadow)}
+.stat-num{font-size:22px;font-weight:800;font-family:var(--mono)}
+.stat-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--text3);margin-top:3px}
+.dossier-row{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r-sm);
+  padding:13px 14px;margin-bottom:8px;
+  transition:all .15s;
+  box-shadow:var(--shadow-sm)
+}
+.dossier-row:hover{box-shadow:var(--shadow);border-color:var(--border2)}
+.dossier-row.att{border-left:3px solid #FB923C}
+.dossier-row.ok{border-left:3px solid var(--green)}
+.dossier-row.rej{border-left:3px solid var(--red)}
+.badge{display:inline-block;font-size:10px;font-weight:700;border-radius:99px;padding:3px 10px}
+.badge-att{background:rgba(251,146,60,0.12);color:#C2660A}
+.badge-ok{background:var(--green-dim);color:var(--green)}
+.badge-rej{background:var(--red-dim);color:var(--red)}
+.dossier-num{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--blue)}
+
+/* ── Date inputs ── */
+input[type="date"]{color-scheme:light}
+
+/* ── Spinner ── */
+.spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin-blue{border-color:var(--border2);border-top-color:var(--blue)}
+
+/* ── Divider hint ── */
+.form-hint{text-align:center;font-size:11px;color:var(--text3);padding:6px 0 14px}
+
+/* ── Footer safe ── */
+.footer-safe{height:max(env(safe-area-inset-bottom),16px)}
+
+/* ── Section divider ── */
+.section-label{
+  font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:1px;color:var(--text3);
+  margin:16px 12px 4px;
+  display:flex;align-items:center;gap:8px
+}
+.section-label::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── Num display (MTN) ── */
+.num-display{
+  background:linear-gradient(135deg,var(--gold) 0%,#E89A1E 100%);
+  border-radius:var(--r-sm);
+  padding:2px 8px;
+  font-family:var(--mono);font-size:11px;font-weight:700;
+  color:#fff;letter-spacing:1px;
+  display:inline-block;margin-left:8px
+}
+</style>
+</head>
+<body>
+
+<div x-data="formAcq()" x-init="init(); $watch('form.wa_agent', v => { if((v||'').replace(/\D/g,'').length===10) connecterVideoTerrain(); })">
+
+<!-- ── Top bar ── -->
+<div class="topbar">
+  <a href="/" class="topbar-back">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+  </a>
+  <div class="topbar-logo">M</div>
+  <div class="topbar-info">
+    <div class="topbar-title">Nouveau dossier</div>
+    <div class="topbar-sub">Enregistrement KYC</div>
+  </div>
+  <div class="topbar-status">
+    <div class="topbar-dot"></div>
+    <span>En ligne</span>
+  </div>
+</div>
+
+<!-- ── Tabs ── -->
+<div class="tabs">
+  <button class="tab-btn" :class="tab==='form'&&'active'" @click="tab='form'">
+    <span class="tab-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+    </span>
+    Enregistrer
+  </button>
+  <button class="tab-btn" :class="tab==='dash'&&'active'" @click="ouvrirDash()">
+    <span class="tab-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    </span>
+    Mes dossiers
+  </button>
+</div>
+
+<div class="shell">
+
+<!-- ══════════════════ ONGLET FORM ══════════════════ -->
+<div x-show="tab==='form'" x-cloak>
+
+  <!-- Success -->
+  <div x-show="success" x-transition class="success-card">
+    <div class="success-ring">✓</div>
+    <div class="success-title">Dossier envoyé</div>
+    <div class="success-sub">
+      Le numéro <span class="success-num" x-text="numeroEnvoye"></span> est en cours de vérification.<br><br>
+      Vous serez notifié sur WhatsApp&nbsp;<span class="success-num" x-text="form.wa_agent"></span>.
+    </div>
+    <button class="btn-new" @click="reset()">+ Nouveau dossier</button>
+  </div>
+
+  <div x-show="!success">
+
+    <!-- ── 1. Agent ── -->
+    <div class="section-label">Informations agent</div>
+    <div class="card">
+      <div class="step-header">
+        <div class="step-num">01</div>
+        <div class="step-title-line">
+          <span class="step-title">Agent</span>
+          <span class="step-subtitle">Vos informations</span>
+        </div>
+        <div class="step-divider"></div>
+      </div>
+
+      <!-- Mémorisé -->
+      <div x-show="agentMemorise" class="agent-saved">
+        <div>
+          <div class="agent-saved-wa" x-text="form.wa_agent"></div>
+          <div class="agent-saved-meta">
+            <span x-text="form.username_agent"></span> · <span x-text="form.fonction_agent"></span><br>
+            <span x-text="form.zone_agent"></span>
+          </div>
+          <div class="agent-saved-badge">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            Mémorisé
+          </div>
+        </div>
+        <button class="btn-ghost" @click="modifierAgent()">Modifier</button>
+      </div>
+
+      <!-- Saisie -->
+      <div x-show="!agentMemorise">
+        <div class="fld">
+          <label class="fld-label">WhatsApp<span class="req">*</span></label>
+          <input x-model="form.wa_agent" type="tel" placeholder="01 XX XX XX XX" maxlength="10" inputmode="numeric" class="inp num-inp">
+          <p class="inp-hint">10 chiffres (commençant par 01) — mémorisé après le premier envoi</p>
+        </div>
+        <div class="fld">
+          <label class="fld-label">Username<span class="req">*</span></label>
+          <input x-model="form.username_agent" type="text" placeholder="ex : dav_centre" class="inp">
+        </div>
+        <div class="fld">
+          <label class="fld-label">Fonction<span class="req">*</span></label>
+          <select x-model="form.fonction_agent" class="inp">
+            <option value="">— Sélectionnez —</option>
+            <option>Agent Acquisition</option>
+            <option>Agent EBU</option>
+            <option>Agent Frontoffice</option>
+            <option>Autre</option>
+          </select>
+        </div>
+        <div class="fld">
+          <label class="fld-label">Zone<span class="req">*</span></label>
+          <select x-model="form.zone_agent" class="inp">
+            <option value="">— Sélectionnez —</option>
+            <option>Brazzaville</option>
+            <option>Pointe-Noire</option>
+            <option>Hinterland Nord</option>
+            <option>Hinterland Sud</option>
+            <option>Autre</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 2. Numéro MTN ── -->
+    <div class="section-label">Numéro à identifier</div>
+    <div class="card mtn-card">
+      <div class="step-header">
+        <div class="step-num">02</div>
+        <div class="step-title-line">
+          <span class="step-title">Numéro MTN</span>
+          <span class="step-subtitle">À identifier</span>
+        </div>
+        <div class="step-divider"></div>
+      </div>
+      <div class="fld">
+        <label class="fld-label">Numéro vendu<span class="req">*</span></label>
+        <input x-model="form.numero_mtn" type="tel" placeholder="01 _ _ _ _ _ _ _ _" maxlength="10" inputmode="numeric" class="inp num-inp" style="font-size:26px;letter-spacing:5px;text-align:center;padding:16px">
+        <p class="inp-hint" style="text-align:center">10 chiffres (commençant par 01)</p>
+      </div>
+    </div>
+
+    <!-- ── 3. Photos CNI ── -->
+    <div class="section-label">Documents</div>
+    <div class="card">
+      <div class="step-header">
+        <div class="step-num">03</div>
+        <div class="step-title-line">
+          <span class="step-title">Photos CNI</span>
+          <span class="step-subtitle">Recto et verso</span>
+        </div>
+        <div class="step-divider"></div>
+      </div>
+
+      <div class="cam-grid">
+        <!-- Recto -->
+        <div class="cam-card" :class="photos.recto ? 'has-photo' : (photoErr.recto ? 'error' : '')" @click="ouvrirCamera('recto')">
+          <div class="cam-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#004B93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </div>
+          <div class="cam-label">RECTO CNI<br><span style="font-size:9px;opacity:.5;text-transform:none;letter-spacing:0">Appuyer</span></div>
+          <img x-show="photos.recto" :src="photos.recto?.preview||''" class="cam-preview">
+          <div x-show="photos.recto" class="cam-badge">✓ OK</div>
+          <div x-show="photos.recto" class="cam-retake">↺ Reprendre</div>
+          <div x-show="photoErr.recto&&!photos.recto" class="cam-badge-err">✗</div>
+        </div>
+
+        <!-- Verso -->
+        <div class="cam-card" :class="photos.verso ? 'has-photo' : (photoErr.verso ? 'error' : '')" @click="ouvrirCamera('verso')">
+          <div class="cam-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#004B93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </div>
+          <div class="cam-label">VERSO CNI<br><span style="font-size:9px;opacity:.5;text-transform:none;letter-spacing:0">Appuyer</span></div>
+          <img x-show="photos.verso" :src="photos.verso?.preview||''" class="cam-preview">
+          <div x-show="photos.verso" class="cam-badge">✓ OK</div>
+          <div x-show="photos.verso" class="cam-retake">↺ Reprendre</div>
+          <div x-show="photoErr.verso&&!photos.verso" class="cam-badge-err">✗</div>
+        </div>
+      </div>
+
+      <!-- Progress arc -->
+      <div x-show="nbPhotos()>0" class="prog-arc-wrap">
+        <svg width="64" height="64" class="prog-ring">
+          <circle class="prog-ring-bg" cx="32" cy="32" r="26" stroke-width="5"/>
+          <circle class="prog-ring-fill" cx="32" cy="32" r="26" stroke-width="5"
+            stroke-dasharray="163"
+            :stroke-dashoffset="163-(163*pctPhotos()/100)"/>
+          <text x="32" y="32" text-anchor="middle" dominant-baseline="central" fill="#004B93" font-size="12" font-weight="700" font-family="JetBrains Mono,monospace" transform="rotate(90,32,32)" x-text="nbPhotos()+'/2'"></text>
+        </svg>
+      </div>
+
+      <!-- Linear progress bar -->
+      <div class="prog-bar-wrap">
+        <div class="prog-bar-header">
+          <span class="prog-bar-lbl">Photos ajoutées</span>
+          <span class="prog-bar-val" x-text="nbPhotos()+'/2'"></span>
+        </div>
+        <div class="prog-track"><div class="prog-fill" :style="`width:${pctPhotos()}%`"></div></div>
+      </div>
+
+      <!-- Live hint -->
+      <div class="live-hint" style="margin-top:14px">
+        <div class="live-hint-icon">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#004B93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="live-hint-text">
+          <strong>Photo live — étape suivante</strong>
+          Capturée automatiquement lors de la vérification faciale interactive après envoi du formulaire.
+        </div>
+      </div>
+    </div>
+
+    <!-- Erreur globale -->
+    <div x-show="erreur" class="err-banner" x-transition>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span x-text="erreur"></span>
+    </div>
+
+    <!-- Submit -->
+    <button @click="soumettre()" :disabled="loading||!peutSoumettre()" class="btn-submit">
+      <span x-show="!loading" style="display:flex;align-items:center;justify-content:center;gap:8px">
+        Passer à la vérification
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </span>
+      <span x-show="loading" style="display:flex;align-items:center;justify-content:center">
+        <span class="spin"></span>Envoi… <span x-text="progress+'%'" style="margin-left:4px"></span>
+      </span>
+    </button>
+    <div class="form-hint">* Tous les champs sont obligatoires</div>
+
+  </div><!-- /!success -->
+</div><!-- /form tab -->
+
+
+<!-- ══════════════════ ONGLET DASH ══════════════════ -->
+<div x-show="tab==='dash'" x-cloak>
+  <div x-show="!form.wa_agent||form.wa_agent.length!==10" style="text-align:center;padding:60px 24px;color:var(--text3);font-size:13px">
+    <div style="font-size:36px;margin-bottom:14px;opacity:.35">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    </div>
+    <div style="font-weight:600;color:var(--text2);margin-bottom:6px">Aucun agent connecté</div>
+    Renseignez votre WhatsApp dans l'onglet Enregistrer<br>pour voir vos dossiers.
+  </div>
+
+  <div x-show="form.wa_agent&&form.wa_agent.length===10">
+    <div class="section-label">Période</div>
+    <div class="card">
+      <div class="step-header" style="margin-bottom:14px">
+        <div class="step-num" style="background:var(--text2)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
+        <div class="step-title-line">
+          <span class="step-title">Filtrer par date</span>
+        </div>
+        <div class="step-divider"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <input type="date" x-model="dateDebut" class="inp" style="flex:1;min-width:130px;padding:10px 12px;font-size:13px">
+        <span style="color:var(--text3);font-size:12px;font-weight:600">→</span>
+        <input type="date" x-model="dateFin" class="inp" style="flex:1;min-width:130px;padding:10px 12px;font-size:13px">
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-cell">
+          <div class="stat-num" style="color:var(--blue)" x-text="statsFiltrees().total"></div>
+          <div class="stat-lbl">Total</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num" style="color:#C2660A" x-text="statsFiltrees().en_attente+statsFiltrees().en_cours"></div>
+          <div class="stat-lbl">En cours</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num" style="color:var(--green)" x-text="statsFiltrees().accepte"></div>
+          <div class="stat-lbl">Acceptés</div>
+        </div>
+        <div class="stat-cell">
+          <div class="stat-num" style="color:var(--red)" x-text="statsFiltrees().rejete"></div>
+          <div class="stat-lbl">Rejetés</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">Dossiers</div>
+    <div style="padding:0 12px">
+      <div x-show="dashLoading&&dashDossiers.length===0" style="text-align:center;padding:28px;color:var(--text3);font-size:13px">
+        <span class="spin spin-blue" style="border-top-color:var(--blue);border-color:var(--border2)"></span>Chargement…
+      </div>
+      <div x-show="!dashLoading&&dossiersFiltres().length===0" style="text-align:center;padding:40px 24px;color:var(--text3);font-size:13px">
+        <div style="margin-bottom:10px;opacity:.4">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        Aucun dossier sur cette période.
+      </div>
+
+      <template x-for="d in dossiersFiltres()" :key="d.id">
+        <div class="dossier-row" :class="{'att':d.statut==='en_attente'||d.statut==='en_cours','ok':d.statut==='accepte','rej':d.statut==='rejete'}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span class="dossier-num" x-text="d.numero_mtn"></span>
+            <span class="badge" :class="{'badge-att':d.statut==='en_attente'||d.statut==='en_cours','badge-ok':d.statut==='accepte','badge-rej':d.statut==='rejete'}" x-text="libelleStatut(d.statut)"></span>
+          </div>
+          <div style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <span x-text="d.date"></span><span x-show="d.heure_reception" x-text="' · '+d.heure_reception"></span>
+          </div>
+          <div x-show="d.statut==='rejete'&&d.raison_rejet" style="font-size:11px;color:var(--red);margin-top:5px;display:flex;align-items:center;gap:4px">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <span x-text="d.raison_rejet"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<div class="footer-safe"></div>
+</div><!-- /shell -->
+
+
+<!-- ══════════════════ CAMERA MODAL ══════════════════ -->
+<div x-show="camModal.open" x-cloak class="cam-modal">
+  <div class="cam-modal-header">
+    <div class="cam-modal-title" x-text="camModal.type==='recto' ? '📷 Photo Recto CNI' : '📷 Photo Verso CNI'"></div>
+    <button class="cam-modal-close" @click="fermerCamera()">✕ Annuler</button>
+  </div>
+  <!-- Sélecteur de caméra -->
+  <div style="padding:8px 18px;background:var(--surface2);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+    <label style="font-size:11px;font-weight:700;color:var(--text2);white-space:nowrap;letter-spacing:.5px">📹 CAMÉRA</label>
+    <select x-model="camModal.selectedDeviceId" @change="changerCamera()" class="inp" style="flex:1;padding:8px 12px;font-size:12px;min-width:0">
+      <option value="">-- Détection en cours --</option>
+      <template x-for="cam in camerasDisponibles" :key="cam.deviceId">
+        <option :value="cam.deviceId" x-text="cam.label || ('Caméra '+(camerasDisponibles.indexOf(cam)+1))"></option>
+      </template>
+    </select>
+  </div>
+  <div class="cam-modal-video-wrap">
+    <video id="cam-video" autoplay muted playsinline class="cam-modal-video" style="transform:scaleX(-1)"></video>
+    <div class="cam-quality-badge" :class="camQuality.cls" x-show="camQuality.label" x-text="camQuality.label"></div>
+    <div class="cam-guide-overlay">
+      <div style="position:relative">
+        <div class="cam-guide-rect" :style="camQuality.ok ? 'border-color:#16A34A' : 'border-color:#EFA125'"></div>
+        <div class="cam-guide-label" x-text="camModal.type==='recto' ? 'Recto — face visible' : 'Verso — face visible'"></div>
+      </div>
+    </div>
+  </div>
+  <div class="cam-modal-footer">
+    <button class="btn-switch" @click="switchCamera()">↺ Retourner</button>
+    <button class="btn-capture" :disabled="!camQuality.ok" @click="capturerPhoto()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      Capturer
+    </button>
+  </div>
+</div>
+
+
+<!-- ══════════════════ PREVIEW MODAL ══════════════════ -->
+<div x-show="previewModal.open" x-cloak class="preview-modal">
+  <div style="text-align:center;font-size:14px;font-weight:700;color:#fff;margin-bottom:2px"
+       x-text="previewModal.type==='recto' ? 'Vérifiez le recto CNI' : 'Vérifiez le verso CNI'"></div>
+  <div class="preview-quality" :class="previewModal.qualityCls" x-text="previewModal.qualityMsg"></div>
+  <img :src="previewModal.dataUrl" class="preview-img" alt="Aperçu">
+  <div class="preview-actions">
+    <button class="btn-reject" @click="rejeterPhoto()">↺ Reprendre</button>
+    <button class="btn-accept" @click="validerPhoto()">✓ Valider</button>
+  </div>
+  <p style="font-size:11px;color:rgba(255,255,255,0.45);text-align:center">Texte lisible et photo nette requis</p>
+</div>
+
+
+</div><!-- /x-data -->
+
+<script>
+function isBlank(v){ return !v||v==='null'||v==='undefined'||String(v).trim()==='';}
+
+function analyzeQuality(canvas){
+  const ctx=canvas.getContext('2d');
+  const w=canvas.width, h=canvas.height;
+  const data=ctx.getImageData(0,0,w,h).data;
+  let sum=0, sumSq=0, n=w*h;
+  for(let i=0;i<data.length;i+=4){
+    const luma=0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];
+    sum+=luma; sumSq+=luma*luma;
+  }
+  const mean=sum/n;
+  const variance=sumSq/n-mean*mean;
+  const contrast=Math.sqrt(Math.max(variance,0));
+  const step=4;
+  let lapSum=0, lapN=0;
+  for(let y=step;y<h-step;y+=step){
+    for(let x=step;x<w-step;x+=step){
+      const idx=(y*w+x)*4;
+      const center=0.299*data[idx]+0.587*data[idx+1]+0.114*data[idx+2];
+      const top=0.299*data[((y-step)*w+x)*4]+0.587*data[((y-step)*w+x)*4+1]+0.114*data[((y-step)*w+x)*4+2];
+      const bot=0.299*data[((y+step)*w+x)*4]+0.587*data[((y+step)*w+x)*4+1]+0.114*data[((y+step)*w+x)*4+2];
+      const lft=0.299*data[(y*w+x-step)*4]+0.587*data[(y*w+x-step)*4+1]+0.114*data[(y*w+x-step)*4+2];
+      const rgt=0.299*data[(y*w+x+step)*4]+0.587*data[(y*w+x+step)*4+1]+0.114*data[(y*w+x+step)*4+2];
+      lapSum+=Math.abs(4*center-top-bot-lft-rgt); lapN++;
+    }
+  }
+  const sharpness=lapN>0?lapSum/lapN:0;
+  if(mean<45) return{ok:false,cls:'bad',label:'⚠ Trop sombre'};
+  if(mean>220) return{ok:false,cls:'bad',label:'⚠ Surexposé'};
+  if(sharpness<4) return{ok:false,cls:'warn',label:'⚠ Photo floue'};
+  if(contrast<15) return{ok:false,cls:'warn',label:'⚠ Contraste faible'};
+  return{ok:true,cls:'ok',label:'✓ Photo nette'};
+}
+
+function formAcq(){
+  return {
+    tab:'form',
+    form:{wa_agent:'',username_agent:'',fonction_agent:'',zone_agent:'',numero_mtn:''},
+    photos:{recto:null,verso:null},
+    photoErr:{recto:false,verso:false},
+    loading:false, erreur:'', success:false, progress:0,
+    numeroEnvoye:'', agentMemorise:false,
+    dashDossiers:[],dashStats:{total:0,en_attente:0,en_cours:0,accepte:0,rejete:0},
+    dashLoading:false, dashTimer:null,
+    dateDebut:new Date().toLocaleDateString('en-CA'),
+    dateFin:new Date().toLocaleDateString('en-CA'),
+    camModal:{open:false,type:'recto',stream:null,facingMode:'environment',selectedDeviceId:''},
+    camerasDisponibles:[],
+    camQuality:{ok:false,cls:'',label:''},
+    camQualityTimer:null, camCanvas:null,
+    previewModal:{open:false,type:'recto',dataUrl:'',blob:null,qualityCls:'',qualityMsg:''},
+
+    init(){
+      try{
+        const saved=localStorage.getItem('kyc_acq_agent');
+        if(saved){
+          const a=JSON.parse(saved);
+          this.form.wa_agent=a.wa_agent||'';
+          this.form.username_agent=a.username_agent||'';
+          this.form.fonction_agent=a.fonction_agent||'';
+          this.form.zone_agent=a.zone_agent||'';
+          if(this.form.wa_agent&&this.form.username_agent&&this.form.fonction_agent&&this.form.zone_agent)
+            this.agentMemorise=true;
+        }
+      }catch(e){}
+      this.connecterVideoTerrain();
+      this.camCanvas=document.createElement('canvas');
+    },
+
+    connecterVideoTerrain(){
+      const num=(this.form.wa_agent||'').replace(/\D/g,'');
+      if(num.length!==10)return;
+      if(this._videoConnecte&&this._videoNum===num)return;
+      if(this._videoConnecte&&this._videoNum!==num){try{VideoCall.deconnecter();}catch(e){} this._videoConnecte=false;}
+      this._videoConnecte=true; this._videoNum=num;
+      try{VideoCall.connecter('terrain',num);}catch(e){}
+    },
+
+    modifierAgent(){ this.agentMemorise=false; },
+    nbPhotos(){ return ['recto','verso'].filter(k=>this.photos[k]).length; },
+    pctPhotos(){ return Math.round(this.nbPhotos()/2*100); },
+
+    async ouvrirCamera(type){
+      this.camModal.type=type;
+      this.camModal.open=true;
+      this.camModal.facingMode='environment';
+      this.camModal.selectedDeviceId='';
+      await this.$nextTick();
+      await this.listerCameras();
+      await this._startCamera();
+    },
+
+    async listerCameras(){
+      try{
+        // Demander une permission temporaire pour obtenir les labels
+        const tempStream = await navigator.mediaDevices.getUserMedia({video:true});
+        tempStream.getTracks().forEach(t=>t.stop());
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        this.camerasDisponibles = devices.filter(d => d.kind === 'videoinput');
+        // Sélectionner par défaut la caméra arrière si disponible
+        const back = this.camerasDisponibles.find(d => /back|rear|environment|arrière/i.test(d.label));
+        if(back) this.camModal.selectedDeviceId = back.deviceId;
+        else if(this.camerasDisponibles.length > 0) this.camModal.selectedDeviceId = this.camerasDisponibles[0].deviceId;
+      }catch(e){
+        this.camerasDisponibles = [];
+      }
+    },
+
+    async changerCamera(){
+      if(!this.camModal.selectedDeviceId) return;
+      await this._startCamera();
+    },
+
+    async _startCamera(){
+      if(this.camModal.stream){ this.camModal.stream.getTracks().forEach(t=>t.stop()); }
+      try{
+        const constraints = {video:{width:{ideal:1920},height:{ideal:1080}}};
+        if(this.camModal.selectedDeviceId){
+          constraints.video.deviceId = {exact: this.camModal.selectedDeviceId};
+        } else {
+          constraints.video.facingMode = this.camModal.facingMode;
+        }
+        const stream=await navigator.mediaDevices.getUserMedia(constraints);
+        this.camModal.stream=stream;
+        const vid=document.getElementById('cam-video');
+        if(vid){ vid.srcObject=stream; await new Promise(r=>vid.onloadedmetadata=r); vid.play(); }
+        this.camCanvas.width=320; this.camCanvas.height=240;
+        if(this.camQualityTimer) clearInterval(this.camQualityTimer);
+        this.camQualityTimer=setInterval(()=>this._checkLiveQuality(),600);
+        // Mettre à jour la liste des caméras (les labels peuvent apparaître après permission)
+        await this.listerCameras();
+      }catch(e){
+        this.erreur='Erreur caméra : '+e.message+'. Autorisez l\'accès à la caméra.';
+        this.fermerCamera();
+      }
+    },
+
+    _checkLiveQuality(){
+      const vid=document.getElementById('cam-video');
+      if(!vid||!vid.videoWidth)return;
+      const ctx=this.camCanvas.getContext('2d');
+      const vw=vid.videoWidth, vh=vid.videoHeight;
+      const cw=vw*0.7, ch=vh*0.55;
+      ctx.drawImage(vid,(vw-cw)/2,(vh-ch)/2,cw,ch,0,0,this.camCanvas.width,this.camCanvas.height);
+      this.camQuality=analyzeQuality(this.camCanvas);
+    },
+
+    async switchCamera(){
+      // Si on a plusieurs caméras listées, passer à la suivante
+      if(this.camerasDisponibles.length > 1 && this.camModal.selectedDeviceId){
+        const idx = this.camerasDisponibles.findIndex(c => c.deviceId === this.camModal.selectedDeviceId);
+        const next = (idx + 1) % this.camerasDisponibles.length;
+        this.camModal.selectedDeviceId = this.camerasDisponibles[next].deviceId;
+      } else {
+        this.camModal.facingMode=this.camModal.facingMode==='environment'?'user':'environment';
+        this.camModal.selectedDeviceId='';
+      }
+      await this._startCamera();
+    },
+
+    fermerCamera(){
+      if(this.camQualityTimer){clearInterval(this.camQualityTimer);this.camQualityTimer=null;}
+      if(this.camModal.stream){this.camModal.stream.getTracks().forEach(t=>t.stop());this.camModal.stream=null;}
+      this.camModal.open=false;
+      this.camQuality={ok:false,cls:'',label:''};
+    },
+
+    async capturerPhoto(){
+      const vid=document.getElementById('cam-video');
+      if(!vid||!vid.videoWidth)return;
+      const fc=document.createElement('canvas');
+      fc.width=vid.videoWidth; fc.height=vid.videoHeight;
+      const ctx=fc.getContext('2d');
+      ctx.translate(fc.width,0); ctx.scale(-1,1);
+      ctx.drawImage(vid,0,0);
+      const dataUrl=fc.toDataURL('image/jpeg',0.92);
+      const blob=await new Promise(r=>fc.toBlob(r,'image/jpeg',0.92));
+      const quality=analyzeQuality(fc);
+      const capturedType=this.camModal.type;
+      this.fermerCamera();
+      this.previewModal={
+        open:true, type:capturedType, dataUrl, blob,
+        qualityCls:quality.cls,
+        qualityMsg:quality.ok
+          ?'✓ Photo nette et lisible — vous pouvez valider'
+          :(quality.cls==='warn'
+            ?'⚠ Qualité moyenne — vérifiez que le texte est lisible'
+            :'✗ Photo insuffisante — veuillez reprendre')
+      };
+    },
+
+    validerPhoto(){
+      const type=this.previewModal.type;
+      const url=URL.createObjectURL(this.previewModal.blob);
+      this.photos[type]={file:this.previewModal.blob,preview:url};
+      this.photoErr[type]=false;
+      this.erreur='';
+      this.previewModal.open=false;
+    },
+
+    rejeterPhoto(){
+      const type=this.previewModal.type;
+      this.previewModal.open=false;
+      this.ouvrirCamera(type);
+    },
+
+    peutSoumettre(){
+      const wa = (this.form.wa_agent||'').replace(/\D/g,'');
+      const mtn = (this.form.numero_mtn||'').replace(/\D/g,'');
+      return wa.length===10 && wa.startsWith('01') &&
+             mtn.length===10 && mtn.startsWith('01') &&
+             this.form.username_agent&&
+             this.form.fonction_agent&&
+             this.form.zone_agent&&
+             this.photos.recto&&
+             this.photos.verso;
+    },
+
+    async soumettre(){
+      if(!this.peutSoumettre()){ this.erreur='Tous les champs et photos recto/verso sont obligatoires'; return; }
+      this.erreur=''; this.loading=true; this.progress=0;
+      try{
+        const fd=new FormData();
+        fd.append('numero_mtn',this.form.numero_mtn);
+        fd.append('photo_recto',this.photos.recto.file,'recto.jpg');
+        fd.append('photo_verso',this.photos.verso.file,'verso.jpg');
+        const xhr=new XMLHttpRequest();
+        xhr.upload.onprogress=(e)=>{ if(e.lengthComputable) this.progress=Math.round(e.loaded/e.total*100); };
+        xhr.onload=()=>{
+          this.loading=false;
+          if(xhr.status>=200&&xhr.status<300){
+            try{
+              const data=JSON.parse(xhr.responseText);
+              if(isBlank(data.recto_path)||isBlank(data.verso_path)){
+                this.erreur='Erreur serveur : chemins photos manquants. Réessayez.'; return;
+              }
+              try{
+                localStorage.setItem('kyc_acq_agent',JSON.stringify({
+                  wa_agent:this.form.wa_agent,
+                  username_agent:this.form.username_agent,
+                  fonction_agent:this.form.fonction_agent,
+                  zone_agent:this.form.zone_agent
+                }));
+              }catch(e){}
+              this.prepareVerifySession(data.recto_path,data.verso_path);
+            }catch(e){ this.erreur='Erreur réponse serveur'; }
+          }else{
+            try{ this.erreur=JSON.parse(xhr.responseText).error||'Erreur '+xhr.status; }
+            catch(e){ this.erreur='Erreur '+xhr.status; }
+          }
+        };
+        xhr.onerror=()=>{ this.loading=false; this.erreur='Erreur réseau — vérifiez votre connexion'; };
+        xhr.open('POST','/api/public/dossiers');
+        xhr.send(fd);
+      }catch(err){ this.loading=false; this.erreur='Erreur : '+err.message; }
+    },
+
+    async prepareVerifySession(rectoPath,versoPath){
+      if(isBlank(rectoPath)||isBlank(versoPath)){
+        this.erreur='Chemins recto/verso invalides — recommencez depuis l\'étape 1'; return;
+      }
+      try{
+        const r=await fetch('/api/dossiers/prepare-verify-session',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            numero_mtn:this.form.numero_mtn,
+            recto_path:rectoPath.trim(),
+            verso_path:versoPath.trim(),
+            wa_agent:this.form.wa_agent,
+            username_agent:this.form.username_agent,
+            fonction_agent:this.form.fonction_agent,
+            zone_agent:this.form.zone_agent
+          })
+        });
+        const data=await r.json();
+        if(!r.ok){ this.erreur=data.error||'Impossible de préparer la session'; return; }
+        const params=new URLSearchParams({
+          session:data.sessionId,
+          recto:rectoPath.trim(),
+          verso:versoPath.trim(),
+          numero:this.form.numero_mtn,
+          wa:this.form.wa_agent
+        });
+        if(!isBlank(this.form.username_agent)) params.set('username',this.form.username_agent.trim());
+        if(!isBlank(this.form.fonction_agent)) params.set('fonction',this.form.fonction_agent.trim());
+        if(!isBlank(this.form.zone_agent))     params.set('zone',this.form.zone_agent.trim());
+        window.location.href='/face-verify-interactive?'+params.toString();
+      }catch(e){ this.erreur='Erreur réseau : '+e.message; }
+    },
+
+    ouvrirDash(){
+      this.tab='dash';
+      this.chargerDashboard();
+      if(this.dashTimer) clearInterval(this.dashTimer);
+      this.dashTimer=setInterval(()=>{ if(this.tab==='dash') this.chargerDashboard(); },15000);
+    },
+
+    async chargerDashboard(){
+      const wa=this.form.wa_agent;
+      if(!wa||wa.length!==10){this.dashDossiers=[];return;}
+      this.dashLoading=true;
+      try{
+        const r=await fetch('/api/public/dossiers?wa_agent='+encodeURIComponent(wa));
+        if(r.ok){
+          const d=await r.json();
+          this.dashDossiers=d.dossiers||[];
+          const st={total:0,en_attente:0,en_cours:0,accepte:0,rejete:0};
+          for(const dos of this.dashDossiers){st.total++;if(st[dos.statut]!==undefined)st[dos.statut]++;}
+          this.dashStats=st;
+        }
+      }catch(e){}
+      this.dashLoading=false;
+    },
+
+    dossiersFiltres(){
+      return this.dashDossiers.filter(d=>{
+        if(!d.date)return(!this.dateDebut&&!this.dateFin);
+        if(this.dateDebut&&d.date<this.dateDebut)return false;
+        if(this.dateFin&&d.date>this.dateFin)return false;
+        return true;
+      });
+    },
+
+    statsFiltrees(){
+      const st={total:0,en_attente:0,en_cours:0,accepte:0,rejete:0};
+      for(const d of this.dossiersFiltres()){st.total++;if(st[d.statut]!==undefined)st[d.statut]++;}
+      return st;
+    },
+
+    libelleStatut(s){ return{en_attente:'En attente',en_cours:'En cours',accepte:'Accepté',rejete:'Rejeté'}[s]||s; },
+
+    reset(){
+      this.success=false;
+      this.form.numero_mtn='';
+      this.photos={recto:null,verso:null};
+      this.photoErr={recto:false,verso:false};
+      this.progress=0; this.erreur='';
+    }
+  };
+}
+</script>
+
+<!-- ══════════════════ VIDEO CALL MODAL ══════════════════ -->
+<style>
+@keyframes haloPulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(1.32);opacity:0}}
+.halo-pulse{animation:haloPulse 1.8s ease-out infinite}
+.halo-pulse2{animation:haloPulse 1.8s ease-out infinite .55s}
+</style>
+<div id="modale-appel-terrain" style="display:none;position:fixed;inset:0;z-index:9999;background:#F0F4FA;flex-direction:column">
+  <div id="mat-incoming" style="flex:1;display:flex;flex-direction:column;align-items:center;background:linear-gradient(160deg,#F0F4FA 0%,#E8EDF5 100%)">
+
+    <!-- Top bar in call -->
+    <div style="width:100%;padding:16px 20px 0;display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="width:8px;height:8px;border-radius:50%;background:#16A34A;animation:pulse-dot 2s ease-in-out infinite"></div>
+        <span style="font-size:11px;font-weight:700;color:#16A34A;letter-spacing:.5px">APPEL ENTRANT</span>
+      </div>
+      <span style="font-size:11px;color:#94A3B8;font-weight:500">KYC Congo</span>
+    </div>
+
+    <div style="text-align:center;margin-top:36px">
+      <p style="color:#004B93;font-size:12px;letter-spacing:1.5px;margin:0;text-transform:uppercase;font-weight:700">Vérification KYC</p>
+      <p style="color:#94A3B8;font-size:12px;margin:5px 0 0">Centre de Certification MTN</p>
+    </div>
+
+    <div style="margin-top:44px;position:relative;width:120px;height:120px">
+      <!-- Halos -->
+      <span class="halo-pulse" style="position:absolute;inset:-16px;border-radius:50%;border:2px solid rgba(0,75,147,0.18);"></span>
+      <span class="halo-pulse2" style="position:absolute;inset:-32px;border-radius:50%;border:2px solid rgba(0,75,147,0.10);"></span>
+      <!-- Avatar -->
+      <div style="width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#004B93 0%,#1A6BB5 100%);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(0,75,147,0.30)">
+        <span style="font-size:48px">🏢</span>
+      </div>
+    </div>
+
+    <p style="color:#0F172A;font-size:20px;font-weight:800;margin:28px 0 0;text-align:center;padding:0 20px;letter-spacing:-.4px">Centre de Certification MTN</p>
+    <p style="color:#475569;font-size:13px;margin:8px 0 0">souhaite certifier le numéro</p>
+    <div style="margin-top:12px;background:rgba(0,75,147,0.08);border:1.5px solid rgba(0,75,147,0.18);border-radius:99px;padding:8px 20px">
+      <p id="mat-numero" style="color:#004B93;font-size:16px;margin:0;font-family:'JetBrains Mono',monospace;font-weight:700">064 279 737</p>
+    </div>
+
+    <div style="margin-top:auto;width:100%;padding:0 36px 52px;display:flex;align-items:flex-end;justify-content:space-between">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <button id="mat-refuser" style="width:70px;height:70px;border-radius:50%;background:#DC2626;color:#fff;border:none;font-size:26px;cursor:pointer;box-shadow:0 6px 20px rgba(220,38,38,0.40);display:flex;align-items:center;justify-content:center">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55c.39 1.34.39 2.76 0 4.1l-1.41 1.41a2 2 0 0 1-2.83 0l-.76-.76a2 2 0 0 0-2.83 0l-1.41 1.41a2 2 0 0 1-2.83 0C5.66 17.48 5.27 15.87 5 14.3c-.28-1.67-.28-3.37 0-5.04.28-1.57.67-3.18 1.78-4.29l1.41-1.41a2 2 0 0 1 2.83 0l.76.76a2 2 0 0 0 2.83 0l1.41-1.41"/></svg>
+        </button>
+        <span style="color:#94A3B8;font-size:12px;font-weight:500">Refuser</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <button id="mat-accepter" style="width:70px;height:70px;border-radius:50%;background:#16A34A;color:#fff;border:none;font-size:26px;cursor:pointer;box-shadow:0 6px 20px rgba(22,163,74,0.40);display:flex;align-items:center;justify-content:center">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.05 5A5 5 0 0 1 19 8.95M15.05 1A9 9 0 0 1 23 8.94m-1 7.98v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 3.07 8.83a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 2 0h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L6.91 7.91a16 16 0 0 0 6.16 6.16l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 21 15.02z"/></svg>
+        </button>
+        <span style="color:#94A3B8;font-size:12px;font-weight:500">Accepter</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="mat-video-zone" style="display:none;flex:1;flex-direction:column">
+    <div style="padding:12px 16px;background:#fff;color:#0F172A;font-weight:600;font-size:13px;border-bottom:1px solid rgba(0,75,147,0.10);display:flex;align-items:center;gap:8px">
+      <div style="width:8px;height:8px;border-radius:50%;background:#16A34A;animation:pulse-dot 2s ease-in-out infinite"></div>
+      Vérification vidéo <span id="mat-statut" style="color:#94A3B8;font-size:12px;margin-left:4px"></span>
+    </div>
+    <div style="flex:1;position:relative;background:#050508">
+      <video id="mat-distant" autoplay playsinline style="width:100%;height:100%;object-fit:contain"></video>
+      <video id="mat-local" autoplay playsinline muted style="position:absolute;bottom:16px;right:16px;width:110px;height:150px;object-fit:cover;border:2px solid rgba(255,255,255,0.25);border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.4)"></video>
+    </div>
+  </div>
+  <div id="mat-raccrocher-zone" style="display:none;justify-content:center;gap:10px;padding:16px 20px;background:#fff;border-top:1px solid rgba(0,75,147,0.10)">
+    <button id="mat-micro" style="background:#F0F4FA;color:#475569;border:1.5px solid rgba(0,75,147,0.15);padding:13px 16px;border-radius:999px;font-size:16px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600">🎤 Micro</button>
+    <button id="mat-camera" style="background:#F0F4FA;color:#475569;border:1.5px solid rgba(0,75,147,0.15);padding:13px 16px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer">📷 Caméra</button>
+    <button id="mat-switch" style="background:#F0F4FA;color:#475569;border:1.5px solid rgba(0,75,147,0.15);padding:13px 16px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer">↺</button>
+    <button id="mat-raccrocher" style="background:#DC2626;color:#fff;border:none;padding:13px 28px;border-radius:999px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 4px 14px rgba(220,38,38,0.35)">Raccrocher</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  function $(id){return document.getElementById(id);}
+  var sonnerieTimer=null,audioCtx=null;
+  function jouerSonnerie(){try{if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();function trille(t,fb,fh){var o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='triangle';o.connect(g);g.connect(audioCtx.destination);o.frequency.setValueAtTime(fh,t);o.frequency.setValueAtTime(fb,t+0.06);o.frequency.setValueAtTime(fh,t+0.12);o.frequency.setValueAtTime(fb,t+0.18);o.frequency.setValueAtTime(fh,t+0.24);g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.5,t+0.02);g.gain.setValueAtTime(0.5,t+0.30);g.gain.exponentialRampToValueAtTime(0.0001,t+0.38);o.start(t);o.stop(t+0.40);}function sonnerie(){try{var t=audioCtx.currentTime;trille(t,988,1319);trille(t+0.45,988,1319);}catch(e){}}sonnerie();sonnerieTimer=setInterval(sonnerie,1500);}catch(e){}}
+  function arreterSonnerie(){if(sonnerieTimer){clearInterval(sonnerieTimer);sonnerieTimer=null;}if(audioCtx){try{audioCtx.close();}catch(e){}audioCtx=null;}}
+  function vibrer(){try{if(navigator.vibrate)navigator.vibrate([500,300,500,300,500]);}catch(e){}}
+  var vibreTimer=null;
+  function ouvrir(num){var m=$('modale-appel-terrain');if(!m)return;brancher();var mi=$('mat-incoming');if(mi)mi.style.display='flex';var mv=$('mat-video-zone');if(mv)mv.style.display='none';var rz=$('mat-raccrocher-zone');if(rz)rz.style.display='none';if(num){var mn=$('mat-numero');if(mn)mn.innerHTML=num;}m.style.display='flex';jouerSonnerie();vibrer();if(vibreTimer)clearInterval(vibreTimer);vibreTimer=setInterval(vibrer,2400);}
+  function fermer(){var m=$('modale-appel-terrain');if(m)m.style.display='none';arreterSonnerie();if(vibreTimer){clearInterval(vibreTimer);vibreTimer=null;}try{if(navigator.vibrate)navigator.vibrate(0);}catch(e){}var mi=$('mat-incoming');if(mi)mi.style.display='flex';var mv=$('mat-video-zone');if(mv)mv.style.display='none';var rz=$('mat-raccrocher-zone');if(rz)rz.style.display='none';}
+  window.addEventListener('kyc-incoming-call',function(e){var d=e&&e.detail;ouvrir(d&&d.numeroMtn?d.numeroMtn:(d&&d.numero?d.numero:''));});
+  function brancher(){if(window.VideoCall&&VideoCall.setOnStateChange){VideoCall.setOnStateChange(function(etat,extra){if(etat==='incoming-call'){ouvrir(extra&&extra.numeroMtn?extra.numeroMtn:(extra&&extra.numero?extra.numero:''));}else if(etat==='local-stream'){var v=$('mat-local');if(v&&extra&&extra.stream)v.srcObject=extra.stream;}else if(etat==='remote-stream'){var v=$('mat-distant');if(v&&extra&&extra.stream)v.srcObject=extra.stream;var st=$('mat-statut');if(st)st.textContent='Connecté';var rz=$('mat-raccrocher-zone');if(rz)rz.style.display='flex';}else if(etat==='call-connected'){var st2=$('mat-statut');if(st2)st2.textContent='Connecté';var rz2=$('mat-raccrocher-zone');if(rz2)rz2.style.display='flex';}else if(etat==='remote-hangup'||etat==='call-ended'){fermer();}});}}
+  brancher();
+  $('mat-accepter').addEventListener('click',async function(){arreterSonnerie();if(vibreTimer){clearInterval(vibreTimer);vibreTimer=null;}try{if(navigator.vibrate)navigator.vibrate(0);}catch(e){}var mi=$('mat-incoming');if(mi)mi.style.display='none';var mv=$('mat-video-zone');if(mv)mv.style.display='flex';var st=$('mat-statut');if(st)st.textContent='Connexion...';var rz0=$('mat-raccrocher-zone');if(rz0)rz0.style.display='flex';try{await VideoCall.accepter();}catch(e){if(st)st.textContent='Erreur de connexion.';}});
+  $('mat-refuser').addEventListener('click',function(){try{VideoCall.envoyerRefus();}catch(e){}fermer();});
+  var rb=$('mat-raccrocher');if(rb)rb.addEventListener('click',function(){try{VideoCall.terminer(true);}catch(e){}fermer();});
+  var bm=$('mat-micro');if(bm)bm.addEventListener('click',function(){var a=VideoCall.toggleMicro();bm.style.background=a?'#F0F4FA':'#FEE2E2';bm.style.color=a?'#475569':'#DC2626';});
+  var bc=$('mat-camera');if(bc)bc.addEventListener('click',function(){var a=VideoCall.toggleCamera();bc.style.background=a?'#F0F4FA':'#FEE2E2';bc.style.color=a?'#475569':'#DC2626';});
+  var bs=$('mat-switch');if(bs)bs.addEventListener('click',async function(){bs.disabled=true;try{await VideoCall.changerCamera();}catch(e){}bs.disabled=false;});
+  (async function(){try{if('wakeLock'in navigator){await navigator.wakeLock.request('screen');document.addEventListener('visibilitychange',async function(){if(document.visibilityState==='visible')await navigator.wakeLock.request('screen');});}}catch(e){}})();
+})();
+</script>
+
+</body>
+</html>

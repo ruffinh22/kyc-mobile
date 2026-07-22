@@ -1,0 +1,417 @@
+'use strict';
+
+const dbModule = require('../db');
+const auth = require('../utils/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+async function routes(fastify, opts) {
+
+  // Toutes les routes admin exigent auth + role admin
+  fastify.addHook('preHandler', requireAuth);
+  fastify.addHook('preHandler', requireRole(['admin']));
+
+  // GET /api/admin/stockage - Suivi du stockage (disque, base, uploads, enregistrements)
+  fastify.get('/api/admin/stockage', async (request, reply) => {
+    function tailleDir(dir){
+      let total=0, nb=0;
+      try{
+        const items=fs.readdirSync(dir,{withFileTypes:true});
+        for(const it of items){
+          const p=path.join(dir,it.name);
+          if(it.isDirectory()){ const sub=tailleDir(p); total+=sub.total; nb+=sub.nb; }
+          else { try{ total+=fs.statSync(p).size; nb++; }catch(e){} }
+        }
+      }catch(e){}
+      return {total, nb};
+    }
+    try{
+      const BASE='/opt/kyc-v3';
+      // Disque
+      let disque={total:0,libre:0,utilise:0};
+      try{
+        const st=fs.statfsSync(BASE);
+        disque.total=st.blocks*st.bsize;
+        disque.libre=st.bavail*st.bsize;
+        disque.utilise=disque.total-(st.bfree*st.bsize);
+      }catch(e){}
+      // Base de donnees
+      let tailleDb=0;
+      try{ tailleDb=fs.statSync(BASE+'/data/mccb-v3.db').size; }catch(e){}
+      // Uploads
+      const cni=tailleDir(BASE+'/uploads/cni');
+      const gsm=tailleDir(BASE+'/uploads/gsm');
+      // Enregistrements
+      const compte=(t)=>{ try{ return dbModule.db.prepare('SELECT COUNT(*) AS n FROM '+t).get().n; }catch(e){ return null; } };
+      const enregistrements={
+        dossiers: compte('dossiers'),
+        gsm: compte('gsm'),
+        comptes: compte('comptes'),
+        notes_qualite: compte('notes_qualite')
+      };
+      return reply.send({
+        disque,
+        base:{ taille:tailleDb },
+        uploads:{ cni, gsm },
+        enregistrements
+      });
+    }catch(err){
+      fastify.log.error('GET stockage error: '+err.message);
+      return reply.code(500).send({ error:'Erreur serveur' });
+    }
+  });
+
+  // GET /api/admin/referentiels - Lire les listes de valeurs GSM
+  fastify.get('/api/admin/referentiels', async (request, reply) => {
+    try {
+      const row = dbModule.db.prepare("SELECT valeur FROM config WHERE cle='referentiels_gsm'").get();
+      let data = {};
+      if (row && row.valeur) { try { data = JSON.parse(row.valeur); } catch(e){ data = {}; } }
+      return reply.send({ referentiels: data });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // PUT /api/admin/referentiels - Enregistrer les listes de valeurs GSM
+  fastify.put('/api/admin/referentiels', async (request, reply) => {
+    const adminMatr = request.user.matricule;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const refs = (request.body && request.body.referentiels) || null;
+    if (!refs || typeof refs !== 'object' || Array.isArray(refs)) {
+      return reply.code(400).send({ error: 'referentiels invalide' });
+    }
+    try {
+      const clean = {};
+      for (const k of Object.keys(refs)) {
+        if (!Array.isArray(refs[k])) continue;
+        clean[k] = refs[k]
+          .map(v => String(v == null ? '' : v).trim())
+          .filter(v => v.length > 0);
+      }
+      const json = JSON.stringify(clean);
+      const exist = dbModule.db.prepare("SELECT cle FROM config WHERE cle='referentiels_gsm'").get();
+      if (exist) dbModule.db.prepare("UPDATE config SET valeur=? WHERE cle='referentiels_gsm'").run(json);
+      else dbModule.db.prepare("INSERT INTO config (cle, valeur) VALUES ('referentiels_gsm', ?)").run(json);
+      dbModule.audit(adminMatr, 'ADMIN_REFERENTIELS_UPDATE', 'referentiels GSM modifies', ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      fastify.log.error('PUT referentiels error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/admin/stats - Dashboard
+  // --------------------------------------------------------------------------
+  fastify.get('/api/admin/stats', async (request, reply) => {
+    try {
+      const db = dbModule.db;
+      const today = new Date().toISOString().slice(0, 10);
+      const since24h = Math.floor(Date.now() / 1000) - 86400;
+
+      const comptesActifs = db.prepare('SELECT COUNT(*) AS n FROM comptes WHERE actif = 1').get().n;
+      const sessionsActives = db.prepare("SELECT COUNT(*) AS n FROM sessions_v3 WHERE revoked = 0 AND expires_at > strftime('%s','now')").get().n;
+      const dossiersJour = db.prepare('SELECT COUNT(*) AS n FROM dossiers WHERE date = ?').get(today).n;
+      const auditJour = db.prepare('SELECT COUNT(*) AS n FROM audit_log WHERE created_at > ?').get(since24h).n;
+
+      const parRoleRows = db.prepare("SELECT role, COUNT(*) AS n FROM comptes WHERE actif = 1 GROUP BY role").all();
+      const parRole = {};
+      for (const r of parRoleRows) parRole[r.role] = r.n;
+
+      const dernieres = db.prepare(`
+        SELECT id, user_matricule, action, details, ip,
+               datetime(created_at,'unixepoch','localtime') AS quand
+        FROM audit_log
+        ORDER BY created_at DESC LIMIT 20
+      `).all();
+
+      return reply.send({
+        stats: { comptesActifs, sessionsActives, dossiersJour, auditJour },
+        parRole,
+        dernieresActions: dernieres
+      });
+    } catch (err) {
+      fastify.log.error(err);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/admin/comptes - Liste tous les comptes
+  // --------------------------------------------------------------------------
+  fastify.get('/api/admin/comptes', async (request, reply) => {
+    try {
+      const rows = dbModule.db.prepare(`
+        SELECT matricule, nom, prenom, role, actif, must_change_password,
+               failed_login_count, last_login_at, locked_until,
+               datetime(created_at,'unixepoch','localtime') AS cree_le
+        FROM comptes
+        ORDER BY actif DESC, matricule ASC
+      `).all();
+      return reply.send({ count: rows.length, comptes: rows });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/admin/comptes - Créer un compte
+  // --------------------------------------------------------------------------
+  fastify.post('/api/admin/comptes', async (request, reply) => {
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const adminMatr = request.user.matricule;
+    const { matricule, prenom, nom, role, password } = request.body || {};
+
+    if (!matricule || !auth.validateMatricule(matricule)) {
+      return reply.code(400).send({ error: 'Matricule invalide (lettres maj + chiffres, 2-30 chars)' });
+    }
+    if (!prenom || !role || !password) {
+      return reply.code(400).send({ error: 'Champs obligatoires manquants (prenom, role, password)' });
+    }
+    if (!['agent', 'superviseur', 'admin'].includes(role)) {
+      return reply.code(400).send({ error: 'Rôle invalide' });
+    }
+    const strength = auth.validatePasswordStrength(password);
+    if (!strength.valid) {
+      return reply.code(400).send({ error: 'Mot de passe trop faible', details: strength.errors });
+    }
+
+    const existant = dbModule.getCompteByMatricule(matricule);
+    if (existant) {
+      return reply.code(409).send({ error: 'Matricule déjà existant' });
+    }
+
+    try {
+      const hash = await auth.hashPassword(password);
+      const id = 'C' + Date.now() + Math.floor(Math.random() * 1000);
+      dbModule.db.prepare(`
+        INSERT INTO comptes (id, matricule, prenom, nom, role, code, password_hash, actif, must_change_password)
+        VALUES (?, ?, ?, ?, ?, 'V3', ?, 1, 1)
+      `).run(id, matricule, prenom, nom || null, role, hash);
+
+      dbModule.audit(adminMatr, 'ADMIN_COMPTE_CREATE', 'matricule=' + matricule + ' role=' + role, ip, ua);
+      return reply.send({ success: true, matricule });
+    } catch (err) {
+      fastify.log.error(err);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/admin/comptes/:matricule/reset-password
+  // --------------------------------------------------------------------------
+  fastify.post('/api/admin/comptes/:matricule/reset-password', async (request, reply) => {
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const adminMatr = request.user.matricule;
+    const { matricule } = request.params;
+    const { password } = request.body || {};
+
+    if (!password || password.length < 8) {
+      return reply.code(400).send({ error: 'Mot de passe trop court (min 8)' });
+    }
+
+    const compte = dbModule.getCompteByMatricule(matricule);
+    if (!compte) return reply.code(404).send({ error: 'Compte introuvable' });
+
+    try {
+      const hash = await auth.hashPassword(password);
+      dbModule.db.prepare("UPDATE comptes SET password_hash = ?, must_change_password = 1, failed_login_count = 0, locked_until = NULL WHERE matricule = ?").run(hash, matricule);
+      dbModule.audit(adminMatr, 'ADMIN_PASSWORD_RESET', 'matricule=' + matricule, ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // DELETE /api/admin/comptes/:matricule - Désactiver (soft delete)
+  // --------------------------------------------------------------------------
+  fastify.delete('/api/admin/comptes/:matricule', async (request, reply) => {
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const adminMatr = request.user.matricule;
+    const { matricule } = request.params;
+
+    if (matricule === adminMatr) {
+      return reply.code(400).send({ error: 'Vous ne pouvez pas désactiver votre propre compte' });
+    }
+
+    const compte = dbModule.getCompteByMatricule(matricule);
+    if (!compte) return reply.code(404).send({ error: 'Compte introuvable' });
+
+    try {
+      dbModule.db.prepare('UPDATE comptes SET actif = 0 WHERE matricule = ?').run(matricule);
+      // Revoquer toutes les sessions actives de cet utilisateur
+      dbModule.db.prepare('UPDATE sessions_v3 SET revoked = 1 WHERE matricule = ?').run(matricule);
+      dbModule.audit(adminMatr, 'ADMIN_COMPTE_DEACTIVATE', 'matricule=' + matricule, ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // POST /api/admin/comptes/:matricule/activer
+  // --------------------------------------------------------------------------
+  fastify.post('/api/admin/comptes/:matricule/activer', async (request, reply) => {
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const adminMatr = request.user.matricule;
+    const { matricule } = request.params;
+
+    const compte = dbModule.getCompteByMatricule(matricule);
+    if (!compte) return reply.code(404).send({ error: 'Compte introuvable' });
+
+    try {
+      dbModule.db.prepare("UPDATE comptes SET actif = 1, failed_login_count = 0, locked_until = NULL WHERE matricule = ?").run(matricule);
+      dbModule.audit(adminMatr, 'ADMIN_COMPTE_ACTIVATE', 'matricule=' + matricule, ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/admin/audit - Liste audit log
+  // --------------------------------------------------------------------------
+  fastify.get('/api/admin/audit', async (request, reply) => {
+    const limit = Math.min(parseInt(request.query.limit || '100', 10), 500);
+    try {
+      const rows = dbModule.db.prepare(`
+        SELECT id, user_matricule, action, details, ip, user_agent,
+               datetime(created_at,'unixepoch','localtime') AS quand
+        FROM audit_log
+        ORDER BY created_at DESC LIMIT ?
+      `).all(limit);
+      return reply.send({ count: rows.length, logs: rows });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+
+  // --------------------------------------------------------------------------
+  // GET /api/admin/sessions - Sessions actives
+  // --------------------------------------------------------------------------
+  fastify.get('/api/admin/sessions', async (request, reply) => {
+    try {
+      const rows = dbModule.db.prepare(
+        "SELECT jti, matricule, ip, user_agent, " +
+        "datetime(created_at,'unixepoch','localtime') AS cree_le, " +
+        "datetime(expires_at,'unixepoch','localtime') AS expire_le, " +
+        "created_at, expires_at FROM sessions_v3 " +
+        "WHERE revoked = 0 AND expires_at > strftime('%s','now') " +
+        "ORDER BY created_at DESC"
+      ).all();
+      return reply.send({ count: rows.length, sessions: rows });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  fastify.post('/api/admin/sessions/:jti/revoke', async (request, reply) => {
+    const jti = request.params.jti;
+    const adminMatr = request.user.matricule;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    try {
+      const sess = dbModule.db.prepare('SELECT matricule FROM sessions_v3 WHERE jti = ?').get(jti);
+      if (!sess) return reply.code(404).send({ error: 'Session introuvable' });
+      dbModule.db.prepare("UPDATE sessions_v3 SET revoked = 1 WHERE jti = ?").run(jti);
+      dbModule.audit(adminMatr, 'ADMIN_SESSION_REVOKE', 'jti=' + jti + ' matricule=' + sess.matricule, ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      fastify.log.error(err);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // GET /api/admin/backup - Telecharger une sauvegarde de la base SQLite
+  // Utilise l'API backup de better-sqlite3 (copie coherente, base ouverte).
+  // --------------------------------------------------------------------------
+  fastify.get('/api/admin/backup', async (request, reply) => {
+    const fs = require('fs');
+    const path = require('path');
+    const adminMatr = request.user.matricule;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    try {
+      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+      const tmpPath = path.join('/tmp', 'mccb-v3-backup-' + stamp + '.db');
+      // Copie coherente via l'API backup de better-sqlite3
+      await dbModule.db.backup(tmpPath);
+      dbModule.audit(adminMatr, 'ADMIN_DB_BACKUP', 'fichier=' + path.basename(tmpPath), ip, ua);
+      const stream = fs.createReadStream(tmpPath);
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Content-Disposition', 'attachment; filename="mccb-v3-backup-' + stamp + '.db"');
+      // Nettoyage du fichier temporaire apres envoi
+      stream.on('close', () => { try { fs.unlinkSync(tmpPath); } catch(e){} });
+      return reply.send(stream);
+    } catch (err) {
+      fastify.log.error('GET /api/admin/backup error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur lors de la sauvegarde', details: err.message });
+    }
+  });
+
+  // GET /api/admin/security-policy - Politique de securite (lecture seule)
+  fastify.get('/api/admin/security-policy', async (request, reply) => {
+    try {
+      const auth = require('../utils/auth');
+      return reply.send({
+        password_min_length: auth.PASSWORD_MIN_LENGTH,
+        password_rules: ['1 minuscule', '1 majuscule', '1 chiffre', 'pas de mot de passe commun'],
+        session_duration: auth.JWT_EXPIRES_IN
+      });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // GET /api/admin/habilitations - Habilitations de tous les superviseurs
+  fastify.get('/api/admin/habilitations', async (request, reply) => {
+    try {
+      const row = dbModule.db.prepare("SELECT valeur FROM config WHERE cle='habilitations_sup'").get();
+      let data = {};
+      if (row && row.valeur) { try { data = JSON.parse(row.valeur); } catch(e){ data = {}; } }
+      const sups = dbModule.db.prepare("SELECT matricule, prenom, nom FROM comptes WHERE role='superviseur' AND actif=1 ORDER BY matricule").all();
+      return reply.send({ habilitations: data, superviseurs: sups });
+    } catch (err) {
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // PUT /api/admin/habilitations/:matricule - Enregistrer les habilitations d'un superviseur
+  fastify.put('/api/admin/habilitations/:matricule', async (request, reply) => {
+    const matricule = request.params.matricule;
+    const adminMatr = request.user.matricule;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+    const niveaux = (request.body && request.body.niveaux) || {};
+    try {
+      const sup = dbModule.db.prepare("SELECT matricule FROM comptes WHERE matricule=? AND role='superviseur'").get(matricule);
+      if (!sup) return reply.code(404).send({ error: 'Superviseur introuvable' });
+      const row = dbModule.db.prepare("SELECT valeur FROM config WHERE cle='habilitations_sup'").get();
+      let data = {};
+      if (row && row.valeur) { try { data = JSON.parse(row.valeur); } catch(e){ data = {}; } }
+      data[matricule] = niveaux;
+      const json = JSON.stringify(data);
+      const exist = dbModule.db.prepare("SELECT cle FROM config WHERE cle='habilitations_sup'").get();
+      if (exist) dbModule.db.prepare("UPDATE config SET valeur=? WHERE cle='habilitations_sup'").run(json);
+      else dbModule.db.prepare("INSERT INTO config (cle, valeur) VALUES ('habilitations_sup', ?)").run(json);
+      dbModule.audit(adminMatr, 'ADMIN_HABILITATIONS_UPDATE', 'superviseur=' + matricule, ip, ua);
+      return reply.send({ success: true });
+    } catch (err) {
+      fastify.log.error('PUT habilitations error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+}
+
+module.exports = routes;

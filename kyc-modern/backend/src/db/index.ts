@@ -17,7 +17,7 @@ export async function initDb(): Promise<void> {
   pool = mysql.createPool({
     host:             process.env.DB_HOST     || '127.0.0.1',
     port:             parseInt(process.env.DB_PORT || '3306', 10),
-    user:             process.env.DB_USER     || 'kyc_user',
+    user:             process.env.DB_USER     || 'root',
     password:         process.env.DB_PASS     || '',
     database:         process.env.DB_NAME     || 'kyc_v4',
     waitForConnections: true,
@@ -40,7 +40,7 @@ export async function initDb(): Promise<void> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type P = any[];
 
-async function query<T extends RowDataPacket>(sql: string, params: P = []): Promise<T[]> {
+export async function query<T extends RowDataPacket>(sql: string, params: P = []): Promise<T[]> {
   const [rows] = await pool.execute<T[]>(sql, params);
   return rows;
 }
@@ -50,7 +50,7 @@ async function queryOne<T extends RowDataPacket>(sql: string, params: P = []): P
   return rows[0] ?? null;
 }
 
-async function exec(sql: string, params: P = []): Promise<ResultSetHeader> {
+export async function exec(sql: string, params: P = []): Promise<ResultSetHeader> {
   const [result] = await pool.execute<ResultSetHeader>(sql, params);
   return result;
 }
@@ -284,7 +284,31 @@ export async function createDossier(data: {
   acquisition_status?: string | null;
 }): Promise<void> {
   const now = nowSec();
+  const columns = [
+    'id', 'numero_mtn', 'wa_agent', 'username_agent', 'fonction_agent', 'zone_agent',
+    'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live', 'score_visage', 'visage_match',
+    'visage_motif', 'visage_verifie_le', 'nom_titulaire', 'prenom_titulaire', 'date_naissance',
+    'lieu_naissance', 'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
+    'sexe', 'nationalite', 'profession', 'country', 'ocr_overrides', 'flow_step', 'acquisition_status',
+    'created_at', 'updated_at',
+  ];
+  const values = [
+    data.id, data.numero_mtn, data.wa_agent ?? null, data.username_agent ?? null,
+    data.fonction_agent ?? null, data.zone_agent ?? null,
+    data.date, data.heure_reception,
+    data.photo_recto ?? null, data.photo_verso ?? null, data.photo_live ?? null,
+    data.score_visage ?? null, data.visage_match ?? null, data.visage_motif ?? null,
+    data.visage_verifie_le ?? null, data.nom_titulaire ?? null, data.prenom_titulaire ?? null,
+    data.date_naissance ?? null, data.lieu_naissance ?? null, data.autre_numero ?? null,
+    data.nom_pere ?? null, data.nom_mere ?? null, data.adresse_complete ?? null,
+    data.numero_cni ?? null, data.sexe ?? null, data.nationalite ?? null,
+    data.profession ?? null, data.country ?? null, data.ocr_overrides ?? null,
+    data.flow_step ?? null, data.acquisition_status ?? null, now, now,
+  ];
+  const placeholders = columns.map(() => '?').join(', ');
+
   await exec(
+<<<<<<< HEAD
     `INSERT INTO dossiers (id, numero_mtn, wa_agent, username_agent, fonction_agent, zone_agent,
       date, heure_reception, photo_recto, photo_verso, photo_live, score_visage, visage_match,
       visage_motif, visage_verifie_le, nom_titulaire, prenom_titulaire, date_naissance,
@@ -305,6 +329,10 @@ export async function createDossier(data: {
       data.profession ?? null, data.country ?? null, data.ocr_overrides ?? null,
       data.flow_step ?? null, data.acquisition_status ?? null, now, now,
     ]
+=======
+    `INSERT INTO dossiers (${columns.join(', ')}) VALUES (${placeholders})`,
+    values
+>>>>>>> 9281074 (Mise à jour de Modern)
   );
 }
 
@@ -634,6 +662,24 @@ export async function setConfig(cle: string, valeur: string): Promise<void> {
     'INSERT INTO config (cle, valeur, updated_at) VALUES (?,?,?) ON DUPLICATE KEY UPDATE valeur=VALUES(valeur), updated_at=VALUES(updated_at)',
     [cle, valeur, nowSec()]
   );
+}
+
+export async function getRejectionMotifs(): Promise<string[]> {
+  const val = await getConfig('rejection_motifs');
+  if (!val) return [];
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed)
+      ? parsed.map((m: unknown) => String(m).trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function setRejectionMotifs(motifs: string[]): Promise<void> {
+  const cleaned = Array.from(new Set(motifs.map(m => String(m).trim()).filter(Boolean)));
+  await setConfig('rejection_motifs', JSON.stringify(cleaned));
 }
 
 export async function getAllConfig(): Promise<ConfigRow[]> {

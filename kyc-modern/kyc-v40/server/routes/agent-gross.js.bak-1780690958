@@ -1,0 +1,152 @@
+// ============================================================================
+// KYC V3 - Route Gross Add GSM (saisie LIBRE, sans dossier)
+// ============================================================================
+// POST /api/gsm/libre - Cree une saisie GSM independante (pas de dossier_id).
+//   Champs obligatoires : numero, coach, type_id, constat, piece, verbatim, action.
+//   Optionnels : statut_final, traitement, raison, nom_client, observations, date.
+//   N'affecte PAS la route POST /api/gsm existante (GSM depuis un dossier).
+// ============================================================================
+'use strict';
+const { db, audit } = require('../db');
+const { requireAuth } = require('../middleware/auth');
+
+async function routes(fastify, opts) {
+  fastify.addHook('preHandler', requireAuth);
+
+  // GET /api/gsm/mes-saisies?date=AAAA-MM-JJ - saisies du jour de l'agent (toutes colonnes)
+  fastify.get('/api/gsm/mes-saisies', async (request, reply) => {
+    const { matricule } = request.user;
+    const date = request.query.date || new Date().toISOString().slice(0, 10);
+    try {
+      const rows = db.prepare(
+        'SELECT id, numero, date_saisie, heure_saisie, coach, type_id, constat, piece, ' +
+        'verbatim, action, statut_final, traitement, raison, ' +
+        'capture_a, capture_p, capture_aa, captures, dossier_id ' +
+        'FROM gsm WHERE agent_ctrl = ? AND date_saisie = ? ORDER BY created_at DESC'
+      ).all(matricule, date);
+      return reply.send({ success: true, count: rows.length, saisies: rows });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm/mes-saisies error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // GET /api/gsm/mes-historique?debut=AAAA-MM-JJ&fin=AAAA-MM-JJ - historique de l'agent (toutes colonnes)
+  fastify.get('/api/gsm/mes-historique', async (request, reply) => {
+    const { matricule } = request.user;
+    const { debut, fin } = request.query || {};
+    let sql = 'SELECT id, numero, date_saisie, heure_saisie, coach, type_id, constat, piece, ' +
+      'verbatim, action, statut_final, traitement, raison, ' +
+      'capture_a, capture_p, capture_aa, captures, dossier_id ' +
+      'FROM gsm WHERE agent_ctrl = ?';
+    const params = [matricule];
+    if (debut && /^\d{4}-\d{2}-\d{2}$/.test(debut)) { sql += ' AND date_saisie >= ?'; params.push(debut); }
+    if (fin && /^\d{4}-\d{2}-\d{2}$/.test(fin)) { sql += ' AND date_saisie <= ?'; params.push(fin); }
+    sql += ' ORDER BY date_saisie DESC, created_at DESC LIMIT 500';
+    try {
+      const rows = db.prepare(sql).all(...params);
+      return reply.send({ success: true, count: rows.length, saisies: rows });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm/mes-historique error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  // GET /api/gsm/mes-perfs?debut=&fin= - statistiques de performance de l'agent
+  fastify.get('/api/gsm/mes-perfs', async (request, reply) => {
+    const { matricule } = request.user;
+    const { debut, fin } = request.query || {};
+    if (!debut || !fin || !/^\d{4}-\d{2}-\d{2}$/.test(debut) || !/^\d{4}-\d{2}-\d{2}$/.test(fin)) {
+      return reply.code(400).send({ error: 'Periode invalide (debut/fin AAAA-MM-JJ requis)' });
+    }
+    try {
+      const rows = db.prepare(
+        'SELECT date_saisie AS jour, COUNT(*) AS n FROM gsm ' +
+        'WHERE agent_ctrl = ? AND date_saisie >= ? AND date_saisie <= ? ' +
+        'GROUP BY date_saisie ORDER BY date_saisie'
+      ).all(matricule, debut, fin);
+
+      let total = 0, meilleur = { jour: null, n: 0 };
+      for (const r of rows) {
+        total += r.n;
+        if (r.n > meilleur.n) meilleur = { jour: r.jour, n: r.n };
+      }
+      const jours_travailles = rows.length;
+      // Jours calendaires de la periode (inclus)
+      const d1 = new Date(debut + 'T00:00:00');
+      const d2 = new Date(fin + 'T00:00:00');
+      const jours_periode = Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+      const moyenne = jours_travailles > 0 ? (total / jours_travailles) : 0;
+
+      return reply.send({
+        success: true,
+        total,
+        jours_travailles,
+        jours_periode,
+        moyenne: Math.round(moyenne * 10) / 10,
+        meilleur_jour: meilleur,
+        evolution: rows
+      });
+    } catch (err) {
+      fastify.log.error('GET /api/gsm/mes-perfs error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur' });
+    }
+  });
+
+  fastify.post('/api/gsm/libre', async (request, reply) => {
+    const { matricule } = request.user;
+    const ip = request.ip;
+    const ua = request.headers['user-agent'] || '';
+
+    const {
+      numero, coach, type_id, constat, piece, verbatim, action,
+      statut_final, traitement, raison, nom_client, observations, date, captures
+    } = request.body || {};
+
+    // Champs obligatoires en saisie libre
+    const manquants = [];
+    if (!numero) manquants.push('numero');
+    if (!coach) manquants.push('coach');
+    if (!type_id) manquants.push('type_id');
+    if (!constat) manquants.push('constat');
+    if (!piece) manquants.push('piece');
+    if (!verbatim) manquants.push('verbatim');
+    if (!action) manquants.push('action');
+    if (manquants.length) {
+      return reply.code(400).send({ error: 'Champs obligatoires manquants', requis: manquants });
+    }
+
+    // Generer ID GSM (meme format que la route existante)
+    const id = 'G' + Date.now() + Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const now = new Date();
+    // Date saisissable (sinon date du jour). On valide le format AAAA-MM-JJ.
+    const date_saisie = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : now.toISOString().slice(0, 10);
+    const heure_saisie = now.toTimeString().slice(0, 5);
+
+    try {
+      db.prepare(`
+        INSERT INTO gsm (
+          id, numero, agent_ctrl, agent_creation, coach, date_saisie, heure_saisie,
+          dossier_id, nom_client, type_id, constat, piece, verbatim, action,
+          statut_final, traitement, raison, observations, payload, captures
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, numero, matricule, matricule, coach,
+        date_saisie, heure_saisie, nom_client || null,
+        type_id, constat, piece, verbatim, action,
+        statut_final || null, traitement || null, raison || null, observations || null,
+        JSON.stringify({ source: 'gross_add_libre', date_creation: date_saisie }),
+        (Array.isArray(captures) && captures.length) ? JSON.stringify(captures.slice(0,5)) : null
+      );
+
+      audit(matricule, 'GSM_CREATE_LIBRE', 'id=' + id + ' numero=' + numero, ip, ua);
+
+      return reply.send({ success: true, id: id, numero: numero });
+    } catch (err) {
+      fastify.log.error('POST /api/gsm/libre error: ' + err.message);
+      return reply.code(500).send({ error: 'Erreur serveur', details: err.message });
+    }
+  });
+}
+
+module.exports = routes;

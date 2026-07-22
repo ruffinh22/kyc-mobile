@@ -1,0 +1,39 @@
+<aside class="sidebar w-64 flex flex-col text-white sticky top-0 h-screen flex-shrink-0">
+  <div class="p-5 border-b border-gray-700">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center">
+        <span class="text-white font-bold text-lg">🛡</span>
+      </div>
+      <div><h1 class="font-bold text-white">KYC BO</h1><p class="text-xs text-gray-400">Administration</p></div>
+    </div>
+  </div>
+  <div class="p-5 border-b border-gray-700">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center font-bold text-white" id="sb-avatar">??</div>
+      <div class="flex-1 min-w-0">
+        <p class="font-bold text-white truncate" id="sb-nom">...</p>
+        <div class="flex items-center mt-1 gap-1">
+          <span class="text-xs text-gray-400" id="sb-matricule"></span>
+          <span class="px-1.5 py-0.5 rounded text-xs font-semibold bg-red-500 text-white" id="sb-role"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+    <a href="/admin/dashboard"   data-menu="dashboard"  class="sb-link"><span class="text-xl mr-3">📊</span>Dashboard</a>
+    <a href="/admin/historique"  data-menu="historique" class="sb-link"><span class="text-xl mr-3">🕐</span>Historique</a>
+    <a href="/admin/comptes"     data-menu="comptes"    class="sb-link"><span class="text-xl mr-3">👥</span>Gestion des comptes</a>
+    <a href="/admin/audit"       data-menu="audit"      class="sb-link"><span class="text-xl mr-3">📜</span>Journal d'audit</a>
+    <a href="/admin/sessions"    data-menu="sessions"   class="sb-link"><span class="text-xl mr-3">🔌</span>Sessions actives</a>
+    <a href="/admin/distribution" data-menu="distribution" class="sb-link"><span class="text-xl mr-3">🔄</span>Distribution</a>
+    <a href="/admin/habilitations" data-menu="habilitations" class="sb-link"><span class="text-xl mr-3">🔐</span>Habilitations</a>
+    <a href="/admin/referentiels" data-menu="referentiels" class="sb-link"><span class="text-xl mr-3">📝</span>Referentiels GSM</a>
+    <a href="/admin/stockage" data-menu="stockage" class="sb-link"><span class="text-xl mr-3">💾</span>Stockage</a>
+    <a href="/admin/parametres"  data-menu="parametres" class="sb-link"><span class="text-xl mr-3">⚙️</span>Paramètres</a>
+  </nav>
+  <div class="p-3 border-t border-gray-700">
+    <button onclick="seDeconnecterGlobal()" class="flex items-center w-full px-3 py-2.5 rounded-lg text-red-300 hover:bg-red-500 hover:text-white transition-colors">
+      <span class="text-xl mr-3">🚪</span><span class="font-semibold">Déconnexion</span>
+    </button>
+  </div>
+</aside>

@@ -1,0 +1,138 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>KYC BO - Administration</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* ===== Grille des referentiels GSM (definie dans le shell pour etre appliquee) ===== */
+.ref-grid{display:flex !important;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.stk-grid{display:grid !important;grid-template-columns:repeat(4,1fr);gap:16px}
+.stk-card{background:#fff;border:1px solid #e8e8ec;border-radius:14px;padding:18px}
+.stk-label{font-size:12px;color:#9ca3af;margin:0 0 6px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.stk-big{font-size:28px;font-weight:800;color:#1f2937;margin:0}
+.stk-sub{font-size:12px;color:#6b7280;margin:6px 0 0}
+.stk-bar{height:8px;background:#f1f5f9;border-radius:99px;margin:8px 0;overflow:hidden}
+.stk-bar-fill{height:100%;background:#7f1d1d;border-radius:99px}
+@media(max-width:1100px){.stk-grid{grid-template-columns:repeat(2,1fr)}}
+.ref-grid .ref-card{flex:1 1 calc(50% - 8px);min-width:300px;box-sizing:border-box}
+
+body{font-family:'Inter',system-ui,sans-serif}
+.sidebar{background:linear-gradient(180deg,#7f1d1d 0%,#991b1b 100%)}
+.sb-link{display:flex;align-items:center;padding:.625rem .75rem;border-radius:.5rem;color:#fca5a5;transition:background .15s,color .15s;text-decoration:none}
+.sb-link:hover{background:#7f1d1d;color:#fff}
+.sb-link.active{background:#ef4444;color:#fff;font-weight:600}
+</style>
+</head>
+<body class="bg-gray-100 min-h-screen"><div class="flex min-h-screen">
+<div id="sidebar-mount"></div>
+<div id="spa-view" class="flex-1 min-w-0"></div>
+</div>
+<script>
+const SPA={intervals:[]};
+const _setInterval=window.setInterval.bind(window);
+window.setInterval=function(fn,d){const id=_setInterval(fn,d);SPA.intervals.push(id);return id};
+function nettoyerTimers(){SPA.intervals.forEach(id=>clearInterval(id));SPA.intervals=[]}
+
+async function chargerSidebar(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(!t){window.location.href='/login';return}
+  const u=JSON.parse(sessionStorage.getItem('kyc_user')||'{}');
+  if(u.role!=='admin'){window.location.href='/login';return}
+  const r=await fetch('/static/pages/_sidebar-admin.html');
+  document.getElementById('sidebar-mount').innerHTML=await r.text();
+  try{
+    document.getElementById('sb-avatar').textContent=(u.matricule||'??').substring(0,2);
+    document.getElementById('sb-nom').textContent=u.prenom||u.matricule||'';
+    document.getElementById('sb-matricule').textContent=u.matricule||'';
+    document.getElementById('sb-role').textContent=u.role||'';
+  }catch(e){}
+  document.querySelectorAll('#sidebar-mount a[href^="/admin/"]').forEach(a=>{
+    a.addEventListener('click',ev=>{ev.preventDefault();naviguer(a.getAttribute('href'))});
+  });
+}
+function seDeconnecterGlobal(){
+  const t=sessionStorage.getItem('kyc_token');
+  if(t){try{fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+t}})}catch(e){}}
+  sessionStorage.clear();window.location.href='/login';
+}
+function routeVersFichier(route){
+  const seg=route.replace(/^\/admin\//,'').replace(/\/+$/,'');
+  return 'admin-'+(seg||'dashboard')+'.html';
+}
+function menuDepuisRoute(route){return route.replace(/^\/admin\//,'').replace(/\/.*$/,'')||'dashboard'}
+function chargerScriptExterne(src){
+  return new Promise((res)=>{
+    if([...document.scripts].some(s=>s.src&&s.src.includes(src))){res();return}
+    const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=res;document.head.appendChild(s);
+  });
+}
+
+let enCours=false;
+async function naviguer(route,remplaceHistorique){
+  if(enCours)return; enCours=true;
+  const fichier=routeVersFichier(route);
+  const vue=document.getElementById('spa-view');
+  try{
+    const r=await fetch('/static/pages/'+fichier);
+    if(!r.ok){vue.innerHTML='<div class="p-10 text-center text-gray-400">Page introuvable</div>';enCours=false;return}
+    const html=await r.text();
+    const mMain=html.match(/<main[\s\S]*?<\/main>/i);
+    const main=mMain?mMain[0]:'<div class="p-10">Contenu vide</div>';
+    // TOUS les scripts externes de la page (head + body), sauf Tailwind/Alpine deja dans la coquille
+    const tousExternes=[...html.matchAll(/<script[^>]*src=["']([^"']+)["'][^>]*>/gi)]
+      .map(m=>m[1])
+      .filter(src=>!/tailwindcss\.com|alpinejs/i.test(src));
+    // Scripts inline APRES </main> (la logique x-data de la page)
+    const apres=html.split(/<\/main>/i)[1]||'';
+    const inlines=[...apres.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map(m=>m[1]);
+
+    // 1) Charger les libs + logic externes AVANT tout
+    for(const src of tousExternes){await chargerScriptExterne(src)}
+
+    // 2) Nettoyer timers de l'ancienne page
+    nettoyerTimers();
+
+    // 3) Construire la nouvelle vue invisible, detachee
+    const temp=document.createElement('div');
+    temp.className='flex-1 min-w-0';
+    temp.style.visibility='hidden';
+    temp.innerHTML=main;
+
+    // 4) Executer les scripts inline (definit/complete les fonctions x-data)
+    for(const code of inlines){
+      const s=document.createElement('script');s.textContent=code;document.head.appendChild(s);s.remove();
+    }
+
+    // 5) Remplacer en une operation
+    vue.replaceWith(temp);
+    temp.id='spa-view';
+
+    // 6) Initialiser Alpine sur la nouvelle vue
+    if(window.Alpine&&window.Alpine.initTree){
+      try{window.Alpine.initTree(temp)}catch(e){console.error('initTree',e)}
+    }
+
+    // 7) Afficher a la frame suivante (Alpine a applique x-show/x-text)
+    requestAnimationFrame(()=>{ temp.style.visibility=''; });
+
+    // 8) URL + menu actif
+    if(remplaceHistorique){history.replaceState({route},'',route)}else{history.pushState({route},'',route)}
+    document.querySelectorAll('#sidebar-mount a[data-menu]').forEach(a=>a.classList.remove('active'));
+    const act=document.querySelector('#sidebar-mount a[data-menu="'+menuDepuisRoute(route)+'"]');
+    if(act)act.classList.add('active');
+    window.scrollTo(0,0);
+  }catch(e){console.error('naviguer',e)}
+  enCours=false;
+}
+
+window.addEventListener('popstate',ev=>{
+  const route=(ev.state&&ev.state.route)||location.pathname;
+  if(route.startsWith('/admin/'))naviguer(route,true);
+});
+window.addEventListener('DOMContentLoaded',async function(){
+  await chargerSidebar();
+  const route=location.pathname.startsWith('/admin/')?location.pathname:'/admin/dashboard';
+  await naviguer(route,true);
+});
+</script>
+</body></html>

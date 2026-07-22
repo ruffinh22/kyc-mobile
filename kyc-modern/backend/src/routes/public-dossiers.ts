@@ -595,6 +595,35 @@ export async function publicDossierRoutes(app: any): Promise<void> {
   // ==========================================================================
   // GET /api/public/dossiers?wa_agent=
   // ==========================================================================
+  app.get('/api/admin/reporting', async (req: FastifyRequest, reply: any) => {
+    const q = req.query as Record<string, string>;
+    const { rows } = await db.getDossiers({
+      debut: q.debut ?? null,
+      fin: q.fin ?? null,
+      statut: q.statut ?? null,
+      agent: q.agent ?? null,
+      search: q.search ?? null,
+      limit: 5000,
+      offset: 0,
+    });
+    const dossiers = rows;
+    const stats = { total: dossiers.length, en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
+    for (const d of dossiers) {
+      if (d.statut in stats) (stats as Record<string, number>)[d.statut]++;
+    }
+    const byAgent = new Map<string, { agent: string; total: number; accepte: number; rejete: number; en_cours: number }>();
+    for (const d of dossiers) {
+      const agent = d.agent_saisie || d.username_agent || 'non_attribue';
+      if (!byAgent.has(agent)) byAgent.set(agent, { agent, total: 0, accepte: 0, rejete: 0, en_cours: 0 });
+      const item = byAgent.get(agent)!;
+      item.total++;
+      if (d.statut === 'accepte') item.accepte++;
+      else if (d.statut === 'rejete') item.rejete++;
+      else if (d.statut === 'en_cours') item.en_cours++;
+    }
+    return reply.send({ success: true, total: dossiers.length, count: dossiers.length, dossiers, stats, byAgent: Array.from(byAgent.values()).sort((a, b) => b.total - a.total) });
+  });
+
   app.get('/api/public/dossiers', async (req: FastifyRequest, reply: any) => {
     const q  = req.query as Record<string, string>;
     const wa = String(q.wa_agent ?? '').replace(/\D/g, '');

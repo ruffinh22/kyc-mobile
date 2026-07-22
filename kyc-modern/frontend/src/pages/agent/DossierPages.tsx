@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Dossier, DossierStatut } from '../../types';
 import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../components/ui';
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
+import { FaceLivenessCheck } from '../FaceLivenessCheck';
 
 const PHONE_CONFIG: Record<string, { digitCount: number; placeholder: string }> = {
   CG: { digitCount: 9, placeholder: '06 XXX XXX' },
@@ -217,6 +218,7 @@ export function AgentFileAttente() {
   }, [preview]);
   const [selected, setSelected] = useState<Dossier | null>(null);
   const [rejetTarget, setRejetTarget] = useState<Dossier | null>(null);
+  const [livenessDossier, setLivenessDossier] = useState<Dossier | null>(null);
   const [selectedMotif, setSelectedMotif] = useState('');
   const [customMotif, setCustomMotif] = useState('');
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
@@ -281,7 +283,10 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
-                      <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
+                      <div className="agent-actions-inline">
+                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setLivenessDossier(d)}>Vérifier visage</button>
+                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
+                      </div>
                     </div>
                     <div className="face-preview-card">
                       <div className="face-preview-header">
@@ -334,6 +339,7 @@ export function AgentFileAttente() {
                         {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
                           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
                         )}
+                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setLivenessDossier(d)}>Vérifier visage</button>
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                           localStorage.setItem('gsm_dossier_id', d.id);
@@ -378,14 +384,20 @@ export function AgentFileAttente() {
       {selected && (
         <DossierDetailModal dossier={selected} onClose={() => setSelected(null)} actions={
           selected.statut === 'en_attente' ? (
-            <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.prendreEnCharge(selected.id))}>
-              {busy ? 'Traitement…' : 'Prendre en charge'}
-            </button>
+            <>
+              <button className="btn btn-ghost" disabled={busy} onClick={() => { setSelected(null); setLivenessDossier(selected); }}>
+                Vérifier visage
+              </button>
+              <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.prendreEnCharge(selected.id))}>
+                {busy ? 'Traitement…' : 'Prendre en charge'}
+              </button>
+            </>
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
               {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
                 <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
               )}
+              <button className="btn btn-ghost" disabled={busy} onClick={() => { setSelected(null); setLivenessDossier(selected); }}>Vérifier visage</button>
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
               <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
                 localStorage.setItem('gsm_dossier_id', selected.id);
@@ -429,6 +441,19 @@ export function AgentFileAttente() {
               <textarea value={customMotif} onChange={e => setCustomMotif(e.target.value)} placeholder="Saisissez un motif puis validez" autoFocus />
             </div>
           )}
+        </Modal>
+      )}
+      {livenessDossier && (
+        <Modal title={`Vérification faciale — ${livenessDossier.id}`} onClose={() => setLivenessDossier(null)}>
+          <FaceLivenessCheck
+            dossierId={livenessDossier.id}
+            compact
+            onClose={() => setLivenessDossier(null)}
+            onComplete={() => {
+              setLivenessDossier(null);
+              refetch();
+            }}
+          />
         </Modal>
       )}
       {preview && (

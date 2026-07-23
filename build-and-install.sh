@@ -39,6 +39,8 @@ show_error() {
 SHOW_LOGS=false
 CLEAR_DATA=false
 
+set -o pipefail
+
 for arg in "$@"; do
   case $arg in
     --logs)
@@ -64,7 +66,14 @@ show_success "Téléphone détecté"
 # Étape 2: Compiler
 show_step "Compilation de l'APK release"
 cd "$PROJECT_DIR"
-npm run build:android 2>&1 | tail -10
+LOG_FILE="/tmp/kyc-android-build.log"
+if ! npm run build:android >"$LOG_FILE" 2>&1; then
+  tail -80 "$LOG_FILE"
+  show_error "Échec de la compilation Android"
+  exit 1
+fi
+
+tail -40 "$LOG_FILE"
 show_success "Compilation réussie"
 
 # Étape 3: Vérifier que l'APK existe

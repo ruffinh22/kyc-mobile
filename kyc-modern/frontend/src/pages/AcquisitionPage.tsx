@@ -875,45 +875,24 @@ export function AcquisitionPage() {
     }
   };
 
-  // ── [FIX-2] prepareSession corrigée ──────────────────────────────────────
-  // Transmet l'id du dossier dans les paramètres URL → face-verify-interactive
-  // peut uploader la photo live via /api/public/dossiers/:id/live
-
+  // ── Nouveau flux : liveness au moment de la création du dossier ────────
+  // Remplace l’ancienne vérification interactive de la page face-verify.
   const prepareSession = async (dossierId: string, rectoPath: string, versoPath: string) => {
     try {
-      const r = await fetch('/api/dossiers/prepare-verify-session', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          numero_mtn:     form.numero_mtn.replace(/\D/g, ''),
-          country:        form.country,           // [FIX-3] country ajouté
-          recto_path:     rectoPath,
-          verso_path:     versoPath,
-          wa_agent:       form.wa_agent,
-          username_agent: form.username_agent,
-          fonction_agent: form.fonction_agent,
-          zone_agent:     form.zone_agent,
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok) { setErreur(data.error ?? 'Impossible de préparer la session'); return; }
-
-      // [FIX-2] Ajouter dossierId dans les params pour face-verify-interactive
       const params = new URLSearchParams({
-        session:   data.sessionId,
-        dossier_id: dossierId,          // ← NOUVEAU : ID pour upload /live
-        recto:     rectoPath,
-        verso:     versoPath,
-        numero:    form.numero_mtn,
-        country:   form.country,
-        wa:        form.wa_agent,
-        username:  form.username_agent,
-        fonction:  form.fonction_agent,
-        zone:      form.zone_agent,
+        dossierId,
+        recto: rectoPath,
+        verso: versoPath,
+        numero: form.numero_mtn,
+        country: form.country,
+        wa: form.wa_agent,
+        username: form.username_agent,
+        fonction: form.fonction_agent,
+        zone: form.zone_agent,
       });
 
       setSuccess(form.numero_mtn);
-      window.location.href = '/face-verify-interactive?' + params.toString();
+      window.location.href = '/liveness-check?' + params.toString();
     } catch (e: unknown) {
       setErreur('Erreur réseau : ' + (e instanceof Error ? e.message : String(e)));
     }

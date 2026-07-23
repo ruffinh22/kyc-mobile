@@ -308,6 +308,12 @@ body {
   flex-wrap: wrap;
 }
 
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .page-title {
   font-size: clamp(1.2rem, 2vw, 1.5rem);
   font-weight: 800;

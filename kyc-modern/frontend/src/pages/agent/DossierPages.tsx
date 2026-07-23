@@ -1,4 +1,4 @@
-import { useMemo, useState, FormEvent, useEffect } from 'react';
+import { useMemo, useState, FormEvent, useEffect, useRef } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -6,6 +6,7 @@ import { Dossier, DossierStatut } from '../../types';
 import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../components/ui';
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
 import { FaceLivenessCheck } from '../FaceLivenessCheck';
+import { PauseButton } from '../../components/PauseButton';
 
 const PHONE_CONFIG: Record<string, { digitCount: number; placeholder: string }> = {
   CG: { digitCount: 9, placeholder: '06 XXX XXX' },
@@ -81,6 +82,9 @@ export function AgentDashboard() {
         <div>
           <h1 className="page-title">Bonjour {user?.prenom} 👋</h1>
           <p className="page-sub">Activité du jour — {new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+        </div>
+        <div className="page-header-actions">
+          <PauseButton />
         </div>
       </div>
 
@@ -245,6 +249,30 @@ export function AgentFileAttente() {
     }
   }, [rejetTarget, motifs]);
 
+  // Polling silencieux en arrière-plan - ne recharge que si dossiers en_attente changent
+  const dossiersRef = useRef(dossiers);
+  useEffect(() => {
+    dossiersRef.current = dossiers;
+  }, [dossiers]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const newData = await api.getDossiers({ limit: 200 });
+        const newEnAttente = (newData.dossiers ?? []).filter(d => d.statut === 'en_attente').length;
+        const currentEnAttente = dossiersRef.current.filter(d => d.statut === 'en_attente').length;
+        
+        // Ne recharger que si le nombre de dossiers en_attente a changé
+        if (newEnAttente !== currentEnAttente) {
+          refetch();
+        }
+      } catch (e) {
+        // Silencieusement ignorer les erreurs de polling
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [refetch]);
+
   return (
     <>
       <div className="page-header">
@@ -284,7 +312,6 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setLivenessDossier(d)}>Vérifier visage</button>
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
                       </div>
                     </div>
@@ -339,7 +366,6 @@ export function AgentFileAttente() {
                         {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
                           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
                         )}
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setLivenessDossier(d)}>Vérifier visage</button>
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                           localStorage.setItem('gsm_dossier_id', d.id);
@@ -385,9 +411,6 @@ export function AgentFileAttente() {
         <DossierDetailModal dossier={selected} onClose={() => setSelected(null)} actions={
           selected.statut === 'en_attente' ? (
             <>
-              <button className="btn btn-ghost" disabled={busy} onClick={() => { setSelected(null); setLivenessDossier(selected); }}>
-                Vérifier visage
-              </button>
               <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.prendreEnCharge(selected.id))}>
                 {busy ? 'Traitement…' : 'Prendre en charge'}
               </button>
@@ -397,7 +420,6 @@ export function AgentFileAttente() {
               {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
                 <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
               )}
-              <button className="btn btn-ghost" disabled={busy} onClick={() => { setSelected(null); setLivenessDossier(selected); }}>Vérifier visage</button>
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
               <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
                 localStorage.setItem('gsm_dossier_id', selected.id);

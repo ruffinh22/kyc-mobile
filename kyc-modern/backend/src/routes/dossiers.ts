@@ -98,6 +98,43 @@ export async function dossiersRoutes(app: any): Promise<void> {
     return reply.send(fs.createReadStream(fullPath));
   });
 
+  // GET /api/dossiers/flux?token=xxx - Flux SSE temps réel (notification d'attribution)
+  // EventSource ne peut pas envoyer de header Authorization: on lit le token
+  // en query string et on le valide manuellement
+  app.get('/api/dossiers/flux', { preHandler: async (req, reply) => {
+    // Cette route gère son auth elle-même (token en query, pas de header)
+    const token = (req.query as { token?: string }).token;
+    if (!token) return reply.code(401).send({ error: 'Token manquant' });
+    
+    const authUtil = await import('../utils/auth.js');
+    const decoded = authUtil.verifyToken(token);
+    if (!decoded) return reply.code(401).send({ error: 'Token invalide' });
+    
+    const isValid = await db.isSessionValid(decoded.jti);
+    if (!isValid) return reply.code(401).send({ error: 'Session révoquée' });
+    
+    (req as any).user = decoded;
+  }}, async (req: FastifyRequest, reply: FastifyReply) => {
+    const { matricule } = req.user;
+    const sse = await import('../utils/sse.js');
+    
+    // Préparer le flux SSE
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    reply.raw.write('event: connecte\ndata: {"ok":true}\n\n');
+    
+    sse.ajouter(matricule, reply.raw);
+    
+    // Nettoyage à la fermeture (onglet fermé, réseau coupé)
+    (req as any).raw.on('close', () => { sse.retirer(matricule, reply.raw); });
+    
+    // On garde la connexion ouverte: pas de return/reply.send
+  });
+
   // POST /api/dossiers/:id/prendre
   app.post('/api/dossiers/:id/prendre', async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id: string };
@@ -109,6 +146,161 @@ export async function dossiersRoutes(app: any): Promise<void> {
     await db.upsertPresence(req.user.matricule, 'online');
     db.audit(req.user.matricule,'DOSSIER_PRIS',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
+  });
+
+  // POST /api/dossiers/appeler - Mode AUTO: appeler le prochain dossier
+  app.post('/api/dossiers/appeler', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
+    const { matricule } = req.user;
+    const maintenant = nowSec();
+
+    // 1) Limite de dossiers en cours simultanés (distribution_max_total, défaut 2)
+    let maxTotal = 2;
+    try {
+      const configRow = await db.query<{ valeur: string }>("SELECT valeur FROM config WHERE cle='distribution_max_total'");
+      if (configRow.length && parseInt(configRow[0].valeur, 10) > 0) {
+        maxTotal = parseInt(configRow[0].valeur, 10);
+      }
+    } catch (e) {}
+
+    const enCours = await db.query<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM dossiers WHERE agent_saisie = ? AND statut = 'en_cours'",
+      [matricule]
+    );
+    if (enCours.length && enCours[0].n >= maxTotal) {
+      return reply.code(409).send({ error: `Maximum de ${maxTotal} dossiers en cours atteint` });
+    }
+
+    // 2) Boucle anti-collision: prendre le plus ancien en_attente
+    let attribue: { id: string; numero_mtn: string } | null = null;
+    for (let essai = 0; essai < 5; essai++) {
+      const prochains = await db.query<{ id: string; numero_mtn: string }>(
+        "SELECT id, numero_mtn FROM dossiers WHERE statut = 'en_attente' ORDER BY created_at ASC LIMIT 1"
+      );
+      if (!prochains.length) {
+        return reply.send({ success: true, aucun: true, message: 'Aucun dossier en attente' });
+      }
+
+      const prochain = prochains[0];
+      const result = await db.exec(
+        `UPDATE dossiers
+         SET statut = 'en_cours',
+             agent_saisie = ?,
+             assigne_a = ?,
+             assigne_le = ?,
+             heure_prise = FROM_UNIXTIME(?),
+             updated_at = ?
+         WHERE id = ? AND statut = 'en_attente'`,
+        [matricule, matricule, maintenant, maintenant, maintenant, prochain.id]
+      );
+
+      if (result.affectedRows === 1) {
+        attribue = prochain;
+        break;
+      }
+      // Sinon un autre agent l'a pris: on réessaie
+    }
+
+    if (!attribue) {
+      return reply.code(409).send({ error: 'Aucun dossier disponible (collision)' });
+    }
+
+    // 3) L'agent devient occupé: on efface dispo_depuis
+    try {
+      await db.exec("UPDATE presence SET dispo_depuis = NULL WHERE matricule = ?", [matricule]);
+    } catch (e) {}
+
+    db.audit(matricule, 'DOSSIER_APPELER', `id=${attribue.id} numero=${attribue.numero_mtn}`, req.ip);
+    
+    // Notifier via SSE
+    try {
+      const sse = await import('../utils/sse.js');
+      sse.notifier(matricule, 'nouveau-dossier', { id: attribue.id });
+    } catch(e){}
+
+    return reply.send({ success: true, id: attribue.id });
+  });
+
+  // POST /api/dossiers/ping-dispo - L'agent signale qu'il est présent et actif
+  app.post('/api/dossiers/ping-dispo', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { matricule } = req.user;
+    const maintenant = nowSec();
+    
+    await db.exec(
+      `INSERT INTO presence (matricule, statut, ts, updated_at) 
+       VALUES (?, 'online', ?, ?) 
+       ON DUPLICATE KEY UPDATE 
+       statut = CASE WHEN presence.statut = 'pause' THEN 'pause' ELSE 'online' END,
+       ts = VALUES(ts),
+       updated_at = VALUES(updated_at)`,
+      [matricule, maintenant, maintenant]
+    );
+    
+    return reply.send({ success: true });
+  });
+
+  // POST /api/dossiers/pause - Bascule pause <-> reprise
+  app.post('/api/dossiers/pause', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { matricule } = req.user;
+    const body = req.body as { action?: string } | null;
+    const { action } = body || {};
+    const maintenant = nowSec();
+
+    if (action === 'pause') {
+      // Renvoyer ses dossiers en cours dans la file
+      const remis = await db.exec(
+        `UPDATE dossiers 
+         SET statut='en_attente', agent_saisie=NULL, assigne_a=NULL, 
+             assigne_le=NULL, heure_prise=NULL, updated_at=? 
+         WHERE agent_saisie=? AND statut='en_cours'`,
+        [maintenant, matricule]
+      );
+
+      // Passer en pause
+      await db.exec(
+        `INSERT INTO presence (matricule, statut, ts, pause_debut, dispo_depuis, updated_at) 
+         VALUES (?, 'pause', ?, ?, NULL, ?) 
+         ON DUPLICATE KEY UPDATE 
+         statut='pause', ts=VALUES(ts), pause_debut=VALUES(pause_debut), 
+         dispo_depuis=NULL, updated_at=VALUES(updated_at)`,
+        [matricule, maintenant, maintenant, maintenant]
+      );
+
+      db.audit(matricule, 'AGENT_PAUSE', `dossiers_remis=${remis.affectedRows}`, req.ip);
+
+      // Redistribuer aussitôt les dossiers remis
+      try {
+        const { distribuerMaintenant } = await import('../utils/distribution.js');
+        await distribuerMaintenant();
+      } catch (e) {}
+
+      return reply.send({ success: true, statut: 'pause', dossiers_remis: remis.affectedRows });
+    } else if (action === 'reprendre') {
+      // Calculer la durée de la pause qui se termine
+      let duree = 0;
+      try {
+        const p = await db.query<{ pause_debut: number }>(
+          "SELECT pause_debut FROM presence WHERE matricule = ?",
+          [matricule]
+        );
+        if (p.length && p[0].pause_debut) {
+          duree = maintenant - p[0].pause_debut;
+        }
+      } catch (e) {}
+
+      await db.exec(
+        `INSERT INTO presence (matricule, statut, ts, pause_debut, updated_at) 
+         VALUES (?, 'online', ?, NULL, ?) 
+         ON DUPLICATE KEY UPDATE 
+         statut='online', ts=VALUES(ts), pause_debut=NULL, updated_at=VALUES(updated_at)`,
+        [matricule, maintenant, maintenant]
+      );
+
+      db.audit(matricule, 'AGENT_REPRISE', `duree_sec=${duree}`, req.ip);
+      return reply.send({ success: true, statut: 'online', duree });
+    } else {
+      return reply.code(400).send({ error: 'Action invalide (pause ou reprendre)' });
+    }
   });
 
   // POST /api/dossiers/:id/accepter

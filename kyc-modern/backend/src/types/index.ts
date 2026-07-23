@@ -170,8 +170,7 @@ export interface NoteQualite {
 }
 
 export interface PresenceRow {
-  id: number;
-  nom: string;
+  matricule: string;
   statut: PresenceStatut;
   ts: number;
   pause_debut: number | null;

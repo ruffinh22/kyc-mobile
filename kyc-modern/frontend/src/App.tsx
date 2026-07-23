@@ -6,7 +6,6 @@ import { Topbar, Sidebar } from './components/layout/Shell';
 import { LoadingCenter } from './components/ui';
 import { AccueilPage } from './pages/AccueilPage';
 import { AcquisitionPage } from './pages/AcquisitionPage';
-import { FaceVerifyInteractivePage } from './pages/FaceVerifyInteractivePage';
 import { FaceLivenessCheck } from './pages/FaceLivenessCheck';
 
 // ── Agent pages ───────────────────────────────────────────────────────────────
@@ -41,7 +40,6 @@ function PublicRouter() {
   const route = getRoute();
 
   if (route === '/acquisition' || route === '/acquisition.html') return <AcquisitionPage />;
-  if (route === '/face-verify-interactive' || route === '/face-verify-interactive.html') return <FaceVerifyInteractivePage />;
   if (route === '/liveness-check' || route === '/liveness-check.html') return <FaceLivenessCheck />;
   if (route === '/login') return null;
 
@@ -160,8 +158,6 @@ function AppContent() {
     pathname === '/' ||
     pathname === '/acquisition' ||
     pathname === '/acquisition.html' ||
-    pathname === '/face-verify-interactive' ||
-    pathname === '/face-verify-interactive.html' ||
     pathname === '/liveness-check' ||
     pathname === '/liveness-check.html';
 

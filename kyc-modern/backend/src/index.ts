@@ -19,6 +19,7 @@ import websocket from '@fastify/websocket';
 
 import { initDb, getDistributionMode, getOldestPendingDossier, getOldestAvailableAgent, updateDossier, audit } from './db';
 import { registerRoutes } from './routes';
+import { startDossierTimeoutWorker } from './utils/dossier-timeout-worker';
 
 const PORT     = parseInt(process.env.PORT || '3001', 10);
 const HOST     = process.env.HOST || '0.0.0.0';
@@ -94,6 +95,10 @@ async function main(): Promise<void> {
   await app.listen({ port: PORT, host: HOST });
   app.log.info(`✅ KYC V4 démarré — http://${HOST}:${PORT} [${NODE_ENV}]`);
 
+  // ── Workers en arrière-plan ───────────────────────────────────────────────
+  // Détecter et retourner les dossiers abandonnés (timeout)
+  startDossierTimeoutWorker();
+
   // ── Distribution automatique ──────────────────────────────────────────────
   const INTERVAL  = parseInt(process.env.DISTRIBUTION_INTERVAL_MS || '2000', 10);
   const ABANDON   = parseInt(process.env.DISTRIBUTION_ABANDON_SEC || '120', 10);
@@ -108,10 +113,10 @@ async function main(): Promise<void> {
 
       const now = Math.floor(Date.now() / 1000);
       await updateDossier(dossier.id, {
-        statut: 'en_cours', agent_saisie: agent.nom, assigne_a: agent.nom,
+        statut: 'en_cours', agent_saisie: agent.matricule, assigne_a: agent.matricule,
         assigne_le: now, heure_prise: new Date().toTimeString().slice(0, 5),
       });
-      audit(null, 'DISTRIB_AUTO', `dossier=${dossier.id} agent=${agent.nom}`);
+      audit(null, 'DISTRIB_AUTO', `dossier=${dossier.id} agent=${agent.matricule}`);
     } catch (err) {
       app.log.warn('[DISTRIB-AUTO] %s', err instanceof Error ? err.message : String(err));
     }

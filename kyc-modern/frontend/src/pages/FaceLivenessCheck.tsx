@@ -139,17 +139,24 @@ export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClos
       if (!res.ok || !data.success) {
         throw new Error(data.error || `Erreur résultat (${res.status})`);
       }
-      setResultMsg(data.message || 'Vérification terminée');
+      const successMessage = data.message || 'Vérification terminée';
+      setResultMsg(successMessage);
       setPhase('done');
       onComplete?.(data);
       notifyNative({ type: 'liveness-result', ...data });
+
+      if (!compact && !onClose) {
+        window.setTimeout(() => {
+          window.location.assign('/acquisition');
+        }, 1400);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur de vérification';
       setErrorMsg(message);
       setPhase('error');
       notifyNative({ type: 'liveness-error', error: message });
     }
-  }, [dossierId, sessionId]);
+  }, [compact, dossierId, onClose, sessionId]);
 
   const handleError = useCallback((err: { state: string; error: Error }) => {
     const message = err?.error?.message || 'Erreur du composant de vivacité';
@@ -184,20 +191,50 @@ export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClos
 
   return (
     <ThemeProvider>
-      <div style={{ width: '100%', minHeight: compact ? 440 : '100vh', backgroundColor: '#0f172a', borderRadius: compact ? 16 : 0, overflow: 'hidden' }}>
+      <div
+        style={{
+          width: '100%',
+          minHeight: compact ? 480 : '100vh',
+          background: 'linear-gradient(135deg, #020617 0%, #111827 100%)',
+          borderRadius: compact ? 16 : 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'flex-start',
+          alignItems: 'stretch',
+          padding: compact ? 12 : 16,
+          boxSizing: 'border-box',
+        }}
+      >
         {compact && onClose && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 16px 0' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', paddingBottom: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={onClose}>Fermer</button>
           </div>
         )}
-        <div style={{ width: '100%', height: compact ? 'calc(100% - 48px)' : '100vh', minHeight: compact ? 400 : '100vh', backgroundColor: '#0f172a' }}>
-          <FaceLivenessDetector
-            sessionId={sessionId}
-            region={region}
-            onAnalysisComplete={handleAnalysisComplete}
-            onError={handleError}
-            config={preferredDeviceId ? { deviceId: preferredDeviceId } : undefined}
-          />
+        <div
+          style={{
+            flex: 1,
+            width: '100%',
+            minHeight: compact ? 420 : 'min(80vh, 760px)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: '#0f172a',
+            borderRadius: 14,
+            overflow: 'hidden',
+            padding: 8,
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ width: '100%', height: '100%', minHeight: 320, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+            <FaceLivenessDetector
+              sessionId={sessionId}
+              region={region}
+              onAnalysisComplete={handleAnalysisComplete}
+              onError={handleError}
+              config={preferredDeviceId ? { deviceId: preferredDeviceId } : undefined}
+            />
+          </div>
         </div>
       </div>
     </ThemeProvider>
@@ -211,7 +248,6 @@ function CenterMessage({ text, isError, compact }: { text: string; isError?: boo
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        height: compact ? 'auto' : '100vh',
         minHeight: compact ? 260 : '100vh',
         padding: 24,
         textAlign: 'center',
@@ -219,6 +255,7 @@ function CenterMessage({ text, isError, compact }: { text: string; isError?: boo
         backgroundColor: '#0f172a',
         fontFamily: 'Inter, system-ui, sans-serif',
         fontSize: 16,
+        lineHeight: 1.5,
       }}
     >
       {text}

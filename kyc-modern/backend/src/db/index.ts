@@ -79,6 +79,8 @@ function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+export { nowSec };
+
 // ── Comptes ───────────────────────────────────────────────────────────────────
 
 export async function getCompteByMatricule(matricule: string): Promise<Compte | null> {
@@ -592,7 +594,7 @@ export async function upsertPresence(
   if (extra?.pause_debut !== undefined)  sets.pause_debut  = extra.pause_debut;
   if (extra?.dispo_depuis !== undefined) sets.dispo_depuis = extra.dispo_depuis;
 
-  const cols = ['nom', ...Object.keys(sets)];
+  const cols = ['matricule', ...Object.keys(sets)];
   const vals = [matricule, ...Object.values(sets)];
   const placeholders = vals.map(() => '?').join(',');
   const updates = Object.keys(sets).map(k => `${k}=VALUES(${k})`).join(',');
@@ -609,12 +611,12 @@ export async function getPresenceResume(heartbeatThreshold = 120): Promise<{
 }> {
   const limite = nowSec() - heartbeatThreshold;
   const rows = await query<RowDataPacket>(
-    "SELECT nom, statut FROM presence WHERE statut IN ('online','pause') AND ts>=?", [limite]
+    "SELECT matricule, statut FROM presence WHERE statut IN ('online','pause') AND ts>=?", [limite]
   );
   let en_ligne = 0, en_pause = 0;
   const detail: Record<string, string> = {};
   for (const r of rows) {
-    detail[r['nom'] as string] = r['statut'] as string;
+    detail[r['matricule'] as string] = r['statut'] as string;
     if (r['statut'] === 'online') en_ligne++;
     else en_pause++;
   }
@@ -623,7 +625,7 @@ export async function getPresenceResume(heartbeatThreshold = 120): Promise<{
 
 export async function getPresenceAll(): Promise<PresenceRow[]> {
   return query<PresenceRow & RowDataPacket>(
-    'SELECT * FROM presence ORDER BY statut, nom'
+    'SELECT * FROM presence ORDER BY statut, matricule'
   );
 }
 
@@ -712,18 +714,18 @@ export async function getOldestPendingDossier(): Promise<Dossier | null> {
   );
 }
 
-export async function getOldestAvailableAgent(ts: number): Promise<{ nom: string } | null> {
+export async function getOldestAvailableAgent(ts: number): Promise<{ matricule: string } | null> {
   return queryOne<RowDataPacket>(
-    `SELECT p.nom FROM presence p
+    `SELECT p.matricule FROM presence p
      WHERE p.statut='online' AND p.ts>=?
      AND NOT EXISTS (
        SELECT 1 FROM dossiers d
-       WHERE d.agent_saisie=p.nom AND d.statut='en_cours'
+       WHERE d.agent_saisie=p.matricule AND d.statut='en_cours'
      )
      ORDER BY p.dispo_depuis IS NULL, p.dispo_depuis ASC
      LIMIT 1`,
     [ts]
-  ) as Promise<{ nom: string } | null>;
+  ) as Promise<{ matricule: string } | null>;
 }
 
 // ── Habilitations ─────────────────────────────────────────────────────────────

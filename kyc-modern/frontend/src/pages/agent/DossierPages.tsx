@@ -333,9 +333,11 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
+
                         <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
                           {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
                         </button>
+
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
                       </div>
                     </div>

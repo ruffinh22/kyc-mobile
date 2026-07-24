@@ -40,8 +40,12 @@ async function main(): Promise<void> {
   await initDb();
 
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
+  const corsOrigins = NODE_ENV === 'production'
+    ? (process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean)
+    : true;
+
   await app.register(cors, {
-    origin: NODE_ENV === 'production' ? (process.env.CORS_ORIGIN || false) : true,
+    origin: NODE_ENV === 'production' ? corsOrigins : true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

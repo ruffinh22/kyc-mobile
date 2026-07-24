@@ -53,17 +53,23 @@ async function main(): Promise<void> {
           }
 
           const isAllowed = configuredCorsOrigins.includes(origin);
-          return callback(null, isAllowed);
+          if (!isAllowed) {
+            return callback(null, false);
+          }
+
+          return callback(null, true);
         },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+        exposedHeaders: ['Set-Cookie'],
       }
     : {
         origin: true,
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+        exposedHeaders: ['Set-Cookie'],
       };
 
   await app.register(cors, corsConfig);

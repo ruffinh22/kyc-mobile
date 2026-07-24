@@ -8,10 +8,11 @@ import { useAgentStore } from '../store/callStore';
 import { CountryPicker } from '../components/CountryPicker';
 import { SimpleSelect } from '../components/SimpleSelect';
 import { validatePhoneNumber, getCountryConfig } from '../utils/phoneValidator';
+import { normalizeServerUrl } from '../utils/serverUrl';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 
-const DEFAULT_SERVER = 'http://10.0.2.2:3001';
+const DEFAULT_SERVER = 'https://kyc.palladiumafrica.com';
 const FONCTIONS = ['Agent Acquisition', 'Agent EBU', 'Agent Frontoffice', 'Autre'];
 const ZONES = ['Brazzaville', 'Pointe-Noire', 'Hinterland Nord', 'Hinterland Sud', 'Autre'];
 
@@ -66,11 +67,12 @@ export function AccountScreen({ navigation }: any) {
     if (!valid.isValid) { setError(valid.error || 'Numéro invalide'); return; }
     if (!form.fonctionAgent) { setError('Sélectionnez votre fonction'); return; }
     if (!form.zoneAgent) { setError('Sélectionnez votre zone'); return; }
-    if (!form.serverUrl.trim()) { setError('L\'URL serveur est requise'); return; }
+    const normalizedServer = normalizeServerUrl(form.serverUrl);
+    if (!normalizedServer) { setError('L\'URL serveur est requise'); return; }
     // Cette app manipule des données KYC (identité, biométrie faciale) : on
     // n'empêche pas un serveur local/émulateur en dev, mais on avertit si un
     // serveur non-https est utilisé en dehors de ce contexte de développement.
-    if (!/^https:\/\//i.test(form.serverUrl) && !isLocalDevHost(form.serverUrl)) {
+    if (!/^https:\/\//i.test(normalizedServer) && !isLocalDevHost(normalizedServer)) {
       setError('Utilisez une URL en https:// pour un serveur de production (données KYC sensibles)');
       return;
     }
@@ -79,7 +81,7 @@ export function AccountScreen({ navigation }: any) {
     setError('');
     setSaved(false);
 
-    const normalizedServer = form.serverUrl.replace(/\/$/, '');
+    setForm({ ...form, serverUrl: normalizedServer });
     await AsyncStorage.multiSet([
       ['kyc_numero', clean],
       ['kyc_server', normalizedServer],

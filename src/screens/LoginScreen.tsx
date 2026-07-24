@@ -6,7 +6,7 @@
  * zone, URL serveur. Le profil est stocké (store + AsyncStorage + DB via API).
  * L'écran Acquisition n'aura ensuite plus qu'à demander le numéro MTN + photos.
  */
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView,
@@ -17,10 +17,11 @@ import { useAgentStore } from '../store/callStore';
 import { CountryPicker } from '../components/CountryPicker';
 import { SimpleSelect }  from '../components/SimpleSelect';
 import { validatePhoneNumber, getCountryConfig } from '../utils/phoneValidator';
+import { normalizeServerUrl } from '../utils/serverUrl';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 
-const DEFAULT_SERVER  = 'http://10.0.2.2:3001';
+const DEFAULT_SERVER  = 'https://kyc.palladiumafrica.com';
 const DEFAULT_COUNTRY = 'CG';
 
 const FONCTIONS = ['Agent Acquisition', 'Agent EBU', 'Agent Frontoffice', 'Autre'];
@@ -95,6 +96,23 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const setAgent  = useAgentStore(s => s.setAgent);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const savedServer = await AsyncStorage.getItem('kyc_server');
+        if (!mounted || !savedServer) return;
+        const normalized = normalizeServerUrl(savedServer);
+        if (normalized) {
+          setServerUrl(normalized);
+        }
+      } catch {
+        // Ignorer les erreurs de lecture locale ; on garde la valeur par défaut.
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   const shake = () =>
     Animated.sequence([
       Animated.timing(shakeAnim, { toValue: 8,  duration: 55, useNativeDriver: true }),
@@ -110,12 +128,14 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     if (!zoneAgent)                 { setError('Sélectionnez votre zone'); shake(); return; }
     if (!serverUrl.startsWith('http')) { setError('URL serveur invalide'); shake(); return; }
 
+    const normalizedServerUrl = normalizeServerUrl(serverUrl);
+    setServerUrl(normalizedServerUrl);
     setLoading(true); setError('');
-    const urls = buildProbeUrls(serverUrl);
+    const urls = buildProbeUrls(normalizedServerUrl);
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 5000);
     let res: Response | null = null;
-    let resolvedServer = serverUrl.replace(/\/$/, '');
+    let resolvedServer = normalizedServerUrl.replace(/\/$/, '');
     try {
       for (const url of urls) {
         try {

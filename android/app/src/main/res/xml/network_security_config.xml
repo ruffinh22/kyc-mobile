@@ -9,8 +9,14 @@
     <domain includeSubdomains="true">127.0.0.1</domain>
   </domain-config>
   
-  <!-- Production: tout en HTTPS -->
+  <!-- Production: HTTPS avec certificat Let's Encrypt -->
   <domain-config cleartextTrafficPermitted="false">
-    <domain includeSubdomains="true">kyc.palladium-africa.com</domain>
+    <domain includeSubdomains="true">kyc.palladiumafrica.com</domain>
+    <domain includeSubdomains="true">www.kyc.palladiumafrica.com</domain>
+    <!-- Utiliser le certificat racine Let's Encrypt (ISRG Root X1) -->
+    <trust-anchors>
+      <certificates src="system" />
+      <certificates src="@raw/lets_encrypt_root" />
+    </trust-anchors>
   </domain-config>
 </network-security-config>

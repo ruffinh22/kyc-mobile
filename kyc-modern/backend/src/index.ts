@@ -40,16 +40,33 @@ async function main(): Promise<void> {
   await initDb();
 
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
-  const corsOrigins = NODE_ENV === 'production'
-    ? (process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean)
-    : true;
+  const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
 
-  await app.register(cors, {
-    origin: NODE_ENV === 'production' ? corsOrigins : true,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  });
+  const corsConfig = NODE_ENV === 'production'
+    ? {
+        origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+          if (!origin) {
+            return callback(null, true);
+          }
+
+          const isAllowed = configuredCorsOrigins.includes(origin);
+          return callback(null, isAllowed);
+        },
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+      }
+    : {
+        origin: true,
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+      };
+
+  await app.register(cors, corsConfig);
   await app.register(cookie, { secret: process.env.JWT_SECRET || 'kyc-cookie' });
   await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 5 } });
   await app.register(websocket as any);

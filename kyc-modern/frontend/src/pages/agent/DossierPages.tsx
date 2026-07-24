@@ -226,6 +226,8 @@ export function AgentFileAttente() {
   const [livenessDossier, setLivenessDossier] = useState<Dossier | null>(null);
   const [selectedMotif, setSelectedMotif] = useState('');
   const [customMotif, setCustomMotif] = useState('');
+  const [motifSearch, setMotifSearch] = useState('');
+  const [motifPage, setMotifPage] = useState(1);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200 }), []);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
@@ -242,6 +244,13 @@ export function AgentFileAttente() {
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
   const motifs = motifsQ.data?.motifs ?? [];
+  const filteredMotifs = useMemo(() => {
+    const query = motifSearch.trim().toLocaleLowerCase('fr-FR');
+    return motifs.filter(motif => motif.toLocaleLowerCase('fr-FR').includes(query));
+  }, [motifs, motifSearch]);
+  const motifsPerPage = 10;
+  const motifPageCount = Math.max(1, Math.ceil((filteredMotifs.length + 1) / motifsPerPage));
+  const motifPageItems = filteredMotifs.slice((motifPage - 1) * motifsPerPage, motifPage * motifsPerPage);
 
   const handleCallTerrain = async (dossier: Dossier) => {
     if (!dossier.wa_agent) {
@@ -264,10 +273,16 @@ export function AgentFileAttente() {
 
   useEffect(() => {
     if (rejetTarget) {
-      setSelectedMotif(motifs[0] ?? 'autre');
+      setSelectedMotif('');
       setCustomMotif('');
+      setMotifSearch('');
+      setMotifPage(1);
     }
   }, [rejetTarget, motifs]);
+
+  useEffect(() => {
+    if (motifPage > motifPageCount) setMotifPage(motifPageCount);
+  }, [motifPage, motifPageCount]);
 
   // Polling silencieux en arrière-plan - ne recharge que si dossiers en_attente changent
   const dossiersRef = useRef(dossiers);
@@ -460,9 +475,9 @@ export function AgentFileAttente() {
       )}
 
       {rejetTarget && (
-        <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); }} footer={
+        <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }} footer={
           <>
-            <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); }}>Annuler</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }}>Annuler</button>
             <button className="btn btn-danger btn-sm" disabled={busy || (!selectedMotif || (selectedMotif === 'autre' && !customMotif.trim()))} onClick={() => action(async () => {
               const finalReason = selectedMotif === 'autre' ? customMotif.trim() : selectedMotif;
               if (!finalReason) return;
@@ -479,12 +494,55 @@ export function AgentFileAttente() {
           </>
         }>
           <div className="field">
-            <label>Motif du rejet<span className="req">*</span></label>
-            <select value={selectedMotif} onChange={e => setSelectedMotif(e.target.value)}>
-              <option value="">Sélectionner…</option>
-              {motifs.map(m => <option key={m} value={m}>{m}</option>)}
-              <option value="autre">Autre…</option>
-            </select>
+            <label htmlFor="motif-search">Rechercher un motif<span className="req">*</span></label>
+            <input
+              id="motif-search"
+              type="search"
+              value={motifSearch}
+              onChange={e => { setMotifSearch(e.target.value); setMotifPage(1); }}
+              placeholder="Rechercher dans les motifs…"
+            />
+          </div>
+          <div className="rejection-motif-table-wrap">
+            <table className="rejection-motif-table">
+              <thead>
+                <tr><th aria-label="Sélection" /><th>Motif</th></tr>
+              </thead>
+              <tbody>
+                {motifPageItems.map(motif => (
+                  <tr key={motif} className={selectedMotif === motif ? 'selected' : ''}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedMotif === motif}
+                        onChange={() => setSelectedMotif(selectedMotif === motif ? '' : motif)}
+                        aria-label={`Sélectionner le motif ${motif}`}
+                      />
+                    </td>
+                    <td onClick={() => setSelectedMotif(selectedMotif === motif ? '' : motif)}>{motif}</td>
+                  </tr>
+                ))}
+                {motifPage === 1 && <tr className={selectedMotif === 'autre' ? 'selected' : ''}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedMotif === 'autre'}
+                      onChange={() => setSelectedMotif(selectedMotif === 'autre' ? '' : 'autre')}
+                      aria-label="Sélectionner un autre motif"
+                    />
+                  </td>
+                  <td onClick={() => setSelectedMotif(selectedMotif === 'autre' ? '' : 'autre')}>Autre</td>
+                </tr>}
+                {!motifPageItems.length && <tr><td colSpan={2}>Aucun motif trouvé.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="rejection-motif-pagination">
+            <span>{filteredMotifs.length + 1} motif(s) • Page {motifPage} sur {motifPageCount}</span>
+            <div>
+              <button className="btn btn-ghost btn-sm" disabled={motifPage <= 1} onClick={() => setMotifPage(page => page - 1)}>Précédente</button>
+              <button className="btn btn-ghost btn-sm" disabled={motifPage >= motifPageCount} onClick={() => setMotifPage(page => page + 1)}>Suivante</button>
+            </div>
           </div>
           {selectedMotif === 'autre' && (
             <div className="field" style={{ marginTop: '.75rem' }}>

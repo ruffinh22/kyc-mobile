@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Dossier } from '../../types';
 import { useFetch } from '../../hooks';
 import * as api from '../../services/api';
 import { Compte, Role, Session, AuditLog } from '../../types';
 import { StatCard, Alert, LoadingCenter, EmptyState, Modal, RoleBadge } from '../../components/ui';
+import * as XLSX from 'xlsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Dashboard Admin
@@ -343,6 +344,7 @@ export function AdminDistribution() {
   const [motifSuccess, setMotifSuccess] = useState<string|null>(null);
   const [editingIndex, setEditingIndex] = useState<number|null>(null);
   const [editingValue, setEditingValue] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (motifsQ.data?.motifs) setMotifs(motifsQ.data.motifs);
@@ -410,62 +412,196 @@ export function AdminDistribution() {
     finally { setSaving(false); }
   };
 
+  // Export Excel des motifs
+  const exportMotifsToExcel = () => {
+    const worksheet = XLSX.utils.json_to_sheet(motifs.map((motif, idx) => ({
+      'N°': idx + 1,
+      'Motif de rejet': motif
+    })));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Motifs');
+    XLSX.writeFile(workbook, 'motifs-rejet.xlsx');
+  };
+
+  // Télécharger le template Excel
+  const downloadTemplate = () => {
+    const templateData = [
+      { 'N°': 1, 'Motif de rejet': 'Document illisible' },
+      { 'N°': 2, 'Motif de rejet': 'Photo floue' },
+      { 'N°': 3, 'Motif de rejet': 'Informations incomplètes' },
+      { 'N°': 4, 'Motif de rejet': 'Document expiré' },
+      { 'N°': 5, 'Motif de rejet': 'Visage non détecté' }
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Motifs');
+    XLSX.writeFile(workbook, 'template-motifs-rejet.xlsx');
+  };
+
+  // Import Excel des motifs
+  const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const data = event.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet) as any[];
+
+        const importedMotifs = jsonData
+          .map(row => row['Motif de rejet'] || row['motif'] || row['Motif'] || String(row))
+          .filter(m => m && typeof m === 'string' && m.trim())
+          .map(m => m.trim());
+
+        if (importedMotifs.length === 0) {
+          setMotifErr('Aucun motif valide trouvé dans le fichier Excel.');
+          return;
+        }
+
+        await saveMotifs([...new Set([...motifs, ...importedMotifs])]);
+        setMotifSuccess(`${importedMotifs.length} motif(s) importé(s) avec succès.`);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      } catch (error) {
+        setMotifErr('Erreur lors de l\'importation du fichier Excel. Vérifiez le format.');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   const mode = modeQ.data?.mode ?? 'manuel';
 
   return (
     <>
-      <div className="page-header"><div><h1 className="page-title">Configuration — Distribution</h1></div></div>
+      <div className="page-header">
+        <div><h1 className="page-title">Configuration — Distribution</h1><p className="page-sub">Gérer le mode de distribution et les paramètres d'alerte.</p></div>
+      </div>
       {err     && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
-      <div className="card" style={{ maxWidth:480 }}>
-        <p className="card-title">Mode de distribution</p>
-        <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
-          <label className="toggle"><input type="checkbox" checked={mode === 'auto'} onChange={toggleMode} disabled={saving} /><span className="toggle-track" /></label>
-          <span className="toggle-label" style={{ fontWeight:700, color: mode === 'auto' ? 'var(--success)' : 'var(--ink-3)' }}>{mode === 'auto' ? 'AUTO' : 'MANUEL'}</span>
+      
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))', gap:'1.5rem' }}>
+        {/* Widget Mode de Distribution */}
+        <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
+            <div style={{ width:48, height:48, borderRadius:'12px', background: mode === 'auto' ? 'var(--success-soft)' : 'var(--ink-soft)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>
+              {mode === 'auto' ? '⚡' : '🎯'}
+            </div>
+            <div>
+              <p className="card-title" style={{ margin:0 }}>Mode de distribution</p>
+              <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>{mode === 'auto' ? 'Automatique' : 'Manuel'}</p>
+            </div>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
+            <label className="toggle"><input type="checkbox" checked={mode === 'auto'} onChange={toggleMode} disabled={saving} /><span className="toggle-track" /></label>
+            <span className="toggle-label" style={{ fontWeight:700, color: mode === 'auto' ? 'var(--success)' : 'var(--ink-3)', fontSize:14 }}>{mode === 'auto' ? 'AUTO' : 'MANUEL'}</span>
+          </div>
+          <p style={{ fontSize:13, color:'var(--ink-3)', lineHeight:1.5 }}>{mode === 'auto' ? 'Attribution automatique FIFO toutes les 2 secondes. Les dossiers sont assignés aux agents disponibles selon leur temps d\'attente.' : 'Chaque agent choisit manuellement son dossier dans la file d\'attente.'}</p>
         </div>
-        <p style={{ fontSize:13, color:'var(--ink-3)' }}>{mode === 'auto' ? 'Attribution automatique FIFO toutes les 2 secondes.' : 'Chaque agent choisit son dossier dans la file.'}</p>
-      </div>
-      <div className="card" style={{ maxWidth:480 }}>
-        <p className="card-title">Seuil d'alerte file d'attente (minutes)</p>
-        <p style={{ fontSize:13, color:'var(--ink-3)', marginBottom:'1rem' }}>Actuel : <strong>{seuilQ.data?.seuil ?? '…'} min</strong></p>
-        <div className="form-row" style={{ alignItems:'flex-end' }}>
-          <div className="field"><label>Nouveau seuil (min)</label><input type="number" min="1" max="1440" value={seuil} onChange={e => setSeuil(e.target.value)} placeholder="Ex. 10" /></div>
-          <button className="btn btn-primary" disabled={saving || !seuil} onClick={saveSeuil}>Enregistrer</button>
+
+        {/* Widget Seuil d'Alerte */}
+        <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
+            <div style={{ width:48, height:48, borderRadius:'12px', background:'var(--warning-soft)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>
+              ⏱️
+            </div>
+            <div>
+              <p className="card-title" style={{ margin:0 }}>Seuil d'alerte</p>
+              <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>File d'attente</p>
+            </div>
+          </div>
+          <div style={{ marginBottom:'1rem' }}>
+            <p style={{ fontSize:13, color:'var(--ink-3)', marginBottom:'.25rem' }}>Seuil actuel</p>
+            <p style={{ fontSize:32, fontWeight:700, color:'var(--warning)', margin:0 }}>{seuilQ.data?.seuil ?? '…'} <span style={{ fontSize:14, fontWeight:400, color:'var(--ink-3)' }}>min</span></p>
+          </div>
+          <div className="form-row" style={{ alignItems:'flex-end' }}>
+            <div className="field" style={{ flex:1 }}><label>Nouveau seuil (min)</label><input type="number" min="1" max="1440" value={seuil} onChange={e => setSeuil(e.target.value)} placeholder="Ex. 10" /></div>
+            <button className="btn btn-primary" disabled={saving || !seuil} onClick={saveSeuil}>Enregistrer</button>
+          </div>
+        </div>
+
+        {/* Widget Statistiques Rapides */}
+        <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
+            <div style={{ width:48, height:48, borderRadius:'12px', background:'var(--info-soft)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>
+              📊
+            </div>
+            <div>
+              <p className="card-title" style={{ margin:0 }}>Motifs de rejet</p>
+              <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>Configurés</p>
+            </div>
+          </div>
+          <div style={{ marginBottom:'1rem' }}>
+            <p style={{ fontSize:32, fontWeight:700, color:'var(--info)', margin:0 }}>{motifs.length} <span style={{ fontSize:14, fontWeight:400, color:'var(--ink-3)' }}>motif(s)</span></p>
+          </div>
+          <p style={{ fontSize:13, color:'var(--ink-3)', lineHeight:1.5 }}>Les agents verront ces motifs dans la liste déroulante au moment d'un rejet de dossier.</p>
         </div>
       </div>
-      <div className="card" style={{ maxWidth:760 }}>
-        <p className="card-title">Motifs de rejet configurables</p>
-        <p style={{ fontSize:13, color:'var(--ink-3)', marginBottom:'1rem' }}>Les agents verront ces motifs dans la liste déroulante au moment d’un rejet.</p>
-        {motifErr && <Alert kind="error">{motifErr}</Alert>}
-        {motifSuccess && <Alert kind="success">{motifSuccess}</Alert>}
-        <div className="form-row" style={{ alignItems:'flex-end', marginBottom:'1rem' }}>
-          <div className="field"><label>Nouveau motif</label><input value={motifInput} onChange={e => setMotifInput(e.target.value)} placeholder="Ex. Document illisible" onKeyDown={e => e.key === 'Enter' && addMotif()} /></div>
+
+      {/* Widget Motifs de Rejet - Large */}
+      <div className="card" style={{ marginTop:'1.5rem', background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1.5rem' }}>
+          <div style={{ width:48, height:48, borderRadius:'12px', background:'var(--danger-soft)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>
+            🚫
+          </div>
+          <div style={{ flex:1 }}>
+            <p className="card-title" style={{ margin:0 }}>Gestion des motifs de rejet</p>
+            <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>Ajouter, modifier ou supprimer les motifs disponibles</p>
+          </div>
+          <div style={{ display:'flex', gap:'.5rem' }}>
+            <button className="btn btn-ghost btn-sm" onClick={downloadTemplate} title="Télécharger template Excel">📥 Template</button>
+            <button className="btn btn-ghost btn-sm" onClick={exportMotifsToExcel} disabled={!motifs.length} title="Exporter vers Excel">📤 Exporter</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => fileInputRef.current?.click()} title="Importer depuis Excel">📤 Importer</button>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleImportExcel} 
+              accept=".xlsx,.xls" 
+              style={{ display:'none' }} 
+            />
+          </div>
+        </div>
+        
+        {motifErr && <div style={{ marginBottom:'1rem' }}><Alert kind="error">{motifErr}</Alert></div>}
+        {motifSuccess && <div style={{ marginBottom:'1rem' }}><Alert kind="success">{motifSuccess}</Alert></div>}
+        
+        <div className="form-row" style={{ alignItems:'flex-end', marginBottom:'1.5rem', padding:'1rem', background:'var(--surface-1)', borderRadius:'var(--r-md)' }}>
+          <div className="field" style={{ flex:1 }}><label>Nouveau motif</label><input value={motifInput} onChange={e => setMotifInput(e.target.value)} placeholder="Ex. Document illisible" onKeyDown={e => e.key === 'Enter' && addMotif()} /></div>
           <button className="btn btn-primary" disabled={motifSaving || !motifInput.trim()} onClick={addMotif}>{motifSaving ? 'Enregistrement…' : 'Ajouter'}</button>
         </div>
-        {!motifs.length ? <p style={{ fontSize:13, color:'var(--ink-3)' }}>Aucun motif configuré.</p> : (
-          <ul style={{ listStyle:'none', display:'flex', flexDirection:'column', gap:'.5rem' }}>
+        
+        {!motifs.length ? (
+          <div style={{ textAlign:'center', padding:'2rem', color:'var(--ink-3)' }}>
+            <p style={{ fontSize:48, marginBottom:'1rem' }}>📝</p>
+            <p style={{ fontSize:14 }}>Aucun motif configuré.</p>
+            <p style={{ fontSize:12 }}>Ajoutez votre premier motif ci-dessus.</p>
+          </div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'.75rem' }}>
             {motifs.map((motif, idx) => (
-              <li key={motif + idx} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.75rem', padding:'.6rem .75rem', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', background:'var(--surface-2)' }}>
+              <div key={motif + idx} style={{ padding:'1rem', border:'1px solid var(--border)', borderRadius:'var(--r-md)', background:'var(--surface-1)', transition:'all 0.2s' }}>
                 {editingIndex === idx ? (
-                  <>
-                    <input value={editingValue} onChange={e => setEditingValue(e.target.value)} style={{ flex:1 }} />
-                    <div style={{ display:'flex', gap:'.4rem' }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { setEditingIndex(null); setEditingValue(''); }}>Annuler</button>
-                      <button className="btn btn-primary btn-sm" disabled={motifSaving || !editingValue.trim()} onClick={() => saveEdit(idx)}>Enregistrer</button>
+                  <div style={{ display:'flex', flexDirection:'column', gap:'.75rem' }}>
+                    <input value={editingValue} onChange={e => setEditingValue(e.target.value)} style={{ width:'100%', padding:'.5rem', borderRadius:'var(--r-sm)', border:'1px solid var(--border)' }} autoFocus />
+                    <div style={{ display:'flex', gap:'.5rem' }}>
+                      <button className="btn btn-ghost btn-sm" style={{ flex:1 }} onClick={() => { setEditingIndex(null); setEditingValue(''); }}>Annuler</button>
+                      <button className="btn btn-primary btn-sm" style={{ flex:1 }} disabled={motifSaving || !editingValue.trim()} onClick={() => saveEdit(idx)}>Enregistrer</button>
                     </div>
-                  </>
+                  </div>
                 ) : (
-                  <>
-                    <span style={{ fontWeight:600 }}>{motif}</span>
-                    <div style={{ display:'flex', gap:'.4rem' }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => startEdit(idx)}>Modifier</button>
-                      <button className="btn btn-danger btn-sm" disabled={motifSaving} onClick={() => removeMotif(motif)}>Supprimer</button>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem' }}>
+                    <span style={{ fontWeight:600, fontSize:14, flex:1 }}>{motif}</span>
+                    <div style={{ display:'flex', gap:'.25rem' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => startEdit(idx)} title="Modifier">✏️</button>
+                      <button className="btn btn-danger btn-sm" disabled={motifSaving} onClick={() => removeMotif(motif)} title="Supprimer">🗑️</button>
                     </div>
-                  </>
+                  </div>
                 )}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </>

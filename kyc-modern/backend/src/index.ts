@@ -19,6 +19,7 @@ import websocket from '@fastify/websocket';
 
 import { initDb, getDistributionMode, getOldestPendingDossier, getOldestAvailableAgent, updateDossier, audit } from './db';
 import { registerRoutes } from './routes';
+
 import { startDossierTimeoutWorker } from './utils/dossier-timeout-worker';
 
 const PORT     = parseInt(process.env.PORT || '3001', 10);
@@ -52,7 +53,8 @@ async function main(): Promise<void> {
             return callback(null, true);
           }
 
-          const isAllowed = configuredCorsOrigins.includes(origin);
+          const normalizedOrigin = origin.replace(/\/$/, '');
+          const isAllowed = configuredCorsOrigins.some((allowed) => allowed.replace(/\/$/, '') === normalizedOrigin);
           if (!isAllowed) {
             return callback(null, false);
           }

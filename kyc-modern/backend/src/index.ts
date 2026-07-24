@@ -81,9 +81,28 @@ async function main(): Promise<void> {
     reply.code(code).send({ error: code === 500 ? 'Erreur serveur interne' : error.message });
   });
 
-  app.setNotFoundHandler((_req, reply) =>
-    reply.code(404).send({ error: 'Route introuvable' })
-  );
+  app.setNotFoundHandler((req, reply) => {
+    const url = req.raw.url || '/';
+    const isApi = url.startsWith('/api/') || url.startsWith('/uploads/') || url.startsWith('/ws');
+    const hasExtension = path.extname(url) !== '';
+
+    if (isApi || hasExtension) {
+      return reply.code(404).send({ error: 'Route introuvable' });
+    }
+
+    const indexCandidates = [
+      path.join(process.cwd(), '../frontend/dist/index.html'),
+      path.resolve(__dirname, '../../frontend/dist/index.html'),
+      path.resolve(__dirname, '../../frontend/index.html'),
+    ];
+    const indexPath = indexCandidates.find((candidate) => fs.existsSync(candidate));
+    if (indexPath) {
+      const html = fs.readFileSync(indexPath, 'utf8');
+      return reply.type('text/html; charset=utf-8').send(html);
+    }
+
+    return reply.code(404).send({ error: 'Route introuvable' });
+  });
 
   if (!process.env.FCM_SERVER_KEY && !process.env.FCM_API_KEY) {
     app.log.warn('[FCM] FCM_SERVER_KEY/FCM_API_KEY non défini — les pushes d\'appel entrants seront désactivés en arrière-plan');

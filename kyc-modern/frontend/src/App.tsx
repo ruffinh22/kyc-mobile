@@ -10,6 +10,7 @@ import { FaceLivenessCheck } from './pages/FaceLivenessCheck';
 
 // ── Agent pages ───────────────────────────────────────────────────────────────
 import { AgentDashboard, AgentFileAttente, AgentMesDossiers, AgentAcquisition } from './pages/agent/DossierPages';
+import { AgentVideoCallPage } from './pages/agent/VideoCallPage';
 import { GsmMonTableau, GsmSaisie, GsmHistorique, GsmPerfs } from './pages/agent/GsmPages';
 import { AgentPlanning, AgentNotesQualite } from './pages/agent/AutresPages';
 
@@ -51,6 +52,7 @@ function AgentApp({ page }: { page: string }) {
   switch (page) {
     case 'file-attente':    return <AgentFileAttente />;
     case 'mes-dossiers':    return <AgentMesDossiers />;
+    case 'video-call':      return <AgentVideoCallPage />;
     case 'gsm-saisie':      return <GsmSaisie />;
     case 'gsm-tableau':     return <GsmMonTableau />;
     case 'gsm-historique':  return <GsmHistorique />;
@@ -115,6 +117,7 @@ function AuthenticatedShell() {
       '/gsm-perfs': 'gsm-perfs',
       '/file-attente': 'file-attente',
       '/mes-dossiers': 'mes-dossiers',
+      '/video-call': 'video-call',
       '/planning': 'planning',
       '/qualite': 'qualite',
       '/acquisition': 'acquisition',

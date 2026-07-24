@@ -210,6 +210,7 @@ export function AgentDashboard() {
 export function AgentFileAttente() {
   const { user } = useAuth();
   const [preview, setPreview] = useState<{ imgs: string[]; idx: number; title?: string } | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   useEffect(() => {
     if (!preview) return;
     const h = (e: KeyboardEvent) => {
@@ -241,6 +242,25 @@ export function AgentFileAttente() {
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
   const motifs = motifsQ.data?.motifs ?? [];
+
+  const handleCallTerrain = async (dossier: Dossier) => {
+    if (!dossier.wa_agent) {
+      setSuccess(null);
+      setErr('Numéro terrain introuvable pour ce dossier.');
+      return;
+    }
+    setErr(null);
+    setSuccess(null);
+    setBusy(true);
+    try {
+      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
+      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (rejetTarget) {
@@ -281,6 +301,7 @@ export function AgentFileAttente() {
       </div>
       {error && <Alert kind="error">{error}</Alert>}
       {err   && <Alert kind="error">{err}</Alert>}
+      {success && <Alert kind="success">{success}</Alert>}
       {stats.vieux > 0 && <Alert kind="error">{stats.vieux} dossier(s) en attente depuis plus de 5 minutes.</Alert>}
 
       {loading ? <LoadingCenter /> : (
@@ -312,6 +333,9 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        </button>
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
                       </div>
                     </div>
@@ -363,6 +387,9 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        </button>
                         {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
                           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
                         )}
@@ -503,7 +530,29 @@ export function AgentMesDossiers() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const dSearch = useDebounce(search, 350);
   const [sel, setSel] = useState<Dossier|null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300 }), [debut, fin, statut, dSearch]);
+
+  const handleCallTerrain = async (dossier: Dossier) => {
+    if (!dossier.wa_agent) {
+      setSuccess(null);
+      setErr('Numéro terrain introuvable pour ce dossier.');
+      return;
+    }
+    setErr(null);
+    setSuccess(null);
+    setBusy(true);
+    try {
+      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
+      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const sortedDossiers = useMemo(() => {
     const rows = [...(data?.dossiers ?? [])];
@@ -554,8 +603,18 @@ export function AgentMesDossiers() {
         </div>
       </div>
       {error && <Alert kind="error">{error}</Alert>}
-      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} /></div>}
-      {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} />}
+      {err && <Alert kind="error">{err}</Alert>}
+      {success && <Alert kind="success">{success}</Alert>}
+      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} rowActions={d => (
+        <button className="btn btn-success btn-sm" disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
+          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+        </button>
+      )} /></div>}
+      {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} actions={
+        <button className="btn btn-success" disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
+          {sel.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+        </button>
+      } />}
     </>
   );
 }

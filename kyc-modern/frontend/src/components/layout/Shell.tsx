@@ -64,6 +64,7 @@ const NAV: Record<Role, NavSection[]> = {
         { key: 'dashboard',    icon: '📊', label: 'Tableau de bord' },
         { key: 'file-attente', icon: '📥', label: "File d'attente" },
         { key: 'mes-dossiers', icon: '📁', label: 'Mes dossiers' },
+        { key: 'video-call',   icon: '🎥', label: 'Appel vidéo' },
       ],
     },
     {

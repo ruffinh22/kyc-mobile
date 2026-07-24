@@ -1,6 +1,25 @@
 import type { Dossier, DossierStats, GsmRecord, GsmStats, PlanningEntry, NoteQualite, Compte, Session, AuditLog, AdminStats, PresenceResume, User } from '../types';
 
-const BASE = import.meta.env.VITE_API_BASE_URL || '';
+const configuredBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
+
+function resolveApiBase(): string {
+  if (!configuredBase) {
+    return typeof window !== 'undefined' ? window.location.origin : '';
+  }
+
+  const isLocalConfiguredHost = /^(http:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(configuredBase);
+  if (isLocalConfiguredHost && typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    const isRemoteHost = host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0';
+    if (isRemoteHost) {
+      return window.location.origin;
+    }
+  }
+
+  return configuredBase;
+}
+
+const BASE = resolveApiBase();
 let _token: string | null = null;
 
 export function setToken(t: string | null) {
@@ -112,6 +131,13 @@ export async function getPublicDossiers(wa_agent: string): Promise<{
   return apiFetch(`/api/public/dossiers?wa_agent=${wa}`);
 }
 
+export async function callTerrain(numero: string, numeroMtn: string): Promise<{ success: boolean; message: string }> {
+  return apiFetch<{ success: boolean; message: string }>('/api/call/test', {
+    method: 'POST',
+    json: { numero, numeroMtn },
+  });
+}
+
 export async function prepareVerifySession(data: {
   numero_mtn: string; country: string; recto_path: string; verso_path: string;
   wa_agent: string; username_agent: string; fonction_agent: string; zone_agent: string;
@@ -180,6 +206,23 @@ export async function setConfigReferentiels(data: Record<string, string[]>) { re
 export async function getHabilitations() { return apiFetch<{ success: boolean; habilitations: Record<string, Record<string, string>> }>('/api/config/habilitations'); }
 export async function setHabilitations(data: Record<string, Record<string, string>>) { return apiFetch<{ success: boolean }>('/api/config/habilitations', { method: 'PUT', json: data }); }
 export async function setPurgeCode(code: string) { return apiFetch<{ success: boolean }>('/api/config/purge-code', { method: 'PUT', json: { code } }); }
+
+// ── Appel vidéo agent terrain (WebRTC signaling) ───────────────────────────────
+// Construit l'URL du WebSocket de signalisation (/api/signaling) à partir de la
+// même base que les appels REST (VITE_API_BASE_URL), en remplaçant http(s) par ws(s).
+export function getSignalingWsUrl(): string {
+  const httpBase = BASE || (typeof window !== 'undefined' ? window.location.origin : '');
+  const withProtocol = httpBase.startsWith('http') ? httpBase : `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https' : 'http'}://${httpBase}`;
+  const wsBase = withProtocol.replace(/^http/i, 'ws').replace(/\/$/, '');
+  return `${wsBase}/api/signaling`;
+}
+
+// Identifiants TURN/STUN pour la traversée NAT (route publique côté serveur).
+export async function getTurnCredentials(numero: string) {
+  return apiFetch<{ success: boolean; iceServers: RTCIceServer[]; message?: string }>(
+    `/api/turn-credentials?numero=${encodeURIComponent(numero)}`
+  );
+}
 
 // ── Sup ───────────────────────────────────────────────────────────────────────
 export async function getAgents() { return apiFetch<{ success: boolean; agents: { matricule: string; nom: string; prenom: string }[] }>('/api/comptes/agents'); }

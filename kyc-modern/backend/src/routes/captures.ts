@@ -26,6 +26,91 @@ function resolveSafePath(relativePath: string): string | null {
   return full;
 }
 
+function sanitizeLimit(limit: number | undefined, fallback = 100, max = 500): number {
+  const parsed = Number.isFinite(limit) ? Math.floor(limit) : fallback;
+  if (parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
+export function buildCaptureSearchQuery(options: {
+  type?: string;
+  date?: string;
+  dossier_id?: string;
+  numero?: string;
+  limit?: number;
+}): { sql: string; params: any[] } {
+  const { type, date, dossier_id, numero, limit } = options;
+  const safeLimit = sanitizeLimit(limit, 100, 500);
+  let baseSql = 'SELECT id, numero_mtn, photo_recto, photo_verso, photo_live, created_at FROM dossiers WHERE 1=1';
+  const whereClauses: string[] = [];
+  const params: any[] = [];
+
+  if (!isBlank(dossier_id)) {
+    whereClauses.push('id = ?');
+    params.push(dossier_id!.trim());
+  }
+
+  if (!isBlank(numero)) {
+    whereClauses.push('numero_mtn LIKE ?');
+    params.push(`%${numero!.trim()}%`);
+  }
+
+  if (!isBlank(date)) {
+    whereClauses.push('date = ?');
+    params.push(date!.trim());
+  }
+
+  if (!isBlank(type)) {
+    if (type === 'cni') {
+      whereClauses.push('(photo_recto IS NOT NULL OR photo_verso IS NOT NULL)');
+    } else if (type === 'live') {
+      whereClauses.push('photo_live IS NOT NULL');
+    }
+  }
+
+  if (whereClauses.length > 0) {
+    baseSql += ' AND ' + whereClauses.join(' AND ');
+  }
+
+  baseSql += ` ORDER BY created_at DESC LIMIT ${safeLimit}`;
+  return { sql: baseSql, params };
+}
+
+export function buildGsmCaptureSearchQuery(options: {
+  date?: string;
+  agent?: string;
+  numero?: string;
+  limit?: number;
+}): { sql: string; params: any[] } {
+  const { date, agent, numero, limit } = options;
+  const safeLimit = sanitizeLimit(limit, 100, 500);
+  let baseSql = 'SELECT id, numero, date_saisie, agent_ctrl, capture_a, capture_p, capture_aa, dossier_id FROM gsm WHERE 1=1';
+  const whereClauses: string[] = [];
+  const params: any[] = [];
+
+  if (!isBlank(date)) {
+    whereClauses.push('date_saisie = ?');
+    params.push(date!.trim());
+  }
+
+  if (!isBlank(agent)) {
+    whereClauses.push('agent_ctrl = ?');
+    params.push(agent!.trim());
+  }
+
+  if (!isBlank(numero)) {
+    whereClauses.push('numero LIKE ?');
+    params.push(`%${numero!.trim()}%`);
+  }
+
+  if (whereClauses.length > 0) {
+    baseSql += ' AND ' + whereClauses.join(' AND ');
+  }
+
+  baseSql += ` ORDER BY date_saisie DESC, created_at DESC LIMIT ${safeLimit}`;
+  return { sql: baseSql, params };
+}
+
 export async function capturesRoutes(app: any): Promise<void> {
   app.register(async function (fastify) {
     // Middleware d'authentification et autorisation
@@ -50,44 +135,18 @@ export async function capturesRoutes(app: any): Promise<void> {
       };
 
       const { type, date, dossier_id, numero } = queryParams;
-      const limit = Math.min(parseInt(queryParams.limit || '100'), 500);
+      const limit = parseInt(queryParams.limit || '100', 10);
 
       try {
-        let baseSql = 'SELECT id, numero_mtn, photo_recto, photo_verso, photo_live, created_at FROM dossiers WHERE 1=1';
-        let whereClauses: string[] = [];
-        const params: any[] = [];
-        
-        if (!isBlank(dossier_id)) {
-          whereClauses.push('id = ?');
-          params.push(dossier_id!.trim());
-        }
+        const { sql, params } = buildCaptureSearchQuery({
+          type,
+          date,
+          dossier_id,
+          numero,
+          limit,
+        });
 
-        if (!isBlank(numero)) {
-          whereClauses.push('numero_mtn LIKE ?');
-          params.push(`%${numero!.trim()}%`);
-        }
-
-        if (!isBlank(date)) {
-          whereClauses.push('date = ?');
-          params.push(date!.trim());
-        }
-
-        if (!isBlank(type)) {
-          if (type === 'cni') {
-            whereClauses.push('(photo_recto IS NOT NULL OR photo_verso IS NOT NULL)');
-          } else if (type === 'live') {
-            whereClauses.push('photo_live IS NOT NULL');
-          }
-        }
-
-        if (whereClauses.length > 0) {
-          baseSql += ' AND ' + whereClauses.join(' AND ');
-        }
-
-        baseSql += ' ORDER BY created_at DESC LIMIT ?';
-        params.push(limit);
-
-        const rows = await query(baseSql, params);
+        const rows = await query(sql, params);
 
         // Construire les URLs complètes pour les captures
         const results = rows.map((row: any) => ({
@@ -115,36 +174,17 @@ export async function capturesRoutes(app: any): Promise<void> {
       };
 
       const { date, agent, numero } = queryParams;
-      const limit = Math.min(parseInt(queryParams.limit || '100'), 500);
+      const limit = parseInt(queryParams.limit || '100', 10);
 
       try {
-        let baseSql = 'SELECT id, numero, date_saisie, agent_ctrl, capture_a, capture_p, capture_aa, dossier_id FROM gsm WHERE 1=1';
-        let whereClauses: string[] = [];
-        const params: any[] = [];
+        const { sql, params } = buildGsmCaptureSearchQuery({
+          date,
+          agent,
+          numero,
+          limit,
+        });
 
-        if (!isBlank(date)) {
-          whereClauses.push('date_saisie = ?');
-          params.push(date!.trim());
-        }
-
-        if (!isBlank(agent)) {
-          whereClauses.push('agent_ctrl = ?');
-          params.push(agent!.trim());
-        }
-
-        if (!isBlank(numero)) {
-          whereClauses.push('numero LIKE ?');
-          params.push(`%${numero!.trim()}%`);
-        }
-
-        if (whereClauses.length > 0) {
-          baseSql += ' AND ' + whereClauses.join(' AND ');
-        }
-
-        baseSql += ' ORDER BY date_saisie DESC, created_at DESC LIMIT ?';
-        params.push(limit);
-
-        const rows = await query(baseSql, params);
+        const rows = await query(sql, params);
 
         // Construire les URLs pour les captures GSM
         const results = rows.map((row: any) => ({

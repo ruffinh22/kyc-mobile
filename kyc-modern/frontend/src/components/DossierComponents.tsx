@@ -5,8 +5,8 @@ import { photoUrlWithToken } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 // ── Dossiers Table ─────────────────────────────────────────────────────────────
-export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate = true }: {
-  dossiers: Dossier[]; onSelect(d: Dossier): void; showAgent?: boolean; showDate?: boolean;
+export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate = true, rowActions }: {
+  dossiers: Dossier[]; onSelect(d: Dossier): void; showAgent?: boolean; showDate?: boolean; rowActions?: (dossier: Dossier) => React.ReactNode;
 }) {
   if (!dossiers.length) return <EmptyState icon="📭" title="Aucun dossier" body="Aucun résultat ne correspond aux filtres." />;
   return (
@@ -20,6 +20,7 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
             {showDate  && <th>Date</th>}
             <th>Réception</th>
             <th>Statut</th>
+            {rowActions && <th>Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -31,6 +32,7 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
               {showDate  && <td>{d.date}</td>}
               <td>{d.heure_reception || '—'}</td>
               <td><StatutBadge statut={d.statut} /></td>
+              {rowActions && <td onClick={e => e.stopPropagation()}>{rowActions(d)}</td>}
             </tr>
           ))}
         </tbody>

@@ -14,16 +14,22 @@ export function AppHeader({ title, subtitle, rightIcon, onRightPress }: AppHeade
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[s.container, { paddingTop: insets.top + 12 }]}> 
+    <View style={[s.container, { paddingTop: insets.top + 12 }]}>
       <View style={s.left}>
         <View style={s.logoWrap}>
           <View style={s.logoInner}>
-            <Text style={s.logoText}>MTN</Text>
+            <Text style={s.logoText} numberOfLines={1} allowFontScaling={false}>MTN</Text>
           </View>
         </View>
         <View style={s.textWrap}>
-          <Text style={s.title}>{title}</Text>
-          {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
+          <Text style={s.title} numberOfLines={1} ellipsizeMode="tail" allowFontScaling={false}>
+            {title}
+          </Text>
+          {subtitle ? (
+            <Text style={s.subtitle} numberOfLines={1} ellipsizeMode="tail" allowFontScaling={false}>
+              {subtitle}
+            </Text>
+          ) : null}
         </View>
       </View>
 
@@ -46,6 +52,11 @@ const s = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 10,
+    // Fond gris-bleu discret, professionnel — distingue le header du
+    // contenu sans créer de contraste dur.
+    backgroundColor: '#EEF2F7',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(15,23,42,0.07)',
   },
   left: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   logoWrap: {

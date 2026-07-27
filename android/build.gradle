@@ -54,6 +54,11 @@ subprojects {
                     jvmTarget = '17'
                 }
             }
+
+            // Fix lazy : ne force jamais la création/résolution immédiate de la tâche
+            project.tasks.matching { it.name == 'generateReleaseLintModel' }.configureEach { lintTask ->
+                lintTask.dependsOn(project.tasks.matching { it.name == 'copyReleaseExpoConfig' })
+            }
         }
     }
 }

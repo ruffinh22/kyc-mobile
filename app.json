@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "KycMobile",
+    "slug": "kyc-mobile",
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Autoriser l'accès à la caméra pour capturer la CNI"
+        }
+      ]
+    ]
+  }
+}

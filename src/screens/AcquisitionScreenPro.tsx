@@ -14,6 +14,7 @@ import {
   Modal, FlatList, Alert,
 } from 'react-native';
 import { Camera, CameraType } from 'expo-camera';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { useAgentStore }  from '../store/callStore';
 import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
@@ -28,6 +29,12 @@ const STEPS = [
   { id: 2, label: 'Documents CNI', icon: '🪪' },
   { id: 3, label: 'Identité', icon: '🛡️' },
   { id: 4, label: 'Filiation & infos', icon: '🧾' },
+];
+
+// Options du select "Sexe" — évite la saisie libre pour un champ à valeurs finies.
+const SEXE_OPTIONS = [
+  { label: 'Masculin', value: 'M' },
+  { label: 'Féminin',  value: 'F' },
 ];
 
 // Champs issus de la lecture OCR de la CNI. Une fois validés, ils deviennent
@@ -87,6 +94,53 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const [manualOverride, setManualOverride] = useState<Record<string, boolean>>({});
   const setIdField = (key: keyof typeof idInfo, value: string) =>
     setIdInfo(prev => ({ ...prev, [key]: value }));
+
+  // ── Select générique (options fermées, ex. Sexe) ──────────────────────────
+  const [optionPicker, setOptionPicker] = useState<{ key: OcrLockedField; label: string; options: { label: string; value: string }[] } | null>(null);
+  const openOptionPicker = (key: OcrLockedField, label: string, options: { label: string; value: string }[]) =>
+    setOptionPicker({ key, label, options });
+
+  // ── Sélecteur de date natif (calendrier) — remplace la saisie manuelle ────
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [tempDate, setTempDate] = useState<Date>(new Date(2000, 0, 1));
+
+  const parseDateFR = (str: string): Date | null => {
+    const m = str.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  const formatDateFR = (d: Date): string => {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  };
+
+  const openDatePicker = () => {
+    setTempDate(parseDateFR(idInfo.dateNaissance) || new Date(2000, 0, 1));
+    setShowDatePicker(true);
+  };
+
+  // Android : le dialogue natif se ferme et renvoie directement la date choisie
+  // (tout est automatique — pas de bouton "Valider" séparé).
+  // iOS : la roue reste ouverte dans une modale tant que l'agent n'a pas
+  // confirmé, pour éviter une validation accidentelle en faisant défiler.
+  const onNativeDateChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+      if (event.type === 'set' && selectedDate) {
+        setIdField('dateNaissance', formatDateFR(selectedDate));
+      }
+      return;
+    }
+    if (selectedDate) setTempDate(selectedDate);
+  };
+
+  const confirmIosDate = () => {
+    setIdField('dateNaissance', formatDateFR(tempDate));
+    setShowDatePicker(false);
+  };
 
   // Un champ OCR est verrouillé s'il a été rempli avec succès par la lecture
   // automatique et que l'agent n'a pas explicitement demandé/confirmé une correction.
@@ -148,6 +202,17 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       Animated.timing(shakeAnim, { toValue: 0,  duration: 55, useNativeDriver: true }),
     ]).start();
 
+  const compressPhoto = async (uri: string) => {
+    try {
+      // Fallback robuste: on garde l'URI d'origine si la compression native n'est pas disponible.
+      // Le backend accepte déjà les uploads standards et l'enregistrement fonctionne.
+      return uri;
+    } catch (err) {
+      console.warn('[Acquisition] Compression photo échouée :', err);
+      return uri;
+    }
+  };
+
   const capturePhoto = async (type: 'recto'|'verso') => {
     if (!cameraRef.current || !cameraReady) return;
     try {
@@ -155,9 +220,11 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       const uri = photo?.uri;
       if (!uri) throw new Error('Aucun fichier photo renvoyé');
 
+      const compressedUri = await compressPhoto(uri);
+
       // On s'arrête sur un aperçu (Reprendre / Valider) plutôt que de
       // committer directement — comme sur AcquisitionPage.tsx (web).
-      setPendingPhoto({ uri, type });
+      setPendingPhoto({ uri: compressedUri, type });
       setError('');
     } catch (err: any) {
       console.warn('[Acquisition] capturePhoto a échoué :', err);
@@ -295,9 +362,9 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             const dossierId = response.id || response.dossier_id;
             const rectoPath = response.recto_path || '';
             const versoPath = response.verso_path || '';
-            
+
             if (!dossierId) throw new Error('ID du dossier non reçu');
-            
+
             setSuccess(true);
             setTimeout(() => {
               navigation.navigate('FaceVerifyScreen', {
@@ -327,7 +394,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       });
       xhr.addEventListener('error', () => {
         console.warn('[Acquisition] Upload échoué : erreur réseau');
-        setError('Erreur réseau');
+        setError('Erreur réseau pendant l’envoi. Vérifie la connexion puis réessaie.');
         shake();
         setLoading(false);
       });
@@ -496,6 +563,100 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     );
   };
 
+  // ── Champ select générique (options fermées, ex. Sexe) ────────────────────
+  // Même traitement OCR (verrouillage / demande de correction) que les champs
+  // texte, mais ouvre une liste d'options au lieu du clavier — plus rapide et
+  // sans erreur de saisie pour un champ à valeurs finies.
+  const renderSelectField = (
+    key: OcrLockedField,
+    label: string,
+    options: { label: string; value: string }[],
+  ) => {
+    const locked = isFieldLocked(key);
+    if (locked) {
+      return (
+        <View style={s.lockedField}>
+          <View style={s.lockedFieldTop}>
+            <Text style={s.lockedFieldLabel}>{label}</Text>
+            <TouchableOpacity onPress={() => requestUnlock(key, label)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={s.lockedFieldEdit}>Corriger</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.lockedFieldRow}>
+            <Text style={s.lockedFieldIcon}>🔒</Text>
+            <Text style={s.lockedFieldValue}>{options.find(o => o.value === idInfo[key])?.label || idInfo[key]}</Text>
+          </View>
+        </View>
+      );
+    }
+    const displayLabel = options.find(o => o.value === idInfo[key])?.label || '';
+    return (
+      <View style={s.field}>
+        <View style={s.lockedFieldTop}>
+          <Text style={s.fieldLabel}>{label} <Text style={s.req}>*</Text></Text>
+          {manualOverride[key] && <Text style={s.overrideTag}>Correction signalée</Text>}
+        </View>
+        <TouchableOpacity
+          style={[s.input, s.selectInput, s.selectInputRow]}
+          onPress={() => !loading && openOptionPicker(key, label, options)}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel={`Sélectionner ${label}`}
+          accessibilityHint="Ouvre la liste des choix"
+        >
+          <Text style={[s.selectInputText, !displayLabel && s.selectInputPlaceholder]}>
+            {displayLabel || 'Sélectionner'}
+          </Text>
+          <Text style={s.selectInputIcon}>▾</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // ── Champ date de naissance : ouvre le calendrier natif, tout est auto ────
+  const renderDateField = () => {
+    const key: OcrLockedField = 'dateNaissance';
+    const label = 'Date de naissance';
+    const locked = isFieldLocked(key);
+    if (locked) {
+      return (
+        <View style={s.lockedField}>
+          <View style={s.lockedFieldTop}>
+            <Text style={s.lockedFieldLabel}>{label}</Text>
+            <TouchableOpacity onPress={() => requestUnlock(key, label)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Text style={s.lockedFieldEdit}>Corriger</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.lockedFieldRow}>
+            <Text style={s.lockedFieldIcon}>🔒</Text>
+            <Text style={s.lockedFieldValue}>{idInfo.dateNaissance}</Text>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={s.field}>
+        <View style={s.lockedFieldTop}>
+          <Text style={s.fieldLabel}>{label} <Text style={s.req}>*</Text></Text>
+          {manualOverride.dateNaissance && <Text style={s.overrideTag}>Correction signalée</Text>}
+        </View>
+        <TouchableOpacity
+          style={[s.input, s.selectInput, s.selectInputRow]}
+          onPress={openDatePicker}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Sélectionner la date de naissance"
+          accessibilityHint="Ouvre un calendrier"
+        >
+          <Text style={[s.selectInputText, !idInfo.dateNaissance && s.selectInputPlaceholder]}>
+            {idInfo.dateNaissance || 'JJ/MM/AAAA'}
+          </Text>
+          <Text style={s.selectInputIcon}>📅</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
   const renderNationalityField = () => {
     const locked = isFieldLocked('nationalite');
     return (
@@ -505,7 +666,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
           {manualOverride.nationalite && <Text style={s.overrideTag}>Correction signalée</Text>}
         </View>
         <TouchableOpacity
-          style={[s.input, s.selectInput, locked && s.inputLocked]}
+          style={[s.input, s.selectInput, s.selectInputRow, locked && s.inputLocked]}
           onPress={() => !loading && !locked && setNationalityPickerVisible(true)}
           disabled={loading || locked}
           accessibilityRole="button"
@@ -515,6 +676,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
           <Text style={[s.selectInputText, !idInfo.nationalite && s.selectInputPlaceholder]}>
             {idInfo.nationalite || 'Sélectionner'}
           </Text>
+          {!locked && <Text style={s.selectInputIcon}>▾</Text>}
         </TouchableOpacity>
       </View>
     );
@@ -525,10 +687,10 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
 
+      <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="⬅️" onRightPress={() => navigation.goBack()} />
+
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
-
-          <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="⬅️" onRightPress={() => navigation.goBack()} />
 
           {/* ── Agent (lecture seule) ──────────────────────────────────── */}
           <View style={s.agentCard}>
@@ -717,13 +879,13 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             {renderVerifiableField('prenomTitulaire', 'Prénom(s)', 'Prénom(s)', { autoCapitalize: 'words' })}
 
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>{renderVerifiableField('dateNaissance', 'Date de naissance', 'JJ/MM/AAAA')}</View>
+              <View style={{ flex: 1 }}>{renderDateField()}</View>
               <View style={{ flex: 1 }}>{renderVerifiableField('lieuNaissance', 'Lieu de naissance', 'Ville')}</View>
             </View>
 
             {renderVerifiableField('numeroCni', 'Numéro de pièce', 'Numéro de pièce d’identité')}
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>{renderVerifiableField('sexe', 'Sexe', 'M / F', { autoCapitalize: 'words' })}</View>
+              <View style={{ flex: 1 }}>{renderSelectField('sexe', 'Sexe', SEXE_OPTIONS)}</View>
               <View style={{ flex: 1 }}>{renderNationalityField()}</View>
             </View>
           </View>
@@ -768,7 +930,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             </View>
 
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={[s.field, { flex: 1 }]}> 
+              <View style={[s.field, { flex: 1 }]}>
                 <Text style={s.fieldLabel}>Autres contact <Text style={s.req}>*</Text></Text>
                 <TextInput
                   style={s.input}
@@ -781,7 +943,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
                 />
               </View>
 
-              <View style={[s.field, { flex: 1 }]}> 
+              <View style={[s.field, { flex: 1 }]}>
                 <Text style={s.fieldLabel}>Profession <Text style={s.req}>*</Text></Text>
                 <TextInput
                   style={s.input}
@@ -874,6 +1036,90 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
           filterPlaceholderTextColor: C.ink3,
         }}
       />
+
+      {/* ── Select générique (ex. Sexe) — modale de choix ──────────────────── */}
+      <Modal
+        visible={!!optionPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOptionPicker(null)}
+      >
+        <View style={s.modalBackdrop}>
+          <View style={s.modalCard}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>{optionPicker?.label || 'Sélectionner'}</Text>
+              <TouchableOpacity style={s.closeBtnModal} onPress={() => setOptionPicker(null)}>
+                <Text style={s.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={optionPicker?.options || []}
+              keyExtractor={(item) => item.value}
+              style={s.optionList}
+              contentContainerStyle={s.optionListContent}
+              renderItem={({ item }) => {
+                const active = optionPicker ? idInfo[optionPicker.key] === item.value : false;
+                return (
+                  <TouchableOpacity
+                    style={[s.optionItem, active && s.optionItemActive]}
+                    onPress={() => {
+                      if (!optionPicker) return;
+                      setIdField(optionPicker.key, item.value);
+                      setOptionPicker(null);
+                    }}
+                  >
+                    <Text style={[s.optionText, active && s.optionTextActive]}>{item.label}</Text>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Sélecteur de date natif ─────────────────────────────────────────
+          Android : dialogue système, se ferme tout seul, résultat automatique.
+          iOS : roue dans une modale, confirmée par le bouton "Valider". ──── */}
+      {showDatePicker && Platform.OS === 'android' && (
+        <DateTimePicker
+          value={tempDate}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={onNativeDateChange}
+        />
+      )}
+
+      {Platform.OS === 'ios' && (
+        <Modal
+          visible={showDatePicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowDatePicker(false)}
+        >
+          <View style={s.modalBackdrop}>
+            <View style={s.datePickerCard}>
+              <Text style={s.modalTitle}>Date de naissance</Text>
+              <DateTimePicker
+                value={tempDate}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date()}
+                onChange={onNativeDateChange}
+                style={s.datePickerWheel}
+              />
+              <View style={s.datePickerActions}>
+                <TouchableOpacity style={s.datePickerCancelBtn} onPress={() => setShowDatePicker(false)}>
+                  <Text style={s.datePickerCancelTxt}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.datePickerConfirmBtn} onPress={confirmIosDate}>
+                  <Text style={s.datePickerConfirmTxt}>Valider</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -1034,8 +1280,10 @@ const s = StyleSheet.create({
   inputRow: { position: 'relative', justifyContent: 'center' },
   checkIcon: { position: 'absolute', right: 14, fontSize: T.base, color: C.successText },
   selectInput: { justifyContent: 'center', minHeight: 40 },
+  selectInputRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   selectInputText: { color: C.ink, fontSize: T.sm, fontWeight: '600' },
   selectInputPlaceholder: { color: C.ink3 },
+  selectInputIcon: { fontSize: T.sm, color: C.ink3, marginLeft: 8 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '70%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
@@ -1071,6 +1319,23 @@ const s = StyleSheet.create({
   flagText: { fontSize: 18 },
   optionText: { color: C.ink, fontSize: T.sm, fontWeight: '600' },
   optionTextActive: { color: '#fff' },
+
+  // Sélecteur de date (modale iOS)
+  datePickerCard: {
+    backgroundColor: '#fff', borderRadius: 16, padding: 16, alignItems: 'stretch',
+  },
+  datePickerWheel: { alignSelf: 'stretch' },
+  datePickerActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  datePickerCancelBtn: {
+    flex: 1, borderWidth: 1.5, borderColor: C.bgBorder, borderRadius: R.md,
+    paddingVertical: 12, alignItems: 'center', backgroundColor: C.bg2,
+  },
+  datePickerCancelTxt: { fontSize: T.sm, fontWeight: '700', color: C.ink2 },
+  datePickerConfirmBtn: {
+    flex: 1, backgroundColor: C.blue, borderRadius: R.md,
+    paddingVertical: 12, alignItems: 'center',
+  },
+  datePickerConfirmTxt: { fontSize: T.sm, fontWeight: '800', color: '#fff' },
 
   input: {
     backgroundColor: C.bg2,

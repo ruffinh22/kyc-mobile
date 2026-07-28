@@ -3,16 +3,45 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: .7rem;
+  align-items: start;
+}
+
+.agent-dossier-column {
+  display: grid;
+  gap: .6rem;
+  padding: .45rem;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.75), rgba(241,245,249,0.7));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.agent-dossier-column-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 0 .2rem .25rem;
 }
 
 .agent-dossier-card {
   background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
   border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 16px;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+
+.agent-dossier-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(250, 204, 21, 0.35);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
 }
 
 .agent-dossier-meta {
@@ -72,17 +101,26 @@
 
 .agent-actions-inline {
   display: flex;
-  gap: .35rem;
+  gap: .3rem;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .agent-actions-inline .btn,
 .agent-actions-inline button {
-  padding: .38rem .6rem;
-  min-height: 30px;
-  font-size: 12px;
-  border-radius: 10px;
+  padding: .34rem .56rem;
+  min-height: 28px;
+  font-size: 11px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+.agent-actions-inline .btn:hover,
+.agent-actions-inline button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.10);
 }
 
 .face-preview-card {
@@ -144,21 +182,22 @@
   display: inline-flex;
   align-items: center;
   gap: .4rem;
-  padding: .45rem .6rem;
+  padding: .42rem .58rem;
   border-radius: 999px;
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: #fff;
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   cursor: pointer;
-  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
 }
 
 .photo-action-chip:hover {
   transform: translateY(-1px);
   border-color: var(--mtn-yellow);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 6px 12px rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, #fffef2, #fff8d8);
 }
 
 .photo-chip-letter {

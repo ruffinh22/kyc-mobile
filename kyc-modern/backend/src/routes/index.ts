@@ -14,7 +14,6 @@ import { faceLivenessRoutes } from './face-liveness';
 import { livenessPageRoutes } from './liveness-page';
 import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
-import { videoSignalRoutes } from './video-signal';
 import { capturesRoutes } from './captures';
 
 export async function registerRoutes(app: any): Promise<void> {
@@ -37,6 +36,5 @@ export async function registerRoutes(app: any): Promise<void> {
   await app.register(livenessPageRoutes);
   await app.register(adminRoutes);
   await app.register(ocrRoutes);
-  await app.register(videoSignalRoutes);
   await app.register(capturesRoutes);
 }

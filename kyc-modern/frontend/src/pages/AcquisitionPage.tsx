@@ -1015,6 +1015,20 @@ export function AcquisitionPage() {
                       </Fld>
                       <Fld label="WhatsApp" req hint={paysConf ? `${paysConf.digitCount} chiffres, commence par ${paysConf.prefix}` : 'Sélectionnez d\'abord un pays'}>
                         <input value={formatWaInput(form.wa_agent)} onChange={e => { const digits = e.target.value.replace(/\D/g, '').slice(0, paysConf?.digitCount ?? 9); setForm(f => ({ ...f, wa_agent: digits })); }} type="tel" inputMode="numeric" placeholder={paysConf?.placeholder ?? '— sélectionnez un pays —'} disabled={!form.country} style={{ ...inpSt, fontFamily: 'monospace', fontSize: 20, fontWeight: 700, letterSpacing: 4, color: '#003087' }} />
+                        {(() => {
+                          const conf = paysConf;
+                          const digits = String(form.wa_agent || '').replace(/\D/g, '');
+                          if (!conf || !form.country) return null;
+                          if (digits.length === 0) return (
+                            <div style={{ marginTop: 8, fontSize: 12, color: '#94A3B8' }}>Renseignez le numéro WhatsApp de l'agent.</div>
+                          );
+                          if (digits.length !== conf.digitCount) return (
+                            <div style={{ marginTop: 8, fontSize: 13, color: '#DC2626', fontWeight: 700 }}>WhatsApp invalide — attendu {conf.digitCount} chiffres</div>
+                          );
+                          return (
+                            <div style={{ marginTop: 8, fontSize: 12, color: '#16A34A', fontWeight: 700 }}>Format WhatsApp OK</div>
+                          );
+                        })()}
                       </Fld>
                       <Fld label="Username" req><input value={form.username_agent} onChange={e => setForm(f => ({ ...f, username_agent: e.target.value }))} placeholder="ex : dav_centre" style={inpSt} /></Fld>
                       <Fld label="Fonction" req>

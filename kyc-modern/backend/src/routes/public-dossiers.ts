@@ -377,11 +377,18 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       }
     } catch { return reply.code(400).send({ error: 'Erreur lecture multipart' }); }
 
-    const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country,
-            nom_titulaire, prenom_titulaire, date_naissance, lieu_naissance,
-            autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
-            sexe, nationalite, profession } = fields;
-    const normalizedWaAgent = String(wa_agent ?? '').replace(/\D/g, '');
+        const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country,
+          nom_titulaire, prenom_titulaire, date_naissance, lieu_naissance,
+          autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
+          sexe, nationalite, profession } = fields;
+        const normalizedWaAgent = String(wa_agent ?? '').replace(/\D/g, '');
+
+        // Validation renforcée : exiger un numéro WhatsApp agent non vide.
+        // Minimal length 7 digits pour éviter les valeurs vides ou incorrectes.
+        if (!normalizedWaAgent || normalizedWaAgent.length < 7) {
+          req.log.warn(`public-dossiers — wa_agent manquant ou invalide: "${wa_agent ?? ''}"`);
+          return reply.code(400).send({ error: 'WhatsApp agent requis (wa_agent) — numéro invalide ou absent' });
+        }
     if (!numero_mtn?.trim()) return reply.code(400).send({ error: 'Numéro MTN requis' });
     if (!country?.trim())    return reply.code(400).send({ error: 'Pays requis' });
     if (!photos.photo_recto || !photos.photo_verso)
@@ -595,35 +602,6 @@ export async function publicDossierRoutes(app: any): Promise<void> {
   // ==========================================================================
   // GET /api/public/dossiers?wa_agent=
   // ==========================================================================
-  app.get('/api/admin/reporting', async (req: FastifyRequest, reply: any) => {
-    const q = req.query as Record<string, string>;
-    const { rows } = await db.getDossiers({
-      debut: q.debut ?? null,
-      fin: q.fin ?? null,
-      statut: q.statut ?? null,
-      agent: q.agent ?? null,
-      search: q.search ?? null,
-      limit: 5000,
-      offset: 0,
-    });
-    const dossiers = rows;
-    const stats = { total: dossiers.length, en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 };
-    for (const d of dossiers) {
-      if (d.statut in stats) (stats as Record<string, number>)[d.statut]++;
-    }
-    const byAgent = new Map<string, { agent: string; total: number; accepte: number; rejete: number; en_cours: number }>();
-    for (const d of dossiers) {
-      const agent = d.agent_saisie || d.username_agent || 'non_attribue';
-      if (!byAgent.has(agent)) byAgent.set(agent, { agent, total: 0, accepte: 0, rejete: 0, en_cours: 0 });
-      const item = byAgent.get(agent)!;
-      item.total++;
-      if (d.statut === 'accepte') item.accepte++;
-      else if (d.statut === 'rejete') item.rejete++;
-      else if (d.statut === 'en_cours') item.en_cours++;
-    }
-    return reply.send({ success: true, total: dossiers.length, count: dossiers.length, dossiers, stats, byAgent: Array.from(byAgent.values()).sort((a, b) => b.total - a.total) });
-  });
-
   app.get('/api/public/dossiers', async (req: FastifyRequest, reply: any) => {
     const q  = req.query as Record<string, string>;
     const wa = String(q.wa_agent ?? '').replace(/\D/g, '');

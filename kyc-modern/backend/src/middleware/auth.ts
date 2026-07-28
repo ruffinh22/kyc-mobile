@@ -8,7 +8,10 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
   const header = Array.isArray(authorization) ? authorization[0] ?? '' : authorization ?? '';
   let token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) {
-    token = (req.cookies as Record<string, string> | undefined)?.kyc_token ?? null;
+    // fastify-cookie adds `cookies` at runtime but the FastifyRequest
+    // type may not include it. Cast to `any` to avoid TS error while
+    // preserving runtime behavior.
+    token = ((req as any).cookies as Record<string, string> | undefined)?.kyc_token ?? null;
   }
   // Fallback for media requests or dev convenience: allow token in query string
   if (!token) {

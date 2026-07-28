@@ -181,7 +181,7 @@ export async function faceDetectRoutes(app: any): Promise<void> {
       return reply.send({
         success: true,
         sessionId,
-        redirectUrl: `/face-verify-interactive?${params.toString()}`
+        redirectUrl: `/liveness-check?${params.toString()}`
       });
     });
 

@@ -417,6 +417,58 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       photoPaths[label] = `${date}/${fname}`;
     }
 
+    const dossierId = String(fields.dossier_id ?? '').trim();
+    if (dossierId) {
+      const dossier = await db.getDossierById(dossierId);
+      if (!dossier) {
+        return reply.code(404).send({ error: `Dossier introuvable : ${dossierId}` });
+      }
+
+      await db.updateDossier(dossierId, {
+        numero_mtn: numero_mtn.trim().replace(/\D/g, ''),
+        country: country?.trim() || dossier.country || null,
+        wa_agent: normalizedWaAgent || dossier.wa_agent || null,
+        username_agent: username_agent || dossier.username_agent || null,
+        fonction_agent: fonction_agent || dossier.fonction_agent || null,
+        zone_agent: zone_agent || dossier.zone_agent || null,
+        nom_titulaire: nom_titulaire.trim(),
+        prenom_titulaire: prenom_titulaire.trim(),
+        date_naissance: date_naissance.trim(),
+        lieu_naissance: lieu_naissance.trim(),
+        autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || dossier.autre_numero || null,
+        nom_pere: nom_pere.trim(),
+        nom_mere: nom_mere.trim(),
+        adresse_complete: (adresse_complete ?? '').trim() || dossier.adresse_complete || null,
+        numero_cni: (numero_cni ?? '').trim() || dossier.numero_cni || null,
+        sexe: (sexe ?? '').trim() || dossier.sexe || null,
+        nationalite: (nationalite ?? '').trim() || dossier.nationalite || null,
+        profession: (profession ?? '').trim() || dossier.profession || null,
+        ocr_overrides: fields.ocr_overrides || dossier.ocr_overrides || null,
+        flow_step: 4,
+        acquisition_status: 'submitted',
+        statut: 'en_attente',
+        raison_rejet: null,
+        photo_recto: photoPaths.photo_recto,
+        photo_verso: photoPaths.photo_verso,
+        ...(photoPaths.photo_live ? { photo_live: photoPaths.photo_live } : {}),
+      });
+
+      db.audit(null, 'DOSSIER_PUBLIC_MIS_A_JOUR', `id=${dossierId} wa=${wa_agent ?? ''}`, req.ip);
+      return reply.code(200).send({
+        success: true,
+        id: dossierId,
+        ref: dossierId,
+        numero: numero_mtn.trim(),
+        recto_path: photoPaths.photo_recto ?? dossier.photo_recto ?? '',
+        verso_path: photoPaths.photo_verso ?? dossier.photo_verso ?? '',
+        photo_live: photoPaths.photo_live ?? dossier.photo_live ?? '',
+        country: country?.trim() || dossier.country || null,
+        flow_step: 4,
+        acquisition_status: 'submitted',
+        message: 'Dossier mis à jour et remis en attente.',
+      });
+    }
+
     await db.createDossier({
       ...buildDossierCreatePayload({
         id,

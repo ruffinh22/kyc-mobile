@@ -109,6 +109,26 @@ export async function getAdminReporting(p: { debut?: string; fin?: string; statu
 }
 export async function submitDossierPublic(formData: FormData) { return apiFetch<{ success: boolean; id: string; ref: string; numero: string }>('/api/public/dossiers', { method: 'POST', body: formData }); }
 
+// ── OCR CNI (AWS Textract) ───────────────────────────────────────────────────
+export async function extractRectoDataWithTextract(photoBlob: Blob, country: string): Promise<{
+  success: boolean;
+  nom?: string;
+  prenom?: string;
+  date_naissance?: string;
+  lieu_naissance?: string;
+  adresse_complete?: string;
+  numero_cni?: string;
+  sexe?: string;
+  nationalite?: string;
+  profession?: string;
+  error?: string;
+}> {
+  const fd = new FormData();
+  fd.append('photo_recto', photoBlob, 'recto.jpg');
+  fd.append('country', country);
+  return apiFetch('/api/ocr/id-card', { method: 'POST', body: fd });
+}
+
 // ── Face Verify (terrain public) ──────────────────────────────────────────────
 export async function verifyFaceRealtime(videoFrame: Blob, recto_path: string): Promise<{ success: boolean; score: number; match: boolean | null; motif: string; message: string }> {
   const fd = new FormData();

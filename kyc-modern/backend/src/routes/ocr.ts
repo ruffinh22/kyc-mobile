@@ -194,8 +194,18 @@ export async function ocrRoutes(app: any): Promise<void> {
         info: (payload: Record<string, unknown>, msg?: string) => void;
         error: (err: unknown, msg?: string) => void;
       };
+      
+      let errorMessage = 'Erreur OCR';
+      const errObj = err as Record<string, unknown> & { name?: string; message?: string; __type?: string };
+      
+      if (errObj.__type === 'SubscriptionRequiredException' || errObj.name === 'SubscriptionRequiredException') {
+        errorMessage = 'AWS Textract non disponible pour ce compte — utilisation du fallback local (Tesseract)';
+      } else if (errObj.message) {
+        errorMessage = errObj.message;
+      }
+      
       log.error(err, '[OCR] Textract a échoué');
-      return reply.send({ success: false, error: err instanceof Error ? err.message : 'Erreur OCR' });
+      return reply.send({ success: false, error: errorMessage });
     }
   });
 }

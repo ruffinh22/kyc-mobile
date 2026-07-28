@@ -70,7 +70,6 @@ const NAV: Record<Role, NavSection[]> = {
     {
       label: 'GSM · Gross Add',
       items: [
-        { key: 'gsm-saisie',     icon: '✍️',  label: 'Saisie GSM' },
         { key: 'gsm-tableau',    icon: '📈', label: 'Mon tableau' },
         { key: 'gsm-historique', icon: '🕓', label: 'Mon historique' },
         { key: 'gsm-perfs',      icon: '🏆', label: 'Mes performances' },

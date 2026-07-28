@@ -286,7 +286,19 @@ export async function faceVerifyRoutes(app: any): Promise<void> {
       if (v.expires_at < now) verifySessions.delete(k);
     }
 
-    return reply.send({ success: true, sessionId });
+    const params = new URLSearchParams({
+      session: sessionId,
+      recto: session.recto_path.trim(),
+      numero: session.numero_mtn.trim(),
+      wa: session.wa_agent.trim(),
+    });
+    if (!isBlank(session.verso_path)) params.set('verso', session.verso_path.trim());
+    if (!isBlank(session.username_agent)) params.set('username', session.username_agent.trim());
+    if (!isBlank(session.fonction_agent)) params.set('fonction', session.fonction_agent.trim());
+    if (!isBlank(session.zone_agent)) params.set('zone', session.zone_agent.trim());
+    if (!isBlank(session.country)) params.set('country', session.country.trim());
+
+    return reply.send({ success: true, sessionId, redirectUrl: `/liveness-check?${params.toString()}` });
   });
 
   // ==========================================================================

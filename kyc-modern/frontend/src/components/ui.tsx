@@ -37,6 +37,25 @@ export function Modal({ title, onClose, children, footer }: { title: string; onC
   );
 }
 
+export function SidePanel({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div className="side-panel-bg" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="side-panel">
+        <div className="side-panel-header">
+          <h3 className="side-panel-title">{title}</h3>
+          <button className="btn-icon" onClick={onClose}>✕</button>
+        </div>
+        <div className="side-panel-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 // ── Badges ─────────────────────────────────────────────────────────────────────
 const STATUT_LABELS: Record<DossierStatut, string> = { en_attente: 'En attente', en_cours: 'En cours', accepte: 'Accepté', rejete: 'Rejeté' };
 const STATUT_CLS:   Record<DossierStatut, string> = { en_attente: 'b-attente', en_cours: 'b-cours', accepte: 'b-accepte', rejete: 'b-rejete' };

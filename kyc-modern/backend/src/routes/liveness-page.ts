@@ -11,12 +11,14 @@ function htmlPage(title: string, message: string): string {
 
 export async function livenessPageRoutes(app: any): Promise<void> {
   app.get('/liveness-check', async (req: FastifyRequest, reply: FastifyReply) => {
-    const dossierId = String((req.query as any)?.dossierId ?? '').trim();
-    if (!dossierId) {
+    const q = req.query as any;
+    const dossierId = String(q?.dossierId ?? '').trim();
+    const sessionId = String(q?.session ?? '').trim();
+    if (!dossierId && !sessionId) {
       return reply
         .code(400)
         .type('text/html')
-        .send(htmlPage('Dossier manquant', '<p>Le paramètre <code>dossierId</code> est requis.</p>'));
+        .send(htmlPage('Dossier ou session manquant', '<p>Le paramètre <code>dossierId</code> ou <code>session</code> est requis.</p>'));
     }
 
     const indexPath = path.join(FRONTEND_DIST, 'index.html');
@@ -37,11 +39,24 @@ export async function livenessPageRoutes(app: any): Promise<void> {
           'Page Liveness indisponible',
           `<p>La page de vérification Face Liveness n'est pas disponible sur ce serveur.</p>
           <p>Pour tester localement, définis <code>FRONTEND_URL=http://10.0.2.2:5173</code> dans ton <code>.env</code> ou construis le frontend et sers le dossier de build.</p>
-          <p>Ensuite ouvre&nbsp;: <code>${host}</code>/liveness-check?dossierId=${encodeURIComponent(dossierId)}</p>`,
+          <p>Ensuite ouvre&nbsp;: <code>${host}</code>/liveness-check?dossierId=${encodeURIComponent(dossierId) || ''}${sessionId ? `&session=${encodeURIComponent(sessionId)}` : ''}</p>`,
         ));
     }
 
-    const target = `${FRONTEND_URL.replace(/\/$/, '')}/liveness-check?dossierId=${encodeURIComponent(dossierId)}`;
+    // Préserver la query string originale si une session est fournie (flow basé sur session),
+    // sinon rediriger avec dossierId.
+    const frontBase = FRONTEND_URL.replace(/\/$/, '');
+    if (sessionId) {
+      const rawUrl = ((req as any).raw && (req as any).raw.url) || '';
+      const qs = (rawUrl.split('?')[1]) || `session=${encodeURIComponent(sessionId)}`;
+      const target = `${frontBase}/liveness-check?${qs}`;
+      return reply
+        .code(302)
+        .header('Location', target)
+        .send('Redirecting');
+    }
+
+    const target = `${frontBase}/liveness-check?dossierId=${encodeURIComponent(dossierId)}`;
     return reply
       .code(302)
       .header('Location', target)

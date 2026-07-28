@@ -1,7 +1,7 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
-import { GsmRecord } from '../../types';
+import { Dossier, GsmRecord } from '../../types';
 import { Alert, LoadingCenter, EmptyState, StatCard, Modal } from '../../components/ui';
 
 // ── Mon Tableau GSM ────────────────────────────────────────────────────────────
@@ -48,28 +48,55 @@ export function GsmMonTableau() {
 // ── Saisie GSM ─────────────────────────────────────────────────────────────────
 const EMPTY_GSM = { numero:'', type_id:'', constat:'', piece:'', verbatim:'', action:'', statut_final:'', traitement:'', raison:'', nom_client:'', coach:'', date:'' };
 
-export function GsmSaisie() {
+interface GsmSaisieProps {
+  dossierId?: string;
+  defaultValues?: Partial<Record<keyof typeof EMPTY_GSM, string>>;
+  onComplete?: () => void;
+  onClose?: () => void;
+  compact?: boolean;
+}
+
+export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete, onClose, compact = false }: GsmSaisieProps) {
   const searchParams = new URLSearchParams(window.location.search);
-  const dossierId = searchParams.get('dossier') || localStorage.getItem('gsm_dossier_id') || '';
+  const dossierId = propDossierId ?? (searchParams.get('dossier') || localStorage.getItem('gsm_dossier_id') || '');
   const refs = useFetch(() => api.getReferentiels(), []);
   const R = refs.data?.referentiels ?? {};
-  const [f, setF] = useState({ ...EMPTY_GSM });
+  const today = todayISO();
+  const [f, setF] = useState({ ...EMPTY_GSM, date: today });
+  const [dossier, setDossier] = useState<Dossier | null>(null);
+  const [initialized, setInitialized] = useState(false);
   const [loading, setLoading] = useState(false); const [err, setErr] = useState<string|null>(null); const [success, setSuccess] = useState<string|null>(null);
   const [captures, setCaptures] = useState<{ a?: File; p?: File; aa?: File }>({});
   const [search, setSearch] = useState('');
   const [lastId, setLastId] = useState<number|null>(null);
-  const today = todayISO();
   const { data: listData, loading: listLoading, error: listError, refetch: refetchList } = useFetch(() => api.getGsmMesSaisies(today), [today]);
   const saisies = listData?.saisies ?? [];
   const filteredSaisies = saisies.filter(g => !search || [g.numero, g.constat, g.type_id, g.action, g.statut_final].filter(Boolean).join(' ').toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => {
-    if (dossierId) {
-      setF(x => ({ ...x, numero: x.numero || '' }));
-      // Nettoyer localStorage après lecture pour éviter les conflits
-      localStorage.removeItem('gsm_dossier_id');
+    if (dossierId && (!dossier || dossier.id !== dossierId)) {
+      api.getDossier(dossierId).then(result => setDossier(result.dossier)).catch(() => null);
     }
-  }, [dossierId]);
+  }, [dossierId, dossier]);
+
+  useEffect(() => {
+    if (initialized) return;
+    if (!dossier && !defaultValues) return;
+
+    const joinedNomClient = dossier ? `${dossier.nom_titulaire || ''} ${dossier.prenom_titulaire || ''}`.trim() : '';
+    const defaultPiece = dossier ? (dossier.photo_recto && dossier.photo_verso ? 'Recto/Verso' : dossier.photo_recto ? 'Recto' : dossier.photo_verso ? 'Verso' : '') : '';
+    setF(current => ({
+      ...current,
+      date: current.date || today,
+      numero: current.numero || defaultValues?.numero || dossier?.numero_mtn || '',
+      nom_client: current.nom_client || defaultValues?.nom_client || joinedNomClient,
+      action: current.action || defaultValues?.action || '',
+      raison: current.raison || defaultValues?.raison || dossier?.raison_rejet || dossier?.visage_motif || '',
+      piece: current.piece || defaultValues?.piece || defaultPiece,
+      ...defaultValues,
+    }));
+    setInitialized(true);
+  }, [initialized, dossier, defaultValues, today]);
 
   const chg = (k: string, v: string) => setF(x => ({ ...x, [k]: v }));
 
@@ -94,27 +121,38 @@ export function GsmSaisie() {
       setF({ ...EMPTY_GSM }); setCaptures({});
       refetchList();
       (e.target as HTMLFormElement).reset();
+      onComplete?.();
     } catch(e2) { setErr(e2 instanceof Error ? e2.message : 'Erreur'); }
     finally { setLoading(false); }
   };
 
-  const Sel = ({ k, label, opts, req }: { k: string; label: string; opts?: string[]; req?: boolean }) => (
-    <div className="field">
-      <label>{label}{req && <span className="req">*</span>}</label>
-      {opts?.length ? (
-        <select value={(f as Record<string,string>)[k]} onChange={e => chg(k, e.target.value)}>
-          <option value="">Sélectionner…</option>
-          {opts.map(o => <option key={o} value={o}>{o}</option>)}
-        </select>
-      ) : (
-        <input value={(f as Record<string,string>)[k]} onChange={e => chg(k, e.target.value)} placeholder={label} />
-      )}
-    </div>
-  );
+  const Sel = ({ k, label, opts, req }: { k: string; label: string; opts?: string[]; req?: boolean }) => {
+    const value = (f as Record<string,string>)[k] || '';
+    const customText = opts?.length && value && !opts.includes(value);
+    return (
+      <div className="field">
+        <label>{label}{req && <span className="req">*</span>}</label>
+        {opts?.length && !customText ? (
+          <select value={value} onChange={e => chg(k, e.target.value)}>
+            <option value="">Sélectionner…</option>
+            {opts.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        ) : (
+          <input value={value} onChange={e => chg(k, e.target.value)} placeholder={label} />
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
-      <div className="page-header"><div><h1 className="page-title">Saisie GSM / Gross Add</h1><p className="page-sub">Enregistrez une nouvelle saisie Gross Add liée au dossier traité.</p></div></div>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Saisie GSM / Gross Add</h1>
+          <p className="page-sub">Enregistrez une nouvelle saisie Gross Add liée au dossier traité.</p>
+        </div>
+        {onClose && <button className="btn btn-ghost btn-sm" onClick={onClose}>Fermer</button>}
+      </div>
       {dossierId && <Alert kind="info">Dossier lié : {dossierId}</Alert>}
       {err     && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
@@ -147,10 +185,10 @@ export function GsmSaisie() {
           <hr className="divider" />
           <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-3)' }}>Captures écran (optionnel)</p>
           <div className="form-row">
-            <div className="field"><label>Capture A</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, a: e.target.files?.[0] }))} /></div>
-            <div className="field"><label>Capture P</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, p: e.target.files?.[0] }))} /></div>
+            <div className="field"><label>Capture recto</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, a: e.target.files?.[0] }))} /></div>
+            <div className="field"><label>Capture verso</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, p: e.target.files?.[0] }))} /></div>
           </div>
-          <div className="field" style={{ maxWidth: 280 }}><label>Capture AA</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, aa: e.target.files?.[0] }))} /></div>
+          <div className="field" style={{ maxWidth: 280 }}><label>Capture pièce supplémentaire</label><input type="file" accept="image/*" onChange={e => setCaptures(x => ({ ...x, aa: e.target.files?.[0] }))} /></div>
           <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>{loading ? 'Enregistrement…' : 'Enregistrer la saisie'}</button>
         </form>
       </div>

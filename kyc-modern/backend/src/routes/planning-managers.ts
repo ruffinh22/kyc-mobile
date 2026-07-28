@@ -2,9 +2,8 @@
 // Planning Manager - KYC V4 (TypeScript)
 // Grille planning shift × jours pour l'équipe managers/TL
 // ============================================================================
-import { FastifyInstance, FastifyRequest } from 'fastify';
+import { FastifyRequest } from 'fastify';
 import * as db from '../db';
-import { query, exec } from '../db';
 
 // Types
 interface PlanningShift {
@@ -70,12 +69,7 @@ export async function planningManagersRoutes(app: any): Promise<void> {
       const dataStr = JSON.stringify({ titre, shifts: clean });
 
       try {
-        await exec(
-          `INSERT INTO planning_managers (semaine, titre, data, updated_at) 
-           VALUES (?, ?, ?, UNIX_TIMESTAMP()) 
-           ON DUPLICATE KEY UPDATE titre=VALUES(titre), data=VALUES(data), updated_at=UNIX_TIMESTAMP()`,
-          [semaine, titre, dataStr]
-        );
+        await db.upsertPlanningManager(semaine, titre, dataStr);
 
         fastify.log.info(`[PLANNING-MANAGERS] ${matricule} saved planning for ${semaine} (${clean.length} shifts)`);
 
@@ -96,9 +90,7 @@ export async function planningManagersRoutes(app: any): Promise<void> {
       }
 
       try {
-        const rows = await query('SELECT semaine, titre, data, updated_at FROM planning_managers WHERE semaine = ?', [semaine]);
-        const row = rows[0] as { semaine: string; titre: string; data: string; updated_at: number } | undefined;
-
+        const row = await db.getPlanningManager(semaine);
         if (!row) {
           return reply.send({ success: true, semaine, titre: '', shifts: null });
         }
@@ -126,9 +118,8 @@ export async function planningManagersRoutes(app: any): Promise<void> {
     // GET /api/planning-managers/semaines - Liste des semaines enregistrées
     fastify.get('/api/planning-managers/semaines', async (request: FastifyRequest, reply) => {
       try {
-        const rows = await query('SELECT semaine, titre, updated_at FROM planning_managers ORDER BY semaine DESC LIMIT 200') as { semaine: string; titre: string; updated_at: number }[];
-
-        return reply.send({ success: true, count: rows.length, semaines: rows });
+        const semaines = await db.listPlanningManagerSemaines();
+        return reply.send({ success: true, count: semaines.length, semaines });
       } catch (err) {
         fastify.log.error('GET planning-managers/semaines error: ' + (err as Error).message);
         return reply.code(500).send({ error: 'Erreur serveur' });

@@ -42,6 +42,12 @@ interface DossierTerrain {
   id: string; numero_mtn: string; statut: string; date: string;
   heure_reception: string | null; heure_cloture: string | null; raison_rejet: string | null;
   score_visage?: number | null; visage_match?: number | null; visage_motif?: string | null;
+  nom_titulaire?: string | null; prenom_titulaire?: string | null;
+  date_naissance?: string | null; lieu_naissance?: string | null;
+  adresse_complete?: string | null; numero_cni?: string | null;
+  sexe?: string | null; nationalite?: string | null; profession?: string | null;
+  autre_numero?: string | null; country?: string | null;
+  nom_pere?: string | null; nom_mere?: string | null;
 }
 
 type Tab = 'form' | 'dash';
@@ -57,7 +63,7 @@ type OcrStatus = 'idle' | 'running' | 'done' | 'error';
 // ── Analyse qualité photo ──────────────────────────────────────────────────────
 
 function analyzeQuality(canvas: HTMLCanvasElement): QualityResult {
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return { ok: false, cls: 'bad', label: '⚠ Erreur analyse' };
   const { width: w, height: h } = canvas;
   const data = ctx.getImageData(0, 0, w, h).data;
@@ -389,18 +395,94 @@ function preprocessForOcr(imageDataUrl: string): Promise<{ imageDataUrl: string;
   });
 }
 
-async function extractRectoText(imageDataUrl: string, onProgress: (progress: number, status: OcrStatus) => void) {
+async function extractRectoText(imageBlob: Blob | string, country: string, onProgress: (progress: number, status: OcrStatus) => void) {
+  try {
+    onProgress(10, 'running');
+    
+    // Convertir dataUrl en Blob si nécessaire
+    let blob: Blob;
+    if (typeof imageBlob === 'string') {
+      const response = await fetch(imageBlob);
+      blob = await response.blob();
+    } else {
+      blob = imageBlob;
+    }
+
+    onProgress(30, 'running');
+    
+    try {
+      // Essayer AWS Textract en premier
+      const api = await import('../services/api');
+      const result = await api.extractRectoDataWithTextract(blob, country);
+
+      if (!result.success) {
+        console.warn('Textract échoué, fallback sur Tesseract:', result.error);
+        throw new Error(result.error || 'Textract failed');
+      }
+
+      onProgress(80, 'running');
+
+      // Construire le texte brut à partir des données extraites
+      const rawLines: string[] = [];
+      if (result.numero_cni) rawLines.push(`CNI: ${result.numero_cni}`);
+      if (result.nom) rawLines.push(`NOM: ${result.nom}`);
+      if (result.prenom) rawLines.push(`PRENOM: ${result.prenom}`);
+      if (result.sexe) rawLines.push(`SEXE: ${result.sexe}`);
+      if (result.date_naissance) rawLines.push(`NÉ LE: ${result.date_naissance}`);
+      if (result.lieu_naissance) rawLines.push(`À: ${result.lieu_naissance}`);
+      if (result.nationalite) rawLines.push(`NATIONALITÉ: ${result.nationalite}`);
+      if (result.profession) rawLines.push(`PROFESSION: ${result.profession}`);
+      if (result.adresse_complete) rawLines.push(`ADRESSE: ${result.adresse_complete}`);
+
+      const rawText = rawLines.join('\n');
+      const displayText = rawLines
+        .filter(l => !/(CNI:|ADRESSE:)/i.test(l)) // Filtrer les lignes moins importantes
+        .slice(0, 4)
+        .join('\n');
+
+      onProgress(100, 'done');
+
+      return {
+        text: displayText,
+        raw: rawText,
+        status: 'done' as OcrStatus,
+        progress: 100,
+      };
+    } catch (textractErr) {
+      // AWS Textract a échoué, fallback sur Tesseract.js (OCR local)
+      console.warn('AWS Textract échoué, utilisation de Tesseract.js en local:', textractErr);
+      onProgress(50, 'running');
+      return await extractRectoTextWithTesseract(imageBlob, onProgress);
+    }
+  } catch (err) {
+    console.error('OCR impossible', err);
+    return { text: '', raw: '', status: 'error' as OcrStatus, progress: 0 };
+  }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Échec conversion Blob en DataURL'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function extractRectoTextWithTesseract(imageData: string | Blob, onProgress: (progress: number, status: OcrStatus) => void) {
+  const imageDataUrl = typeof imageData === 'string' ? imageData : await blobToDataUrl(imageData);
   const worker = await createWorker('eng+fra', OEM.LSTM_ONLY, {
     logger: (m) => {
-      if (m.status === 'loading language data') onProgress(8, 'running');
-      else if (m.status === 'initializing tesseract') onProgress(15, 'running');
+      if (m.status === 'loading language data') onProgress(50, 'running');
+      else if (m.status === 'initializing tesseract') onProgress(60, 'running');
       else if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-        onProgress(Math.max(20, Math.min(95, Math.round(m.progress * 100))), 'running');
+        onProgress(Math.max(65, Math.min(95, Math.round(50 + m.progress * 45))), 'running');
       }
     },
   });
   try {
     await worker.load();
+    // Initialiser les paramètres une seule fois (tessedit_ocr_engine_mode ne peut être changé qu'une fois)
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.AUTO,
       preserve_interword_spaces: '1',
@@ -418,37 +500,24 @@ async function extractRectoText(imageDataUrl: string, onProgress: (progress: num
     let bestScore = -1;
     let bestRaw = '';
     for (const attempt of attempts) {
+      // Changer SEULEMENT tessedit_pageseg_mode dans la boucle
       await worker.setParameters({
         tessedit_pageseg_mode: attempt.pageseg,
-        preserve_interword_spaces: '1',
-        tessedit_ocr_engine_mode: '1',
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÆŒ0123456789/.-,()\' ',
       });
-      // [FIX-4e] "rotateAuto" retiré : option non reconnue par
-      // Tesseract.recognize() dans tesseract.js, silencieusement ignorée.
       const { data } = await worker.recognize(preparedImage.imageDataUrl, {
         rectangle: preparedImage.rectangle,
       });
       const rawText = data?.text ?? '';
       const text = normalizeOcrText(rawText);
       const score = scoreCandidateText(text);
-      // On garde le texte BRUT du meilleur essai (score le plus élevé sur le
-      // texte normalisé), pour que l'extraction de champs structurés parte
-      // toujours de la version la plus fiable de l'OCR.
       if (rawText && score > bestScore) {
         bestText = text;
         bestScore = score;
         bestRaw = rawText;
       }
-      // Filet de sécurité : si aucun essai ne produit de texte normalisé
-      // exploitable, on garde quand même le premier texte brut non vide.
       if (!bestRaw && rawText) bestRaw = rawText;
     }
 
-    // [FIX-4c] Extraction ciblée du numéro de CNI par motif regex sur le
-    // texte BRUT (avant filtrage), car normalizeOcrText peut exclure la
-    // ligne du numéro si elle ne correspond pas aux heuristiques de "nom
-    // propre". On l'ajoute au texte affiché s'il n'y figure pas déjà.
     const numeroCorrige = corrigerNumeroCni(bestRaw);
     let finalText = bestText;
     if (numeroCorrige) {
@@ -463,6 +532,8 @@ async function extractRectoText(imageDataUrl: string, onProgress: (progress: num
       }
     }
 
+    onProgress(100, 'done');
+
     return {
       text: finalText,
       raw: bestRaw,
@@ -470,7 +541,7 @@ async function extractRectoText(imageDataUrl: string, onProgress: (progress: num
       progress: 100,
     };
   } catch (err) {
-    console.error('OCR recto impossible', err);
+    console.error('OCR Tesseract impossible', err);
     return { text: '', raw: '', status: 'error' as OcrStatus, progress: 0 };
   } finally {
     await worker.terminate();
@@ -484,7 +555,7 @@ export function AcquisitionPage() {
   const [agent, setAgent]       = useState<AgentInfo | null>(null);
   const [editAgent, setEditAgent] = useState(false);
   const [form, setForm]         = useState({
-    wa_agent: '', username_agent: '', fonction_agent: '',
+    dossier_id: '', wa_agent: '', username_agent: '', fonction_agent: '',
     zone_agent: '', numero_mtn: '', country: '',
     nom_titulaire: '', prenom_titulaire: '', date_naissance: '', lieu_naissance: '',
     autre_numero: '', nom_pere: '', nom_mere: '', adresse_complete: '', numero_cni: '',
@@ -535,6 +606,36 @@ export function AcquisitionPage() {
       }
     } catch { /* ignore */ }
   }, []);
+
+  // ── Détection dynamique des caméras (hot-plug/unplug) ────────────────────────
+  useEffect(() => {
+    const handleDeviceChange = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const vids = devices.filter(d => d.kind === 'videoinput');
+        setCameras(vids);
+        
+        // Si la caméra actuelle n'existe plus, sélectionner la première disponible
+        if (selectedCam && !vids.find(d => d.deviceId === selectedCam)) {
+          if (vids.length > 0) {
+            const back = vids.find(d => /back|rear|environ|arrière|usb|webcam/i.test(d.label));
+            setSelectedCam((back ?? vids[0]).deviceId);
+          } else {
+            setSelectedCam('');
+          }
+        }
+      } catch (e) {
+        console.warn('Erreur lors de la détection des périphériques:', e);
+      }
+    };
+
+    if (navigator.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      };
+    }
+  }, [selectedCam]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -593,17 +694,61 @@ export function AcquisitionPage() {
   const startCamera = useCallback(async (deviceId?: string, facing?: 'environment' | 'user') => {
     stopCamera();
     if (!navigator.mediaDevices?.getUserMedia) {
-      setErreur('Caméra non supportée par ce navigateur.');
+      setErreur('Caméra non supportée par ce navigateur. Utilisez Chrome, Firefox ou Safari.');
       setCamOpen(false); return;
     }
     try {
+      // D'abord demander les permissions avec un stream temporaire pour que enumerateDevices() puisse détecter les caméras
+      let tempStream: MediaStream | null = null;
+      try {
+        tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        // Arrêter immédiatement le stream temporaire après avoir obtenu les permissions
+        tempStream.getTracks().forEach(t => t.stop());
+        tempStream = null;
+      } catch (e) {
+        // Si l'utilisateur refuse les permissions, on ne peut pas continuer
+        const err = e as { name?: string; message?: string };
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setErreur('Accès caméra refusé. Veuillez autoriser l\'accès dans les paramètres du navigateur et recharger la page.');
+          setCamOpen(false); return;
+        }
+        throw e;
+      }
+
+      // Maintenant que les permissions sont accordées, énumérer les caméras disponibles
+      let devices: MediaDeviceInfo[] = [];
+      try {
+        devices = await navigator.mediaDevices.enumerateDevices();
+        const vids = devices.filter(d => d.kind === 'videoinput');
+        setCameras(vids);
+        if (vids.length === 0) {
+          setErreur('Aucune caméra détectée sur cet appareil. Branchez une caméra et réessayez.');
+          setCamOpen(false); return;
+        }
+      } catch (e) {
+        console.warn('Impossible d\'énumérer les périphériques:', e);
+      }
+
       const deviceToUse = deviceId || selectedCam || undefined;
       const constraints: MediaStreamConstraints = deviceToUse
         ? { video: { deviceId: { exact: deviceToUse } } }
         : { video: { facingMode: facing ?? 'environment' } };
       let stream: MediaStream;
-      try { stream = await navigator.mediaDevices.getUserMedia(constraints); }
-      catch { stream = await navigator.mediaDevices.getUserMedia({ video: true }); }
+      
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e) {
+        // Si la caméra spécifiée n'est pas disponible, essayer avec une autre
+        console.warn('Caméra spécifiée non disponible, tentative avec fallback:', e);
+        const vids = cameras.length > 0 ? cameras : (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+        if (vids.length > 0) {
+          const fallbackCam = vids.find(d => d.deviceId !== deviceToUse) || vids[0];
+          stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: fallbackCam.deviceId } } });
+          setSelectedCam(fallbackCam.deviceId);
+        } else {
+          throw e;
+        }
+      }
 
       streamRef.current = stream;
       if (videoRef.current) {
@@ -612,15 +757,11 @@ export function AcquisitionPage() {
         videoRef.current.play();
       }
 
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const vids = devices.filter(d => d.kind === 'videoinput');
-        setCameras(vids);
-        if (!deviceToUse && vids.length > 0) {
-          const back = vids.find(d => /back|rear|environ|arrière|usb|webcam/i.test(d.label));
-          setSelectedCam((back ?? vids[0]).deviceId);
-        }
-      } catch { /* ignore */ }
+      // Sélectionner la caméra par défaut si non spécifiée
+      if (!deviceToUse && cameras.length > 0) {
+        const back = cameras.find(d => /back|rear|environ|arrière|usb|webcam/i.test(d.label));
+        setSelectedCam((back ?? cameras[0]).deviceId);
+      }
 
       if (qualityTimerRef.current) clearInterval(qualityTimerRef.current);
       qualityTimerRef.current = setInterval(() => {
@@ -628,7 +769,7 @@ export function AcquisitionPage() {
         const cvs = canvasRef.current;
         if (!vid || !cvs || !vid.videoWidth) return;
         cvs.width = 320; cvs.height = 240;
-        const ctx = cvs.getContext('2d')!;
+        const ctx = cvs.getContext('2d', { willReadFrequently: true })!;
         const vw = vid.videoWidth, vh = vid.videoHeight;
         const cropW = Math.min(vw * 0.9, vh * (85 / 54));
         const cropH = cropW * (54 / 85);
@@ -640,13 +781,20 @@ export function AcquisitionPage() {
 
     } catch (e: unknown) {
       setCamOpen(false);
-      const err = e as { name?: string };
-      if (err.name === 'NotAllowedError')       setErreur('Accès caméra refusé. Autorisez l\'accès dans les paramètres.');
-      else if (err.name === 'NotFoundError')    setErreur('Caméra introuvable.');
-      else if (err.name === 'NotReadableError') setErreur('La caméra est utilisée par une autre application.');
-      else setErreur('Impossible d\'accéder à la caméra : ' + (err.name ?? 'erreur inconnue'));
+      const err = e as { name?: string; message?: string };
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setErreur('Accès caméra refusé. Veuillez autoriser l\'accès dans les paramètres du navigateur et recharger la page.');
+      } else if (err.name === 'NotFoundError') {
+        setErreur('Caméra introuvable. Vérifiez qu\'une caméra est connectée et activée.');
+      } else if (err.name === 'NotReadableError') {
+        setErreur('La caméra est déjà utilisée par une autre application. Fermez les autres applications et réessayez.');
+      } else if (err.name === 'OverconstrainedError') {
+        setErreur('Contraintes caméra non supportées. Essayez avec une autre caméra.');
+      } else {
+        setErreur('Erreur caméra: ' + (err.message || err.name || 'erreur inconnue'));
+      }
     }
-  }, [selectedCam, stopCamera]);
+  }, [selectedCam, stopCamera, cameras]);
 
   const ouvrirCamera = useCallback(async (type: 'recto' | 'verso') => {
     setCamType(type); setCamOpen(true); setErreur('');
@@ -702,7 +850,7 @@ export function AcquisitionPage() {
 
     if (t === 'recto') {
       void (async () => {
-        const result = await extractRectoText(dataUrl, (progress, status) => {
+        const result = await extractRectoText(blob, form.country, (progress, status) => {
           setPreview(prev => prev && prev.type === 'recto' ? { ...prev, ocrStatus: status, ocrProgress: progress } : prev);
         });
         setPreview(prev => prev && prev.type === 'recto' ? {
@@ -817,6 +965,7 @@ export function AcquisitionPage() {
       fd.append('fonction_agent', form.fonction_agent);
       fd.append('zone_agent',     form.zone_agent);
       for (const [key, value] of Object.entries({
+        dossier_id: form.dossier_id,
         nom_titulaire: form.nom_titulaire,
         prenom_titulaire: form.prenom_titulaire,
         date_naissance: form.date_naissance,
@@ -935,6 +1084,32 @@ export function AcquisitionPage() {
     return { color: '#DC2626', background: 'rgba(220, 38, 38, 0.12)', border: '1px solid rgba(220, 38, 38, 0.24)' };
   };
 
+  const reprendreDossier = (dossier: DossierTerrain) => {
+    setForm(f => ({
+      ...f,
+      dossier_id: dossier.id,
+      numero_mtn: dossier.numero_mtn || f.numero_mtn,
+      nom_titulaire: dossier.nom_titulaire ?? f.nom_titulaire,
+      prenom_titulaire: dossier.prenom_titulaire ?? f.prenom_titulaire,
+      date_naissance: dossier.date_naissance ?? f.date_naissance,
+      lieu_naissance: dossier.lieu_naissance ?? f.lieu_naissance,
+      nom_pere: dossier.nom_pere ?? f.nom_pere,
+      nom_mere: dossier.nom_mere ?? f.nom_mere,
+      adresse_complete: dossier.adresse_complete ?? f.adresse_complete,
+      numero_cni: dossier.numero_cni ?? f.numero_cni,
+      sexe: dossier.sexe ?? f.sexe,
+      nationalite: dossier.nationalite ?? f.nationalite,
+      profession: dossier.profession ?? f.profession,
+      autre_numero: dossier.autre_numero ?? f.autre_numero,
+      ocr_overrides: '',
+      country: dossier.country ?? f.country,
+    }));
+    setPhotos({ recto: null, verso: null });
+    setSuccess(null);
+    setErreur('');
+    setTab('form');
+  };
+
   // ── Rendu ──────────────────────────────────────────────────────────────────
   return (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", background: '#F0F4FA', minHeight: '100vh', WebkitFontSmoothing: 'antialiased', color: '#0F172A' }}>
@@ -979,7 +1154,7 @@ export function AcquisitionPage() {
                   <br /><br />
                   Vous serez notifié sur WhatsApp <strong style={{ fontFamily: 'monospace', color: '#003087' }}>{form.wa_agent}</strong>.
                 </div>
-                <button onClick={() => { setSuccess(null); setPhotos({ recto: null, verso: null }); setForm(f => ({ ...f, numero_mtn: '' })); }} style={{ marginTop: 24, background: 'linear-gradient(135deg,#FFCC00,#E6B800)', color: '#003087', fontWeight: 700, border: 'none', borderRadius: 10, padding: '13px 28px', cursor: 'pointer', fontSize: 14 }}>
+                <button onClick={() => { setSuccess(null); setPhotos({ recto: null, verso: null }); setForm(f => ({ ...f, dossier_id: '', numero_mtn: '' })); }} style={{ marginTop: 24, background: 'linear-gradient(135deg,#FFCC00,#E6B800)', color: '#003087', fontWeight: 700, border: 'none', borderRadius: 10, padding: '13px 28px', cursor: 'pointer', fontSize: 14 }}>
                   + Nouveau dossier
                 </button>
               </div>
@@ -1063,10 +1238,39 @@ export function AcquisitionPage() {
                   </Fld>
                 </Card>
 
+                {/* Photos CNI */}
+                <SectionLabel label="Documents" />
+                <Card>
+                  <StepHeader num="03" title="Photos CNI" sub="Recto et verso" />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+                    {(['recto', 'verso'] as const).map(type => (
+                      <div key={type} onClick={() => ouvrirCamera(type)} style={{ aspectRatio: '85/54', borderRadius: 12, overflow: 'hidden', position: 'relative', background: photos[type] ? 'transparent' : '#EDF1F8', border: `2px ${photos[type] ? 'solid #16A34A' : photoErr[type] ? 'solid #DC2626' : 'dashed rgba(0,48,135,.25)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        {photos[type] ? (
+                          <>
+                            <img src={photos[type]!.preview} alt={type} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                            <span style={{ position: 'absolute', top: 6, right: 6, background: '#16A34A', color: '#fff', fontSize: 9, fontWeight: 800, borderRadius: 99, padding: '2px 8px' }}>✓ OK</span>
+                            <span style={{ position: 'absolute', bottom: 6, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,.55)', color: '#fff', fontSize: 10, fontWeight: 600, borderRadius: 99, padding: '3px 10px', whiteSpace: 'nowrap' }}>↺ Reprendre</span>
+                          </>
+                        ) : (
+                          <>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#003087" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: '#6B7A99', textAlign: 'center', textTransform: 'uppercase', letterSpacing: .8 }}>{type === 'recto' ? 'RECTO CNI' : 'VERSO CNI'}<br /><span style={{ fontWeight: 400, fontSize: 9, opacity: .5, textTransform: 'none', letterSpacing: 0 }}>Appuyer</span></span>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>Photos ajoutées</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#003087', fontFamily: 'monospace' }}>{nbPhotos()}/2</span>
+                  </div>
+                </Card>
+
                 {/* Informations titulaire */}
                 <SectionLabel label="Identité du client" />
                 <Card>
-                  <StepHeader num="03" title="Titulaire" sub="Informations obligatoires" />
+                  <StepHeader num="04" title="Titulaire" sub="Informations obligatoires" />
                   <Fld label="Nom titulaire" req>
                     <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder="Nom du titulaire" style={inpSt} />
                   </Fld>
@@ -1107,35 +1311,6 @@ export function AcquisitionPage() {
                   <Fld label="Autre numéro">
                     <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder="Autre numéro" style={inpSt} />
                   </Fld>
-                </Card>
-
-                {/* Photos CNI */}
-                <SectionLabel label="Documents" />
-                <Card>
-                  <StepHeader num="04" title="Photos CNI" sub="Recto et verso" />
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-                    {(['recto', 'verso'] as const).map(type => (
-                      <div key={type} onClick={() => ouvrirCamera(type)} style={{ aspectRatio: '85/54', borderRadius: 12, overflow: 'hidden', position: 'relative', background: photos[type] ? 'transparent' : '#EDF1F8', border: `2px ${photos[type] ? 'solid #16A34A' : photoErr[type] ? 'solid #DC2626' : 'dashed rgba(0,48,135,.25)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                        {photos[type] ? (
-                          <>
-                            <img src={photos[type]!.preview} alt={type} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-                            <span style={{ position: 'absolute', top: 6, right: 6, background: '#16A34A', color: '#fff', fontSize: 9, fontWeight: 800, borderRadius: 99, padding: '2px 8px' }}>✓ OK</span>
-                            <span style={{ position: 'absolute', bottom: 6, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,.55)', color: '#fff', fontSize: 10, fontWeight: 600, borderRadius: 99, padding: '3px 10px', whiteSpace: 'nowrap' }}>↺ Reprendre</span>
-                          </>
-                        ) : (
-                          <>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#003087" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: '#6B7A99', textAlign: 'center', textTransform: 'uppercase', letterSpacing: .8 }}>{type === 'recto' ? 'RECTO CNI' : 'VERSO CNI'}<br /><span style={{ fontWeight: 400, fontSize: 9, opacity: .5, textTransform: 'none', letterSpacing: 0 }}>Appuyer</span></span>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: '#475569' }}>Photos ajoutées</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#003087', fontFamily: 'monospace' }}>{nbPhotos()}/2</span>
-                  </div>
                   <div style={{ height: 5, background: '#EDF1F8', borderRadius: 99, overflow: 'hidden' }}>
                     <div style={{ height: '100%', background: 'linear-gradient(90deg,#003087,#0057A8)', borderRadius: 99, width: `${pct()}%`, transition: 'width .3s' }} />
                   </div>
@@ -1214,6 +1389,11 @@ export function AcquisitionPage() {
                         </span>
                       </div>
                       {d.statut === 'rejete' && d.raison_rejet && <div style={{ fontSize: 11, color: '#DC2626', marginTop: 5 }}>✗ {d.raison_rejet}</div>}
+                      {d.statut === 'rejete' && (
+                        <button onClick={() => reprendreDossier(d)} style={{ marginTop: 12, width: '100%', background: '#003087', border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, borderRadius: 10, padding: '10px 12px', cursor: 'pointer' }}>
+                          ↺ Reprendre
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

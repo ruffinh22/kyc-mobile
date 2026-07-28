@@ -527,11 +527,10 @@ export async function getPlanningManager(semaine: string): Promise<PlanningManag
   );
 }
 
-export async function listPlanningManagerSemaines(): Promise<string[]> {
-  const rows = await query<RowDataPacket>(
-    'SELECT semaine FROM planning_managers ORDER BY semaine DESC LIMIT 52'
-  );
-  return rows.map(r => r['semaine'] as string);
+export async function listPlanningManagerSemaines(): Promise<Array<{ semaine: string; titre: string; updated_at: number }>> {
+  return query<RowDataPacket>(
+    'SELECT semaine, titre, updated_at FROM planning_managers ORDER BY semaine DESC LIMIT 200'
+  ) as Promise<Array<{ semaine: string; titre: string; updated_at: number }>>;
 }
 
 export async function upsertPlanningManager(semaine: string, titre: string, data: string): Promise<void> {

@@ -13,6 +13,8 @@ export interface Dossier {
   liveness_status: string | null; liveness_confidence: number | null; liveness_verifie_le: number | null;
   agent_saisie: string | null; heure_prise: string | null; heure_cloture: string | null;
   raison_rejet: string | null; resultat_crm: string | null;
+  nom_titulaire?: string | null; prenom_titulaire?: string | null;
+  numero_cni?: string | null; nom_pere?: string | null; nom_mere?: string | null;
   note: string | null; note_superviseur: string | null;
   gsm_complete: number; transfert_message: string | null; transfert_par: string | null;
   created_at: number; closed_at: number | null; assigne_le: number | null;

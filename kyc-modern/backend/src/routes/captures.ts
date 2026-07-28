@@ -27,7 +27,7 @@ function resolveSafePath(relativePath: string): string | null {
 }
 
 function sanitizeLimit(limit: number | undefined, fallback = 100, max = 500): number {
-  const parsed = Number.isFinite(limit) ? Math.floor(limit) : fallback;
+  const parsed = typeof limit === 'number' && Number.isFinite(limit) ? Math.floor(limit) : fallback;
   if (parsed <= 0) return fallback;
   return Math.min(parsed, max);
 }

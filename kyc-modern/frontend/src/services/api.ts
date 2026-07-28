@@ -117,6 +117,19 @@ export async function verifyFaceRealtime(videoFrame: Blob, recto_path: string): 
   return apiFetch('/api/dossiers/verify-face-realtime', { method: 'POST', body: fd });
 }
 
+// OCR via backend (AWS Textract) — POST multipart to /api/ocr/id-card
+export async function extractRectoDataWithTextract(photo_recto: Blob, country: string) {
+  const fd = new FormData();
+  fd.append('country', country);
+  fd.append('photo_recto', photo_recto, 'recto.jpg');
+  return apiFetch<{
+    success: boolean;
+    nom?: string; prenom?: string; date_naissance?: string; lieu_naissance?: string;
+    adresse_complete?: string; numero_cni?: string; sexe?: string; nationalite?: string; profession?: string;
+    error?: string;
+  }>('/api/ocr/id-card', { method: 'POST', body: fd });
+}
+
 export async function completeWithFaceVerify(formData: FormData): Promise<{
   success: boolean; id: string; numero: string;
   score_visage: number | null; visage_motif: string; message: string;

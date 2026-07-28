@@ -863,7 +863,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         }
 
         if (msg.type === 'call' && role === 'backoffice' && numero) {
-          const target = normalizeNumero(msg.numero);
+          const target = normalizeNumero(msg.numero || numero);
           const targetSocket = terrainSockets.get(target);
           const numeroMtn = String(msg.numeroMtn ?? '');
           const callUuid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -885,6 +885,34 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           }, CALL_RING_TIMEOUT_MS);
 
           pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer });
+          return;
+        }
+
+        if (msg.type === 'refus' && role === 'terrain' && numero) {
+          const target = normalizeNumero(msg.numero || numero);
+          const boSocket = backofficeSockets.get(target);
+          clearPendingCall(target);
+          if (boSocket) {
+            sendSocketPayload(boSocket, { type: 'refus', numero: target });
+          }
+          return;
+        }
+
+        if (msg.type === 'hangup' && role && numero) {
+          const target = normalizeNumero(msg.numero || numero);
+          if (role === 'backoffice') {
+            const targetSocket = terrainSockets.get(target);
+            clearPendingCall(target);
+            if (targetSocket) {
+              sendSocketPayload(targetSocket, { type: 'hangup', numero: target });
+            }
+          } else if (role === 'terrain') {
+            const boSocket = backofficeSockets.get(target);
+            clearPendingCall(target);
+            if (boSocket) {
+              sendSocketPayload(boSocket, { type: 'hangup', numero: target });
+            }
+          }
           return;
         }
 
@@ -944,17 +972,18 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
         if (msg.type === 'webrtc' && role && numero) {
           const payload = msg.payload as { kind?: string } | undefined;
-          console.log('[SIGNAL] relay webrtc', { role, numero, kind: payload?.kind, hasPayload: Boolean(msg.payload) });
-          clearPendingCall(numero);
+          const targetNumero = normalizeNumero((msg as any).numero || numero);
+          console.log('[SIGNAL] relay webrtc', { role, numero, targetNumero, kind: payload?.kind, hasPayload: Boolean(msg.payload) });
+          clearPendingCall(targetNumero);
           if (role === 'terrain') {
-            const boSocket = backofficeSockets.get(numero);
+            const boSocket = backofficeSockets.get(targetNumero);
             if (boSocket) {
-              try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero })); } catch { /* fermé */ }
+              try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: targetNumero })); } catch { /* fermé */ }
             }
           } else if (role === 'backoffice') {
-            const targetSocket = terrainSockets.get(numero);
+            const targetSocket = terrainSockets.get(targetNumero);
             if (targetSocket) {
-              try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero })); } catch { /* fermé */ }
+              try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: targetNumero })); } catch { /* fermé */ }
             }
           }
           return;

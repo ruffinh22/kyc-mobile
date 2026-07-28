@@ -74,7 +74,7 @@ export async function changePassword(current_password: string, new_password: str
 }
 
 // ── Dossiers ──────────────────────────────────────────────────────────────────
-export async function getDossiers(p: { date?: string; debut?: string; fin?: string; statut?: string; agent?: string; search?: string; limit?: number; offset?: number } = {}) {
+export async function getDossiers(p: { date?: string; debut?: string; fin?: string; statut?: string; agent?: string; search?: string; scope?: 'queue' | 'mine' | 'all'; limit?: number; offset?: number } = {}) {
   const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '') qs.set(k, String(v)); });
   return apiFetch<{ success: boolean; total: number; count: number; dossiers: Dossier[] }>(`/api/dossiers?${qs}`);
 }

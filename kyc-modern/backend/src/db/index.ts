@@ -223,7 +223,7 @@ export async function getDossierById(id: string): Promise<Dossier | null> {
 export async function getDossiers(params: {
   date?: string | null; debut?: string | null; fin?: string | null;
   statut?: string | null; agent?: string | null; search?: string | null;
-  limit?: number; offset?: number;
+  scope?: string | null; limit?: number; offset?: number;
 }): Promise<{ rows: Dossier[]; total: number }> {
   let where = 'WHERE 1=1';
   const p: unknown[] = [];
@@ -232,7 +232,16 @@ export async function getDossiers(params: {
   if (params.debut) { where += ' AND date>=?'; p.push(params.debut); }
   if (params.fin)   { where += ' AND date<=?'; p.push(params.fin); }
   if (params.statut) { where += ' AND statut=?'; p.push(params.statut); }
-  if (params.agent) {
+  if (params.scope === 'mine') {
+    if (params.agent) {
+      where += ' AND agent_saisie=?';
+      p.push(params.agent);
+    } else {
+      where += ' AND 1=0';
+    }
+  } else if (params.scope === 'queue') {
+    where += " AND statut='en_attente'";
+  } else if (params.agent) {
     where += " AND (statut='en_attente' OR agent_saisie=?)";
     p.push(params.agent);
   }

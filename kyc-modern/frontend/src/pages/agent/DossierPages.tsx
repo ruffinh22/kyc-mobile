@@ -232,7 +232,7 @@ export function AgentFileAttente() {
   const [motifSearch, setMotifSearch] = useState('');
   const [motifPage, setMotifPage] = useState(1);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
-  const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200 }), []);
+  const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200, scope: 'queue' }), []);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
 
   const dossiers = data?.dossiers ?? [];
@@ -627,7 +627,7 @@ export function AgentMesDossiers() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300 }), [debut, fin, statut, dSearch]);
+  const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300, scope: 'mine' }), [debut, fin, statut, dSearch]);
 
   const handleCallTerrain = async (dossier: Dossier) => {
     if (!dossier.wa_agent) {

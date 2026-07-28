@@ -45,10 +45,11 @@ export async function dossiersRoutes(app: any): Promise<void> {
     const { matricule, role } = req.user;
     const q = req.query as Record<string,string>;
     const agentFilter = role === 'agent' ? matricule : (q.agent || null);
+    const scope = q.scope === 'mine' || q.scope === 'queue' ? q.scope : (role === 'agent' ? 'mine' : 'all');
     const { rows, total } = await db.getDossiers({
       date: q.date||null, debut: q.debut||null, fin: q.fin||null,
       statut: q.statut||null, agent: agentFilter, search: q.search||null,
-      limit: Math.min(parseInt(q.limit||'100',10),500),
+      scope, limit: Math.min(parseInt(q.limit||'100',10),500),
       offset: parseInt(q.offset||'0',10),
     });
     return reply.send({ success: true, total, count: rows.length, dossiers: rows.map(d => maskDossier(normalizeDossier(d), matricule, role)) });

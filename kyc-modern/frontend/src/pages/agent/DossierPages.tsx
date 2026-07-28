@@ -69,12 +69,14 @@ export function AgentDashboard() {
   const today = todayISO();
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowISO = tomorrow.toISOString().slice(0, 10);
-  const { data, loading, error } = useFetch(() => api.getDossierStats(), []);
+  const { data, loading, error } = useFetch(() => api.getDossierStats(today), [today]);
   const { data: gsmData, loading: gsmLoading, error: gsmError } = useFetch(() => api.getGsmMonTableau(), []);
   const { data: planningData, loading: planningLoading, error: planningError } = useFetch(() => api.getPlanningMon(today, tomorrowISO), [today, tomorrowISO]);
 
   const planningToday = planningData?.entrees.filter(e => e.date === today) ?? [];
   const planningTomorrow = planningData?.entrees.filter(e => e.date === tomorrowISO) ?? [];
+  const dossierTotal = (data?.en_attente ?? 0) + (data?.en_cours ?? 0) + (data?.accepte ?? 0) + (data?.rejete ?? 0);
+  const activeDossiers = (data?.en_attente ?? 0) + (data?.en_cours ?? 0);
 
   return (
     <>
@@ -102,6 +104,24 @@ export function AgentDashboard() {
             <span className="info-pill">📋 GSM / Gross Add</span>
             <span className="info-pill">📅 Planning</span>
           </div>
+        </div>
+      </div>
+
+      <div className="dashboard-summary">
+        <div className="dashboard-summary-card primary">
+          <span className="dashboard-summary-label">Dossiers du jour</span>
+          <strong className="dashboard-summary-value">{dossierTotal}</strong>
+          <span className="dashboard-summary-meta">{data?.en_cours ?? 0} en cours • {data?.en_attente ?? 0} en attente</span>
+        </div>
+        <div className="dashboard-summary-card">
+          <span className="dashboard-summary-label">GSM</span>
+          <strong className="dashboard-summary-value">{gsmData?.aujourdhui ?? 0}</strong>
+          <span className="dashboard-summary-meta">Saisies aujourd’hui</span>
+        </div>
+        <div className="dashboard-summary-card">
+          <span className="dashboard-summary-label">Planning</span>
+          <strong className="dashboard-summary-value">{planningToday.length + planningTomorrow.length}</strong>
+          <span className="dashboard-summary-meta">Activités à venir</span>
         </div>
       </div>
 

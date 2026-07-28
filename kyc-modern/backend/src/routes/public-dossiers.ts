@@ -960,11 +960,31 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           return;
         }
 
+        if (msg.type === 'call-accept' && role === 'terrain') {
+          const target = normalizeNumero(msg.numero || numero);
+          const boSocket = backofficeSockets.get(target);
+          if (boSocket) {
+            try { boSocket.send(JSON.stringify({ type: 'call-accepted' })); } catch { /* fermé */ }
+          }
+          clearPendingCall(target);
+          return;
+        }
+
         if (msg.type === 'call-reject' && role === 'backoffice') {
           const target = normalizeNumero(msg.numero);
           const terrainSocket = terrainSockets.get(target);
           if (terrainSocket) {
             try { terrainSocket.send(JSON.stringify({ type: 'call-rejected' })); } catch { /* fermé */ }
+          }
+          clearPendingCall(target);
+          return;
+        }
+
+        if (msg.type === 'call-reject' && role === 'terrain') {
+          const target = normalizeNumero(msg.numero || numero);
+          const boSocket = backofficeSockets.get(target);
+          if (boSocket) {
+            try { boSocket.send(JSON.stringify({ type: 'call-rejected' })); } catch { /* fermé */ }
           }
           clearPendingCall(target);
           return;

@@ -280,7 +280,10 @@ export function AgentVideoCallPage() {
         break;
       case 'call-delivered':
         setActiveCallId(msg.callUuid);
+        setStatus('calling');
+        setCallOutcome('ringing');
         addInfo('Appel transmis au terrain');
+        void sendOffer();
         break;
       case 'call-ringing':
         setStatus('calling');
@@ -465,7 +468,6 @@ export function AgentVideoCallPage() {
     setCallElapsed(0);
     setInfo('Lancement de l’appel vers le terrain...');
     sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
-    await sendOffer();
   };
 
   const hangUp = () => {

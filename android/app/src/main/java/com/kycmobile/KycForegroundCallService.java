@@ -92,7 +92,10 @@ public class KycForegroundCallService extends Service {
             acquireWakeLock();
             startNativeRingtone();
             startNativeVibration();
-            launchIncomingCallActivity(currentNumero, currentCallUuid);
+            // Ne forcer plus la création de l'Activity ici : l'app React Native
+            // gère elle-même l'ouverture de l'écran d'appel entrant depuis JS.
+            // Forcer launchIncomingCallActivity ici provoquait parfois un relancement
+            // brutal de l'Activity et des fermetures inattendues sur certains Android.
             return START_STICKY;
 
         } else if (ACTION_ANSWER.equals(action)) {

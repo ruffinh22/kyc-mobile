@@ -172,6 +172,7 @@ export default function App() {
 
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
+        signalingService.resumePresence();
         void restorePendingCall();
       }
     });

@@ -37,9 +37,11 @@ const signalingPeers = new Map<string, Set<WsSocket>>();
 const terrainSockets = new Map<string, WsSocket>();
 const backofficeSockets = new Map<string, WsSocket>();
 const terrainTokens = new Map<string, string>();
+const terrainPresenceTimers = new Map<string, NodeJS.Timeout>();
 const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket; numeroMtn: string; timer: NodeJS.Timeout }>();
 
 const CALL_RING_TIMEOUT_MS = 45_000;
+const TERRAIN_PRESENCE_GRACE_MS = 20_000;
 
 const fcmServerKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || '';
 const turnSecret = process.env.TURN_SHARED_SECRET || '';
@@ -205,6 +207,29 @@ function clearPendingCall(numero: string) {
     clearTimeout(pending.timer);
     pendingCalls.delete(numero);
   }
+}
+
+function clearTerrainPresenceTimer(numero: string) {
+  const timer = terrainPresenceTimers.get(numero);
+  if (timer) {
+    clearTimeout(timer);
+    terrainPresenceTimers.delete(numero);
+  }
+}
+
+function scheduleTerrainOffline(numero: string, socket: WsSocket | null | undefined) {
+  clearTerrainPresenceTimer(numero);
+  const timer = setTimeout(() => {
+    terrainPresenceTimers.delete(numero);
+    if (terrainSockets.get(numero) === socket) {
+      terrainSockets.delete(numero);
+      const boSocket = backofficeSockets.get(numero);
+      if (boSocket) {
+        sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: false, numero });
+      }
+    }
+  }, TERRAIN_PRESENCE_GRACE_MS);
+  terrainPresenceTimers.set(numero, timer);
 }
 
 function generateTurnCredentials(identity: string) {
@@ -847,6 +872,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           if (!numero) return;
           console.log('[SIGNAL] register', { role, numero });
           if (role === 'terrain') {
+            clearTerrainPresenceTimer(numero);
             terrainSockets.set(numero, socket);
             if (msg.fcmToken) terrainTokens.set(numero, String(msg.fcmToken));
             send({ type: 'registered', role: 'terrain', numero });
@@ -1036,11 +1062,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       if (role === 'terrain' && numero) {
         const previous = terrainSockets.get(numero);
         if (previous === socket) {
-          terrainSockets.delete(numero);
-        }
-        const boSocket = backofficeSockets.get(numero);
-        if (boSocket) {
-          sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: false, numero });
+          scheduleTerrainOffline(numero, socket);
         }
       }
       if (role === 'backoffice' && numero) {

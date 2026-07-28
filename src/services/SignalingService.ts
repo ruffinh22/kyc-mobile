@@ -199,6 +199,11 @@ class SignalingService {
       this.reconnectTimer = null;
     }
 
+    // Garde la présence terrain active même si l'app reste longtemps en arrière-plan.
+    // On ne veut pas que la connexion WebSocket se perde en silence et fasse croire
+    // que l'agent n'est plus disponible.
+    this.reconnectDelay = Math.min(this.reconnectDelay, 4000);
+
     const base = this.serverUrl.replace(/\/$/, '');
     const httpUrl = base.startsWith('http') ? base : `http://${base}`;
     const wsUrl = httpUrl.replace(/^http/, 'ws') + '/api/signaling';
@@ -212,13 +217,7 @@ class SignalingService {
 
     this.ws.onopen = () => {
       this.reconnectDelay = 2000;
-      // Envoie le register avec le bon champ "numero" (pas "numeroAgent")
-      this.sendRaw({
-        type:     'register',
-        role:     'terrain',
-        numero:   this.numeroAgent,
-        fcmToken: this.fcmToken || undefined,
-      });
+      this.reRegister();
       this.startPing();
     };
 
@@ -239,6 +238,15 @@ class SignalingService {
     this.ws.onerror = () => {
       // onclose est toujours déclenché après — pas de double-handling
     };
+  }
+
+  private reRegister () {
+    this.sendRaw({
+      type:     'register',
+      role:     'terrain',
+      numero:   this.numeroAgent,
+      fcmToken: this.fcmToken || undefined,
+    });
   }
 
   // ── Traitement messages serveur ──────────────────────────────────────────────
@@ -695,6 +703,20 @@ class SignalingService {
       this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, 30_000);
       this.connect();
     }, this.reconnectDelay);
+  }
+
+  // Appelé quand l'application reprend le premier plan : on renvoie un register
+  // immédiat pour réaffirmer la disponibilité terrain, même si la session avait
+  // été en sommeil longtemps.
+  resumePresence () {
+    if (!this.numeroAgent) return;
+    this.reRegister();
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.startPing();
+    } else {
+      this.reconnectDelay = 2000;
+      this.connect();
+    }
   }
 
   // ── Déconnexion propre ────────────────────────────────────────────────────

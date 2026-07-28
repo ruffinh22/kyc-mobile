@@ -127,81 +127,98 @@ export function AgentDashboard() {
 
       {loading || gsmLoading || planningLoading ? <LoadingCenter /> : (
         <>
-          <div className="stats-grid">
+          <section className="dashboard-section">
+            <div className="dashboard-section-head">
+              <h3 className="dashboard-section-title">Vue d’ensemble</h3>
+              <span className="dashboard-section-sub">Indicateurs clés du quotidien</span>
+            </div>
+            <div className="stats-grid">
             <StatCard label="En attente" value={data?.en_attente ?? 0} variant="attente" sub="File commune" />
             <StatCard label="En cours" value={data?.en_cours ?? 0} variant="cours" sub="Vos dossiers actifs" />
             <StatCard label="Acceptés" value={data?.accepte ?? 0} variant="accepte" sub="Aujourd’hui" />
             <StatCard label="Rejetés" value={data?.rejete ?? 0} variant="rejete" sub="Aujourd’hui" />
           </div>
 
-          <div className="stats-grid">
-            <StatCard label="Saisies aujourd’hui" value={gsmData?.aujourdhui ?? 0} variant="accepte" sub="Gross Add" />
-            <StatCard label="7 derniers jours" value={gsmData?.sept_jours ?? 0} variant="cours" sub="Évolution rapide" />
-            <StatCard label="Mois de paie" value={gsmData?.mois_paie ?? 0} variant="attente" sub={gsmData?.libelle_mois_paie || '—'} />
-            <StatCard label="Total cumulé" value={gsmData?.total ?? 0} variant="info" sub="Toutes saisies" />
-          </div>
+            <div className="stats-grid">
+              <StatCard label="Saisies aujourd’hui" value={gsmData?.aujourdhui ?? 0} variant="accepte" sub="Gross Add" />
+              <StatCard label="7 derniers jours" value={gsmData?.sept_jours ?? 0} variant="cours" sub="Évolution rapide" />
+              <StatCard label="Mois de paie" value={gsmData?.mois_paie ?? 0} variant="attente" sub={gsmData?.libelle_mois_paie || '—'} />
+              <StatCard label="Total cumulé" value={gsmData?.total ?? 0} variant="info" sub="Toutes saisies" />
+            </div>
+          </section>
 
-          <div className="dashboard-two-col">
+          <section className="dashboard-section">
+            <div className="dashboard-section-head">
+              <h3 className="dashboard-section-title">Planning & activité</h3>
+              <span className="dashboard-section-sub">Vos rendez-vous et tâches à venir</span>
+            </div>
+            <div className="dashboard-two-col">
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <p className="card-title">Planning du jour</p>
+                    <p className="page-sub">Vos activités prévues aujourd’hui.</p>
+                  </div>
+                </div>
+                {!planningToday.length ? <EmptyState icon="📅" title="Aucun planning aujourd’hui" /> : (
+                  <div className="stack-list">
+                    {planningToday.map(entry => (
+                      <div key={entry.id} className="stack-item">
+                        <div className="stack-item-main">
+                          <strong>{entry.activite || 'Activité'}</strong>
+                          <span>{entry.lieu || 'Lieu non renseigné'}</span>
+                        </div>
+                        <div className="stack-item-side">
+                          <span>{entry.heure_debut || entry.horaire || '—'}</span>
+                          <span>{entry.heure_fin || '—'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="card">
+                <div className="card-header">
+                  <div>
+                    <p className="card-title">Planning de demain</p>
+                    <p className="page-sub">Préparez votre journée à l’avance.</p>
+                  </div>
+                </div>
+                {!planningTomorrow.length ? <EmptyState icon="🗓" title="Aucun planning demain" /> : (
+                  <div className="stack-list">
+                    {planningTomorrow.map(entry => (
+                      <div key={entry.id} className="stack-item">
+                        <div className="stack-item-main">
+                          <strong>{entry.activite || 'Activité'}</strong>
+                          <span>{entry.lieu || 'Lieu non renseigné'}</span>
+                        </div>
+                        <div className="stack-item-side">
+                          <span>{entry.heure_debut || entry.horaire || '—'}</span>
+                          <span>{entry.heure_fin || '—'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="dashboard-section">
+            <div className="dashboard-section-head">
+              <h3 className="dashboard-section-title">Dernières saisies GSM</h3>
+              <span className="dashboard-section-sub">Historique récent de votre activité</span>
+            </div>
             <div className="card">
               <div className="card-header">
                 <div>
-                  <p className="card-title">Planning du jour</p>
-                  <p className="page-sub">Vos activités prévues aujourd’hui.</p>
+                  <p className="card-title">5 dernières saisies GSM</p>
+                  <p className="page-sub">Un aperçu rapide de votre activité récente.</p>
                 </div>
               </div>
-              {!planningToday.length ? <EmptyState icon="📅" title="Aucun planning aujourd’hui" /> : (
-                <div className="stack-list">
-                  {planningToday.map(entry => (
-                    <div key={entry.id} className="stack-item">
-                      <div className="stack-item-main">
-                        <strong>{entry.activite || 'Activité'}</strong>
-                        <span>{entry.lieu || 'Lieu non renseigné'}</span>
-                      </div>
-                      <div className="stack-item-side">
-                        <span>{entry.heure_debut || entry.horaire || '—'}</span>
-                        <span>{entry.heure_fin || '—'}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="card">
-              <div className="card-header">
-                <div>
-                  <p className="card-title">Planning de demain</p>
-                  <p className="page-sub">Préparez votre journée à l’avance.</p>
-                </div>
-              </div>
-              {!planningTomorrow.length ? <EmptyState icon="🗓" title="Aucun planning demain" /> : (
-                <div className="stack-list">
-                  {planningTomorrow.map(entry => (
-                    <div key={entry.id} className="stack-item">
-                      <div className="stack-item-main">
-                        <strong>{entry.activite || 'Activité'}</strong>
-                        <span>{entry.lieu || 'Lieu non renseigné'}</span>
-                      </div>
-                      <div className="stack-item-side">
-                        <span>{entry.heure_debut || entry.horaire || '—'}</span>
-                        <span>{entry.heure_fin || '—'}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <p className="card-title">5 dernières saisies GSM</p>
-                <p className="page-sub">Un aperçu rapide de votre activité récente.</p>
-              </div>
-            </div>
-            {!gsmData?.dernieres?.length ? <EmptyState icon="📋" title="Aucune saisie récente" /> : (
-              <div className="table-wrap">
+              {!gsmData?.dernieres?.length ? <EmptyState icon="📋" title="Aucune saisie récente" /> : (
+                <div className="table-wrap">
                 <table>
                   <thead>
                     <tr><th>Numéro</th><th>Date</th><th>Constat</th><th>Statut</th></tr>
@@ -217,9 +234,10 @@ export function AgentDashboard() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          </section>
         </>
       )}
     </>

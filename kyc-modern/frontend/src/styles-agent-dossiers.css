@@ -130,6 +130,39 @@
   flex-wrap: wrap;
 }
 
+.photo-action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .55rem .7rem;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+
+.photo-action-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--mtn-yellow);
+  box-shadow: var(--shadow-sm);
+}
+
+.photo-chip-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  background: var(--mtn-blue-light);
+  color: var(--mtn-blue);
+  font-weight: 800;
+}
+
 .mini-photo {
   width: 100%;
   max-width: 96px;

@@ -33,6 +33,7 @@ export async function initDb(): Promise<void> {
   await conn.ping();
   conn.release();
   await runMigrations(pool);
+  await ensurePresenceSchema();
   console.log('[DB] MySQL connecté :', process.env.DB_NAME);
 }
 
@@ -81,6 +82,110 @@ function nowSec(): number {
 }
 
 export { nowSec };
+
+async function ensurePresenceSchema(): Promise<void> {
+  if (!pool) return;
+
+  try {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS presence (
+        matricule VARCHAR(50) NOT NULL,
+        statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline',
+        ts BIGINT NOT NULL DEFAULT 0,
+        pause_debut BIGINT DEFAULT NULL,
+        dispo_depuis BIGINT DEFAULT NULL,
+        updated_at BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (matricule),
+        INDEX idx_statut_ts (statut, ts),
+        INDEX idx_dispo_depuis (dispo_depuis)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+  } catch (error: any) {
+    if (error?.code !== 'ER_TABLE_EXISTS_ERROR') {
+      throw error;
+    }
+  }
+
+  const [columnsRaw] = await pool.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'presence'`
+  );
+  const columns = new Set((columnsRaw as Array<{ COLUMN_NAME: string }>).map(column => column.COLUMN_NAME));
+
+  if (!columns.has('matricule')) {
+    if (columns.has('nom')) {
+      await pool.execute(`ALTER TABLE presence CHANGE COLUMN nom matricule VARCHAR(50) NOT NULL`);
+    } else {
+      await pool.execute(`ALTER TABLE presence ADD COLUMN matricule VARCHAR(50) NOT NULL`);
+    }
+  }
+
+  if (!columns.has('statut')) {
+    await pool.execute(`ALTER TABLE presence ADD COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
+  }
+
+  if (!columns.has('ts')) {
+    await pool.execute(`ALTER TABLE presence ADD COLUMN ts BIGINT NOT NULL DEFAULT 0`);
+  }
+
+  if (!columns.has('pause_debut')) {
+    await pool.execute(`ALTER TABLE presence ADD COLUMN pause_debut BIGINT DEFAULT NULL`);
+  }
+
+  if (!columns.has('dispo_depuis')) {
+    await pool.execute(`ALTER TABLE presence ADD COLUMN dispo_depuis BIGINT DEFAULT NULL`);
+  }
+
+  if (!columns.has('updated_at')) {
+    await pool.execute(`ALTER TABLE presence ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
+  }
+
+  try {
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN matricule VARCHAR(50) NOT NULL`);
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN ts BIGINT NOT NULL DEFAULT 0`);
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN pause_debut BIGINT DEFAULT NULL`);
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN dispo_depuis BIGINT DEFAULT NULL`);
+    await pool.execute(`ALTER TABLE presence MODIFY COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
+  } catch (error: any) {
+    if (!['1146', '42S22'].includes(error?.code)) {
+      throw error;
+    }
+  }
+
+  try {
+    await pool.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
+  } catch (error: any) {
+    if (!['42000', '23000', '1068'].includes(error?.code)) {
+      throw error;
+    }
+  }
+
+  try {
+    await pool.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
+  } catch (error: any) {
+    if (!['42000', '23000', '1061'].includes(error?.code)) {
+      throw error;
+    }
+  }
+
+  try {
+    await pool.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
+  } catch (error: any) {
+    if (!['42000', '23000', '1061'].includes(error?.code)) {
+      throw error;
+    }
+  }
+
+  try {
+    await pool.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
+  } catch (error: any) {
+    if (!['42000', '23000', '1061'].includes(error?.code)) {
+      throw error;
+    }
+  }
+}
 
 // ── Comptes ───────────────────────────────────────────────────────────────────
 
@@ -366,10 +471,10 @@ export async function getGsmSaisies(params: {
   if (params.date)      { where += ' AND date_saisie=?';  p.push(params.date); }
   if (params.debut)     { where += ' AND date_saisie>=?'; p.push(params.debut); }
   if (params.fin)       { where += ' AND date_saisie<=?'; p.push(params.fin); }
-  const limit = params.limit ?? 500;
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(params.limit ?? 500))));
   return query<GsmRecord & RowDataPacket>(
-    `SELECT * FROM gsm ${where} ORDER BY date_saisie DESC, created_at DESC LIMIT ?`,
-    [...p, limit]
+    `SELECT * FROM gsm ${where} ORDER BY date_saisie DESC, created_at DESC LIMIT ${safeLimit}`,
+    p
   );
 }
 

@@ -348,11 +348,9 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
-
                         <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                          {d.wa_agent ? '📞 Appeler' : 'Pas de WA'}
                         </button>
-
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
                       </div>
                     </div>
@@ -367,7 +365,7 @@ export function AgentFileAttente() {
                       )}
                     </div>
                             {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                              <div className="photo-strip">
+                              <div className="photo-strip" role="list" aria-label="Photos du dossier">
                                 {(() => {
                                   const types = ['recto','verso','live'] as const;
                                   const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
@@ -377,7 +375,18 @@ export function AgentFileAttente() {
                                     if (!path) return null;
                                     const url = api.photoUrlWithToken(d.id, type);
                                     const idx = imgs.indexOf(url);
-                                    return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                                    return (
+                                      <button
+                                        key={type}
+                                        type="button"
+                                        className="photo-action-chip"
+                                        onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })}
+                                        title={`Ouvrir la photo ${type.toUpperCase()}`}
+                                      >
+                                        <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
+                                        <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
+                                      </button>
+                                    );
                                   });
                                 })()}
                               </div>
@@ -405,16 +414,16 @@ export function AgentFileAttente() {
                       </div>
                       <div className="agent-actions-inline">
                         <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                          {d.wa_agent ? '📞 Appeler' : 'Pas de WA'}
                         </button>
                         {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
-                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Refaire faciale</button>
                         )}
-                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
+                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>✕ Rejeter</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                           localStorage.setItem('gsm_dossier_id', d.id);
                           window.location.href = '/gsm-saisie?dossier=' + d.id;
-                        })}>Accepter</button>
+                        })}>✓ Valider</button>
                       </div>
                     </div>
                     <div className="face-preview-card">
@@ -428,7 +437,7 @@ export function AgentFileAttente() {
                       )}
                     </div>
                     {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                      <div className="photo-strip">
+                      <div className="photo-strip" role="list" aria-label="Photos du dossier">
                         {(() => {
                           const types = ['recto','verso','live'] as const;
                           const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
@@ -438,7 +447,18 @@ export function AgentFileAttente() {
                             if (!path) return null;
                             const url = api.photoUrlWithToken(d.id, type);
                             const idx = imgs.indexOf(url);
-                            return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                            return (
+                              <button
+                                key={type}
+                                type="button"
+                                className="photo-action-chip"
+                                onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })}
+                                title={`Ouvrir la photo ${type.toUpperCase()}`}
+                              >
+                                <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
+                                <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
+                              </button>
+                            );
                           });
                         })()}
                       </div>

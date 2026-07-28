@@ -10,10 +10,7 @@ export async function presenceRoutes(app: any): Promise<void> {
   app.post('/api/presence/heartbeat', async (req, reply) => {
     const now = db.nowSec();
     const matricule = req.user.matricule;
-    await db.exec(
-      'INSERT INTO `presence` (`matricule`, `statut`, `ts`, `updated_at`) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE `statut`=?, `ts`=?, `updated_at`=?',
-      [matricule, 'online', now, now, 'online', now, now]
-    );
+    await db.upsertPresence(matricule, 'online');
     return reply.send({ success: true, ts: now });
   });
 

@@ -186,7 +186,7 @@ async function sendFcmHttp(payload: any): Promise<boolean> {
   }
 }
 
-function normalizeNumero(value: string | undefined): string {
+function normalizeNumero(value: string | null | undefined): string {
   return String(value ?? '').replace(/\D/g, '').slice(0, 20);
 }
 

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Pool } from 'mysql2/promise';
+import type { Pool } from 'mysql2/promise';
 import { createMigrationFile } from './createMigration';
 
 const MIGRATION_TABLE = 'schema_migrations';

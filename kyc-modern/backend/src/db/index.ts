@@ -2,7 +2,8 @@
 // KYC V4 – Couche d'accès MySQL (mysql2/promise)
 // ============================================================================
 
-import mysql, { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import mysql, { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import type { Pool } from 'mysql2/promise';
 import {
   Compte, Session, Dossier, GsmRecord, PlanningEntry, PlanningManager,
   NoteQualite, PresenceRow, ConfigRow, AuditLog, Role

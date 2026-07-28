@@ -349,7 +349,12 @@ export async function getDossiers(params: {
       where += ' AND 1=0';
     }
   } else if (params.scope === 'queue') {
-    where += " AND statut='en_attente'";
+    if (params.agent) {
+      where += " AND (statut='en_attente' OR (statut='en_cours' AND agent_saisie=?))";
+      p.push(params.agent);
+    } else {
+      where += " AND statut='en_attente'";
+    }
   } else if (params.agent) {
     where += " AND (statut='en_attente' OR agent_saisie=?)";
     p.push(params.agent);

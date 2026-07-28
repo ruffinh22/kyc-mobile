@@ -316,159 +316,88 @@ export function AgentFileAttente() {
             <StatCard label="Rejetés" value={stats.rejete} variant="rejete" sub="Refusés" />
           </div>
           <div className="agent-dossier-grid">
-            <div className="agent-dossier-column">
-              <div className="agent-dossier-column-title">
-                <span>À traiter</span>
-                <span>{dossiers.filter(d => d.statut === 'en_attente').length}</span>
-              </div>
-              {dossiers.filter(d => d.statut === 'en_attente').map(d => {
-                const face = faceSummary(d);
-                const age = ageMinutes(d.created_at);
-                return (
-                  <div key={d.id} className="agent-dossier-card">
-                    <div className="agent-dossier-meta">
-                      <div>
-                        <div className="agent-dossier-id">{d.id}</div>
-                        <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_reception || '—'}</div>
-                      </div>
-                      <span className="agent-badge attente">en attente</span>
+            {dossiers.filter(d => d.statut === 'en_attente' || d.statut === 'en_cours').map(d => {
+              const face = faceSummary(d);
+              const age = ageMinutes(d.created_at);
+              const isEnCours = d.statut === 'en_cours';
+              return (
+                <div key={d.id} className="agent-dossier-card">
+                  <div className="agent-dossier-meta">
+                    <div>
+                      <div className="agent-dossier-id">{d.id}</div>
+                      <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {(isEnCours ? d.heure_prise : d.heure_reception) || '—'}</div>
                     </div>
-                    <div className="agent-dossier-body">
-                      <div className="agent-dossier-actions">
-                        <div>
-                          <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
-                          <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
-                        </div>
-                        <div className="agent-actions-inline">
-                          <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)} title="Appeler l’agent terrain">
-                            {d.wa_agent ? '📞 Call' : 'Pas de WA'}
-                          </button>
+                    <span className={`agent-badge ${isEnCours ? 'cours' : 'attente'}`}>{isEnCours ? 'en cours' : 'en attente'}</span>
+                  </div>
+                  <div className="agent-dossier-body">
+                    <div className="agent-dossier-actions">
+                      <div>
+                        <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
+                        <div className="agent-dossier-sub">{isEnCours ? (d.zone_agent || 'Zone non renseignée') : `${age} minute(s) • ${d.zone_agent || 'Zone non renseignée'}`}</div>
+                      </div>
+                      <div className="agent-actions-inline">
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)} title="Appeler l’agent terrain">
+                          {d.wa_agent ? '📞 Call' : 'Pas de WA'}
+                        </button>
+                        {!isEnCours ? (
                           <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))} title="Prendre en charge">
                             Prendre
                           </button>
-                        </div>
-                      </div>
-                      <div className="face-preview-card">
-                        <div className="face-preview-header">
-                          <span>Reconnaissance faciale</span>
-                          <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
-                        </div>
-                        <div className="face-preview-text">{face.motif}</div>
-                        {d.score_visage !== null && d.score_visage !== undefined && (
-                          <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
+                        ) : (
+                          <>
+                            {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
+                              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))} title="Refaire la vérification faciale">↺ Faciale</button>
+                            )}
+                            <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }} title="Rejeter le dossier">✕ Reject</button>
+                            <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
+                              localStorage.setItem('gsm_dossier_id', d.id);
+                              window.location.href = '/gsm-saisie?dossier=' + d.id;
+                            })} title="Valider le dossier">✓ Validate</button>
+                          </>
                         )}
                       </div>
-                      {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                        <div className="photo-strip" role="list" aria-label="Photos du dossier">
-                          {(() => {
-                            const types = ['recto','verso','live'] as const;
-                            const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
-                            return types.map(type => {
-                              const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                              const path = d[field];
-                              if (!path) return null;
-                              const url = api.photoUrlWithToken(d.id, type);
-                              const idx = imgs.indexOf(url);
-                              return (
-                                <button
-                                  key={type}
-                                  type="button"
-                                  className="photo-action-chip"
-                                  onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })}
-                                  title={`Ouvrir la photo ${type.toUpperCase()}`}
-                                >
-                                  <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
-                                  <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
-                                </button>
-                              );
-                            });
-                          })()}
-                        </div>
+                    </div>
+                    <div className="face-preview-card">
+                      <div className="face-preview-header">
+                        <span>Reconnaissance faciale</span>
+                        <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
+                      </div>
+                      <div className="face-preview-text">{face.motif}</div>
+                      {d.score_visage !== null && d.score_visage !== undefined && (
+                        <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
                       )}
                     </div>
+                    {(d.photo_recto || d.photo_verso || d.photo_live) && (
+                      <div className="photo-strip" role="list" aria-label="Photos du dossier">
+                        {(() => {
+                          const types = ['recto','verso','live'] as const;
+                          const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
+                          return types.map(type => {
+                            const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                            const path = d[field];
+                            if (!path) return null;
+                            const url = api.photoUrlWithToken(d.id, type);
+                            const idx = imgs.indexOf(url);
+                            return (
+                              <button
+                                key={type}
+                                type="button"
+                                className="photo-action-chip"
+                                onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })}
+                                title={`Ouvrir la photo ${type.toUpperCase()}`}
+                              >
+                                <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
+                                <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-
-            <div className="agent-dossier-column">
-              <div className="agent-dossier-column-title">
-                <span>En cours</span>
-                <span>{dossiers.filter(d => d.statut === 'en_cours').length}</span>
-              </div>
-              {dossiers.filter(d => d.statut === 'en_cours').map(d => {
-                const face = faceSummary(d);
-                return (
-                  <div key={d.id} className="agent-dossier-card">
-                    <div className="agent-dossier-meta">
-                      <div>
-                        <div className="agent-dossier-id">{d.id}</div>
-                        <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_prise || '—'}</div>
-                      </div>
-                      <span className="agent-badge cours">en cours</span>
-                    </div>
-                    <div className="agent-dossier-body">
-                      <div className="agent-dossier-actions">
-                        <div>
-                          <div className="agent-dossier-title">{d.numero_mtn}</div>
-                          <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
-                        </div>
-                        <div className="agent-actions-inline">
-                          <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)} title="Appeler l’agent terrain">
-                            {d.wa_agent ? '📞 Call' : 'Pas de WA'}
-                          </button>
-                          {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
-                            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))} title="Refaire la vérification faciale">↺ Faciale</button>
-                          )}
-                          <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }} title="Rejeter le dossier">✕ Reject</button>
-                          <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
-                            localStorage.setItem('gsm_dossier_id', d.id);
-                            window.location.href = '/gsm-saisie?dossier=' + d.id;
-                          })} title="Valider le dossier">✓ Validate</button>
-                        </div>
-                      </div>
-                      <div className="face-preview-card">
-                        <div className="face-preview-header">
-                          <span>Reconnaissance faciale</span>
-                          <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
-                        </div>
-                        <div className="face-preview-text">{face.motif}</div>
-                        {d.score_visage !== null && d.score_visage !== undefined && (
-                          <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
-                        )}
-                      </div>
-                      {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                        <div className="photo-strip" role="list" aria-label="Photos du dossier">
-                          {(() => {
-                            const types = ['recto','verso','live'] as const;
-                            const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
-                            return types.map(type => {
-                              const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                              const path = d[field];
-                              if (!path) return null;
-                              const url = api.photoUrlWithToken(d.id, type);
-                              const idx = imgs.indexOf(url);
-                              return (
-                                <button
-                                  key={type}
-                                  type="button"
-                                  className="photo-action-chip"
-                                  onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })}
-                                  title={`Ouvrir la photo ${type.toUpperCase()}`}
-                                >
-                                  <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
-                                  <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
-                                </button>
-                              );
-                            });
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </div>
         </>
       )}

@@ -9,34 +9,61 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
   dossiers: Dossier[]; onSelect(d: Dossier): void; showAgent?: boolean; showDate?: boolean; rowActions?: (dossier: Dossier) => React.ReactNode;
 }) {
   if (!dossiers.length) return <EmptyState icon="📭" title="Aucun dossier" body="Aucun résultat ne correspond aux filtres." />;
+
+  const counts = dossiers.reduce((acc, d) => {
+    if (d.statut === 'en_attente') acc.en_attente += 1;
+    else if (d.statut === 'en_cours') acc.en_cours += 1;
+    else if (d.statut === 'accepte') acc.accepte += 1;
+    else if (d.statut === 'rejete') acc.rejete += 1;
+    return acc;
+  }, { en_attente: 0, en_cours: 0, accepte: 0, rejete: 0 });
+
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Référence</th>
-            <th>Numéro</th>
-            {showAgent && <th>Agent</th>}
-            {showDate  && <th>Date</th>}
-            <th>Réception</th>
-            <th>Statut</th>
-            {rowActions && <th>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {dossiers.map(d => (
-            <tr key={d.id} className="clickable" onClick={() => onSelect(d)}>
-              <td><strong style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.id}</strong></td>
-              <td>{d.masque ? '***' : d.numero_mtn}</td>
-              {showAgent && <td>{d.agent_saisie || '—'}</td>}
-              {showDate  && <td>{d.date}</td>}
-              <td>{d.heure_reception || '—'}</td>
-              <td><StatutBadge statut={d.statut} /></td>
-              {rowActions && <td onClick={e => e.stopPropagation()}>{rowActions(d)}</td>}
+    <div className="dossier-table-shell">
+      <div className="dossier-table-toolbar">
+        <div>
+          <div className="dossier-table-title">Vue dossiers</div>
+          <div className="dossier-table-sub">Synthèse rapide du flux actuel</div>
+        </div>
+        <div className="dossier-table-pills">
+          <span className="dossier-pill dossier-pill-total">Total {dossiers.length}</span>
+          <span className="dossier-pill dossier-pill-attente">En attente {counts.en_attente}</span>
+          <span className="dossier-pill dossier-pill-cours">En cours {counts.en_cours}</span>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table className="dossier-table">
+          <thead>
+            <tr>
+              <th>Référence</th>
+              <th>Numéro</th>
+              {showAgent && <th>Agent</th>}
+              {showDate  && <th>Date</th>}
+              <th>Réception</th>
+              <th>Statut</th>
+              {rowActions && <th>Actions</th>}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {dossiers.map(d => (
+              <tr key={d.id} className={`clickable dossier-row ${d.statut}`} onClick={() => onSelect(d)}>
+                <td>
+                  <div className="dossier-cell-primary">
+                    <span className="dossier-ref-badge">{d.id}</span>
+                    <span className="dossier-ref-sub">{d.date || '—'}</span>
+                  </div>
+                </td>
+                <td><span className="dossier-cell-value">{d.masque ? '***' : d.numero_mtn || '—'}</span></td>
+                {showAgent && <td><span className="dossier-cell-value">{d.agent_saisie || '—'}</span></td>}
+                {showDate  && <td><span className="dossier-cell-value">{d.date || '—'}</span></td>}
+                <td><span className="dossier-cell-value">{d.heure_reception || '—'}</span></td>
+                <td><StatutBadge statut={d.statut} /></td>
+                {rowActions && <td className="dossier-actions-cell" onClick={e => e.stopPropagation()}>{rowActions(d)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

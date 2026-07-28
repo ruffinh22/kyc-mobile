@@ -479,10 +479,76 @@ body {
 .b-agent      { background: var(--surface-3);       color: var(--ink-2);     } .b-agent::before      { background: var(--ink-3); }
 
 /* ── TABLE ────────────────────────────────────────────────────────────────── */
+.dossier-table-shell {
+  display: grid;
+  gap: .7rem;
+}
+
+.dossier-table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .75rem;
+  padding: .7rem .85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.dossier-table-title {
+  font-size: .92rem;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+
+.dossier-table-sub {
+  font-size: 11.5px;
+  color: var(--ink-4);
+  margin-top: .1rem;
+}
+
+.dossier-table-pills {
+  display: flex;
+  gap: .45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dossier-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: .28rem .6rem;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-3);
+}
+
+.dossier-pill-total {
+  background: var(--mtn-blue-light);
+  color: var(--mtn-blue);
+  border-color: rgba(0,87,168,.16);
+}
+
+.dossier-pill-attente {
+  background: var(--mtn-yellow-soft);
+  color: #9A7700;
+  border-color: rgba(255,204,0,.20);
+}
+
+.dossier-pill-cours {
+  background: var(--mtn-blue-light);
+  color: var(--mtn-blue);
+  border-color: rgba(0,87,168,.16);
+}
+
 .table-wrap {
   overflow-x: auto;
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .rejection-motif-table-wrap {
@@ -552,6 +618,67 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+}
+
+.dossier-table thead {
+  background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+}
+
+.dossier-table th {
+  color: rgba(255,255,255,.88);
+}
+
+.dossier-row {
+  background: #fff;
+}
+
+.dossier-row.en_attente {
+  background: linear-gradient(90deg, rgba(255, 244, 196, 0.22) 0%, rgba(255,255,255,1) 100%);
+}
+
+.dossier-row.en_cours {
+  background: linear-gradient(90deg, rgba(219, 234, 254, 0.28) 0%, rgba(255,255,255,1) 100%);
+}
+
+.dossier-row.accepte {
+  background: linear-gradient(90deg, rgba(220, 252, 231, 0.28) 0%, rgba(255,255,255,1) 100%);
+}
+
+.dossier-row.rejete {
+  background: linear-gradient(90deg, rgba(254, 226, 226, 0.28) 0%, rgba(255,255,255,1) 100%);
+}
+
+.dossier-cell-primary {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+
+.dossier-ref-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: .2rem .45rem;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-family: monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.dossier-ref-sub {
+  font-size: 11px;
+  color: var(--ink-4);
+}
+
+.dossier-cell-value {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.dossier-actions-cell {
+  min-width: 260px;
 }
 
 thead {

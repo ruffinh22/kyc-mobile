@@ -70,13 +70,33 @@ export function AgentDashboard() {
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowISO = tomorrow.toISOString().slice(0, 10);
   const { data, loading, error } = useFetch(() => api.getDossierStats(today), [today]);
+  const { data: queueData, loading: queueLoading, error: queueError } = useFetch(() => api.getDossiers({ limit: 200, scope: 'queue' }), []);
   const { data: gsmData, loading: gsmLoading, error: gsmError } = useFetch(() => api.getGsmMonTableau(), []);
   const { data: planningData, loading: planningLoading, error: planningError } = useFetch(() => api.getPlanningMon(today, tomorrowISO), [today, tomorrowISO]);
 
   const planningToday = planningData?.entrees.filter(e => e.date === today) ?? [];
   const planningTomorrow = planningData?.entrees.filter(e => e.date === tomorrowISO) ?? [];
-  const dossierTotal = (data?.en_attente ?? 0) + (data?.en_cours ?? 0) + (data?.accepte ?? 0) + (data?.rejete ?? 0);
-  const activeDossiers = (data?.en_attente ?? 0) + (data?.en_cours ?? 0);
+  const queueStats = useMemo(() => {
+    const dossiers = queueData?.dossiers ?? [];
+    return dossiers.reduce((acc, dossier) => {
+      if (dossier.statut === 'en_attente') acc.en_attente += 1;
+      if (dossier.statut === 'en_cours') acc.en_cours += 1;
+      if (dossier.statut === 'accepte') acc.accepte += 1;
+      if (dossier.statut === 'rejete') acc.rejete += 1;
+      acc.total += 1;
+      return acc;
+    }, { en_attente: 0, en_cours: 0, accepte: 0, rejete: 0, total: 0 });
+  }, [queueData]);
+
+  const effectiveStats = queueData ? queueStats : {
+    en_attente: data?.en_attente ?? 0,
+    en_cours: data?.en_cours ?? 0,
+    accepte: data?.accepte ?? 0,
+    rejete: data?.rejete ?? 0,
+    total: (data?.en_attente ?? 0) + (data?.en_cours ?? 0) + (data?.accepte ?? 0) + (data?.rejete ?? 0),
+  };
+  const dossierTotal = effectiveStats.total;
+  const activeDossiers = effectiveStats.en_attente + effectiveStats.en_cours;
 
   return (
     <>
@@ -90,7 +110,7 @@ export function AgentDashboard() {
         </div>
       </div>
 
-      {(error || gsmError || planningError) && <Alert kind="error">{error || gsmError || planningError}</Alert>}
+      {(error || queueError || gsmError || planningError) && <Alert kind="error">{error || queueError || gsmError || planningError}</Alert>}
 
       <div className="card hero-card">
         <div className="hero-card-content">
@@ -111,7 +131,7 @@ export function AgentDashboard() {
         <div className="dashboard-summary-card primary">
           <span className="dashboard-summary-label">Dossiers du jour</span>
           <strong className="dashboard-summary-value">{dossierTotal}</strong>
-          <span className="dashboard-summary-meta">{data?.en_cours ?? 0} en cours • {data?.en_attente ?? 0} en attente</span>
+          <span className="dashboard-summary-meta">{effectiveStats.en_cours} en cours • {effectiveStats.en_attente} en attente</span>
         </div>
         <div className="dashboard-summary-card">
           <span className="dashboard-summary-label">GSM</span>
@@ -125,7 +145,7 @@ export function AgentDashboard() {
         </div>
       </div>
 
-      {loading || gsmLoading || planningLoading ? <LoadingCenter /> : (
+      {loading || queueLoading || gsmLoading || planningLoading ? <LoadingCenter /> : (
         <>
           <section className="dashboard-section">
             <div className="dashboard-section-head">
@@ -133,10 +153,10 @@ export function AgentDashboard() {
               <span className="dashboard-section-sub">Indicateurs clés du quotidien</span>
             </div>
             <div className="stats-grid">
-            <StatCard label="En attente" value={data?.en_attente ?? 0} variant="attente" sub="File commune" />
-            <StatCard label="En cours" value={data?.en_cours ?? 0} variant="cours" sub="Vos dossiers actifs" />
-            <StatCard label="Acceptés" value={data?.accepte ?? 0} variant="accepte" sub="Aujourd’hui" />
-            <StatCard label="Rejetés" value={data?.rejete ?? 0} variant="rejete" sub="Aujourd’hui" />
+            <StatCard label="En attente" value={effectiveStats.en_attente} variant="attente" sub="File commune" />
+            <StatCard label="En cours" value={effectiveStats.en_cours} variant="cours" sub="Vos dossiers actifs" />
+            <StatCard label="Acceptés" value={effectiveStats.accepte} variant="accepte" sub="Aujourd’hui" />
+            <StatCard label="Rejetés" value={effectiveStats.rejete} variant="rejete" sub="Aujourd’hui" />
           </div>
 
             <div className="stats-grid">

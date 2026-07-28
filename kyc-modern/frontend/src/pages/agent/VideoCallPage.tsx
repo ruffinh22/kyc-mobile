@@ -15,6 +15,7 @@ type SignalMessage =
   | { type: 'call-unavailable'; reason?: string }
   | { type: 'no-answer'; numero: string; callUuid: string }
   | { type: 'incoming-call'; numero: string; numeroMtn: string }
+  | { type: 'hangup' }
   | { type: 'webrtc'; payload: any }
   | { type: 'pong' }
   | { type: 'terrain-absent'; numero: string };
@@ -220,14 +221,16 @@ export function AgentVideoCallPage() {
     pendingCandidatesRef.current = [];
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
-      setLocalStream(null);
     }
     if (remoteStream) {
       remoteStream.getTracks().forEach((track) => track.stop());
-      setRemoteStream(null);
     }
+    setLocalStream(null);
+    setRemoteStream(null);
     setConnected(false);
     setActiveCallId(null);
+    setCallStartedAt(null);
+    setCallElapsed(0);
   };
 
   const formatDuration = (seconds: number) => {
@@ -308,6 +311,13 @@ export function AgentVideoCallPage() {
         setError('Aucun réponse du terrain');
         cleanupCallResources();
         break;
+      case 'hangup':
+        setStatus('ready');
+        setCallOutcome('ended');
+        setError(null);
+        setInfo('L’appel a été raccroché par l’autre partie');
+        cleanupCallResources();
+        break;
       case 'incoming-call':
         addInfo('Incoming-call reçu (back-office)');
         break;
@@ -363,9 +373,15 @@ export function AgentVideoCallPage() {
       if (pc.connectionState === 'connected') {
         setConnected(true);
         setStatus('connected');
+        setCallOutcome('connected');
       }
       if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        if (status !== 'ended') setStatus('ended');
+        if (status !== 'ended') {
+          setStatus('ready');
+          setCallOutcome('ended');
+          setError(null);
+          setInfo('La connexion vidéo a été interrompue');
+        }
       }
     };
 
@@ -460,6 +476,7 @@ export function AgentVideoCallPage() {
     setStatus('ready');
     setCallOutcome('ended');
     setCallElapsed(0);
+    setError(null);
     setInfo('Appel terminé');
   };
 

@@ -3,9 +3,8 @@ import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { Dossier, DossierStatut } from '../../types';
-import { StatCard, Alert, LoadingCenter, EmptyState, Modal, SidePanel } from '../../components/ui';
+import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../components/ui';
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
-import { GsmSaisie } from './GsmPages';
 import { FaceLivenessCheck } from '../FaceLivenessCheck';
 import { PauseButton } from '../../components/PauseButton';
 
@@ -130,7 +129,7 @@ export function AgentDashboard() {
                   <p className="page-sub">Vos activités prévues aujourd’hui.</p>
                 </div>
               </div>
-              {!planningToday.length ? <EmptyState icon="📅" title="Aucun planning aujourd’hui" body="Vos activités prévues aujourd’hui. Aucune donnée." /> : (
+              {!planningToday.length ? <EmptyState icon="📅" title="Aucun planning aujourd’hui" /> : (
                 <div className="stack-list">
                   {planningToday.map(entry => (
                     <div key={entry.id} className="stack-item">
@@ -155,7 +154,7 @@ export function AgentDashboard() {
                   <p className="page-sub">Préparez votre journée à l’avance.</p>
                 </div>
               </div>
-              {!planningTomorrow.length ? <EmptyState icon="🗓" title="Aucun planning demain" body="Préparez votre journée à l’avance. Aucune donnée." /> : (
+              {!planningTomorrow.length ? <EmptyState icon="🗓" title="Aucun planning demain" /> : (
                 <div className="stack-list">
                   {planningTomorrow.map(entry => (
                     <div key={entry.id} className="stack-item">
@@ -225,8 +224,6 @@ export function AgentFileAttente() {
   const [selected, setSelected] = useState<Dossier | null>(null);
   const [rejetTarget, setRejetTarget] = useState<Dossier | null>(null);
   const [livenessDossier, setLivenessDossier] = useState<Dossier | null>(null);
-  const [gsmDossier, setGsmDossier] = useState<Dossier | null>(null);
-  const [gsmDefaultValues, setGsmDefaultValues] = useState<Record<string, string>>({});
   const [selectedMotif, setSelectedMotif] = useState('');
   const [customMotif, setCustomMotif] = useState('');
   const [motifSearch, setMotifSearch] = useState('');
@@ -247,23 +244,6 @@ export function AgentFileAttente() {
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
   const motifs = motifsQ.data?.motifs ?? [];
-  const buildGsmDefaults = (dossier: Dossier, action: string, reason?: string) => {
-    const joinedNomClient = [dossier.nom_titulaire, dossier.prenom_titulaire].filter(Boolean).join(' ');
-    const piece = dossier.photo_recto && dossier.photo_verso
-      ? 'Recto/Verso'
-      : dossier.photo_recto
-        ? 'Recto'
-        : dossier.photo_verso
-          ? 'Verso'
-          : '';
-    return {
-      numero: dossier.numero_mtn,
-      nom_client: joinedNomClient || '',
-      action,
-      raison: reason || dossier.raison_rejet || dossier.visage_motif || '',
-      piece,
-    };
-  };
   const filteredMotifs = useMemo(() => {
     const query = motifSearch.trim().toLocaleLowerCase('fr-FR');
     return motifs.filter(motif => motif.toLocaleLowerCase('fr-FR').includes(query));
@@ -432,8 +412,8 @@ export function AgentFileAttente() {
                         )}
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
-                          setGsmDossier(d);
-                          setGsmDefaultValues(buildGsmDefaults(d, 'Accepter'));
+                          localStorage.setItem('gsm_dossier_id', d.id);
+                          window.location.href = '/gsm-saisie?dossier=' + d.id;
                         })}>Accepter</button>
                       </div>
                     </div>
@@ -486,8 +466,8 @@ export function AgentFileAttente() {
               )}
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
               <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
-                setGsmDossier(selected);
-                setGsmDefaultValues(buildGsmDefaults(selected, 'Accepter'));
+                localStorage.setItem('gsm_dossier_id', selected.id);
+                window.location.href = '/gsm-saisie?dossier=' + selected.id;
               })}>Accepter</button>
             </>
           ) : null
@@ -498,19 +478,19 @@ export function AgentFileAttente() {
         <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }} footer={
           <>
             <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }}>Annuler</button>
-                    <button className="btn btn-danger btn-sm" disabled={busy || (!selectedMotif || (selectedMotif === 'autre' && !customMotif.trim()))} onClick={() => action(async () => {
-                const finalReason = selectedMotif === 'autre' ? customMotif.trim() : selectedMotif;
-                if (!finalReason) return;
-                if (selectedMotif === 'autre' && finalReason && !motifs.includes(finalReason)) {
-                  await api.setRejectionMotifs([...motifs, finalReason]);
-                }
-                await api.rejeterDossier(rejetTarget.id, finalReason);
-                setGsmDefaultValues(buildGsmDefaults(rejetTarget, 'Rejeter', finalReason));
-                setGsmDossier(rejetTarget);
-                setRejetTarget(null);
-                setSelectedMotif('');
-                setCustomMotif('');
-              })}>Confirmer</button>
+            <button className="btn btn-danger btn-sm" disabled={busy || (!selectedMotif || (selectedMotif === 'autre' && !customMotif.trim()))} onClick={() => action(async () => {
+              const finalReason = selectedMotif === 'autre' ? customMotif.trim() : selectedMotif;
+              if (!finalReason) return;
+              if (selectedMotif === 'autre' && finalReason && !motifs.includes(finalReason)) {
+                await api.setRejectionMotifs([...motifs, finalReason]);
+              }
+              await api.rejeterDossier(rejetTarget.id, finalReason);
+              setRejetTarget(null);
+              setSelectedMotif('');
+              setCustomMotif('');
+              localStorage.setItem('gsm_dossier_id', rejetTarget.id);
+              window.location.href = '/gsm-saisie?dossier=' + rejetTarget.id;
+            })}>Confirmer</button>
           </>
         }>
           <div className="field">
@@ -597,20 +577,6 @@ export function AgentFileAttente() {
             </div>
           </div>
         </Modal>
-      )}
-      {gsmDossier && (
-        <SidePanel title={`Saisie GSM — ${gsmDossier.id}`} onClose={() => { setGsmDossier(null); setGsmDefaultValues({}); }}>
-          <GsmSaisie
-            dossierId={gsmDossier.id}
-            defaultValues={gsmDefaultValues}
-            onClose={() => { setGsmDossier(null); setGsmDefaultValues({}); }}
-            onComplete={() => {
-              setGsmDossier(null);
-              setGsmDefaultValues({});
-              refetch();
-            }}
-          />
-        </SidePanel>
       )}
     </>
   );

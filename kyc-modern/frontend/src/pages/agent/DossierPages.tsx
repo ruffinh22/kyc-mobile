@@ -284,29 +284,16 @@ export function AgentFileAttente() {
     if (motifPage > motifPageCount) setMotifPage(motifPageCount);
   }, [motifPage, motifPageCount]);
 
-  // Polling silencieux en arrière-plan - ne recharge que si dossiers en_attente changent
-  const dossiersRef = useRef(dossiers);
+  // Le polling agressif rend la file d'attente instable visuellement.
+  // On se contente d'un rafraîchissement manuel volontaire et d'un rechargement
+  // ciblé après une action métier réussie.
   useEffect(() => {
-    dossiersRef.current = dossiers;
-  }, [dossiers]);
-
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const newData = await api.getDossiers({ limit: 200 });
-        const newEnAttente = (newData.dossiers ?? []).filter(d => d.statut === 'en_attente').length;
-        const currentEnAttente = dossiersRef.current.filter(d => d.statut === 'en_attente').length;
-        
-        // Ne recharger que si le nombre de dossiers en_attente a changé
-        if (newEnAttente !== currentEnAttente) {
-          refetch();
-        }
-      } catch (e) {
-        // Silencieusement ignorer les erreurs de polling
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [refetch]);
+    return () => {
+      setSelected(null);
+      setRejetTarget(null);
+      setLivenessDossier(null);
+    };
+  }, []);
 
   return (
     <>
@@ -348,10 +335,12 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
-                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? '📞 Appeler' : 'Pas de WA'}
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)} title="Appeler l’agent terrain">
+                          {d.wa_agent ? '📞 Call' : 'Pas de WA'}
                         </button>
-                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
+                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))} title="Prendre en charge">
+                          Prendre
+                        </button>
                       </div>
                     </div>
                     <div className="face-preview-card">
@@ -413,17 +402,17 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline">
-                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? '📞 Appeler' : 'Pas de WA'}
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)} title="Appeler l’agent terrain">
+                          {d.wa_agent ? '📞 Call' : 'Pas de WA'}
                         </button>
                         {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
-                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Refaire faciale</button>
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))} title="Refaire la vérification faciale">↺ Faciale</button>
                         )}
-                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>✕ Rejeter</button>
+                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }} title="Rejeter le dossier">✕ Reject</button>
                         <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                           localStorage.setItem('gsm_dossier_id', d.id);
                           window.location.href = '/gsm-saisie?dossier=' + d.id;
-                        })}>✓ Valider</button>
+                        })} title="Valider le dossier">✓ Validate</button>
                       </div>
                     </div>
                     <div className="face-preview-card">

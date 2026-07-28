@@ -47,6 +47,15 @@ export function AgentVideoCallPage() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
+    const nextPath = `/video-call${terrain ? `?terrain=${encodeURIComponent(terrain)}` : ''}${numeroMtn ? `${terrain ? '&' : '?'}mtn=${encodeURIComponent(numeroMtn)}` : ''}${dossierId ? `${terrain || numeroMtn ? '&' : '?'}dossier=${encodeURIComponent(dossierId)}` : ''}`;
+    const currentUrl = new URL(window.location.href);
+    if (currentUrl.pathname !== '/video-call' || currentUrl.search !== new URL(nextPath, window.location.origin).search) {
+      window.history.replaceState({}, '', nextPath);
+      window.dispatchEvent(new Event('popstate'));
+    }
+  }, [terrain, numeroMtn, dossierId]);
+
+  useEffect(() => {
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = localStream;
     }

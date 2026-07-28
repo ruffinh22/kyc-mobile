@@ -37,6 +37,40 @@ function getRoute(): string {
   return p;
 }
 
+function getPageForRoute(pathname: string): string | null {
+  const route = pathname.replace(/\/$/, '') || '/';
+  const pageMap: Record<string, string> = {
+    '/gsm-saisie': 'gsm-saisie',
+    '/gsm-tableau': 'gsm-tableau',
+    '/gsm-historique': 'gsm-historique',
+    '/gsm-perfs': 'gsm-perfs',
+    '/file-attente': 'file-attente',
+    '/mes-dossiers': 'mes-dossiers',
+    '/video-call': 'video-call',
+    '/planning': 'planning',
+    '/qualite': 'qualite',
+    '/acquisition': 'acquisition',
+  };
+  return pageMap[route] ?? null;
+}
+
+function getPathForPage(page: string): string {
+  switch (page) {
+    case 'gsm-saisie': return '/gsm-saisie';
+    case 'gsm-tableau': return '/gsm-tableau';
+    case 'gsm-historique': return '/gsm-historique';
+    case 'gsm-perfs': return '/gsm-perfs';
+    case 'file-attente': return '/file-attente';
+    case 'mes-dossiers': return '/mes-dossiers';
+    case 'video-call': return '/video-call';
+    case 'planning': return '/planning';
+    case 'qualite': return '/qualite';
+    case 'acquisition': return '/acquisition';
+    case 'dashboard':
+    default: return '/';
+  }
+}
+
 function PublicRouter() {
   const route = getRoute();
 
@@ -107,25 +141,52 @@ function AuthenticatedShell() {
   const { user } = useAuth();
   const [page, setPage] = useState('dashboard');
 
-  // Synchroniser l'état page avec l'URL pathname
-  useEffect(() => {
-    const pathname = window.location.pathname.replace(/\/$/, '') || '/';
-    const pageMap: Record<string, string> = {
-      '/gsm-saisie': 'gsm-saisie',
-      '/gsm-tableau': 'gsm-tableau',
-      '/gsm-historique': 'gsm-historique',
-      '/gsm-perfs': 'gsm-perfs',
-      '/file-attente': 'file-attente',
-      '/mes-dossiers': 'mes-dossiers',
-      '/video-call': 'video-call',
-      '/planning': 'planning',
-      '/qualite': 'qualite',
-      '/acquisition': 'acquisition',
-    };
-    if (pageMap[pathname]) {
-      setPage(pageMap[pathname]);
+  const navigateToPage = (nextPage: string) => {
+    const path = getPathForPage(nextPage);
+    const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+    if (currentPath !== path) {
+      window.history.pushState({}, '', path);
     }
-  }, []);
+    setPage(nextPage);
+  };
+
+  // Synchroniser l'état page avec l'URL pathname, y compris après pushState/replaceState
+  useEffect(() => {
+    const syncPageFromUrl = () => {
+      const nextPage = getPageForRoute(window.location.pathname);
+      if (nextPage && nextPage !== page) {
+        setPage(nextPage);
+      } else if (!nextPage && page !== 'dashboard') {
+        setPage('dashboard');
+      }
+    };
+
+    syncPageFromUrl();
+
+    const handleRouteChange = () => syncPageFromUrl();
+    window.addEventListener('popstate', handleRouteChange);
+
+    const originalPushState = window.history.pushState.bind(window.history);
+    const originalReplaceState = window.history.replaceState.bind(window.history);
+
+    window.history.pushState = ((...args: Parameters<typeof window.history.pushState>) => {
+      const result = originalPushState(...args);
+      handleRouteChange();
+      return result;
+    }) as typeof window.history.pushState;
+
+    window.history.replaceState = ((...args: Parameters<typeof window.history.replaceState>) => {
+      const result = originalReplaceState(...args);
+      handleRouteChange();
+      return result;
+    }) as typeof window.history.replaceState;
+
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange);
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+    };
+  }, [page]);
 
   // Heartbeat toutes les 60s pour les agents
   useHeartbeat(user?.role === 'agent', 60_000);
@@ -136,7 +197,7 @@ function AuthenticatedShell() {
   return (
     <div className="shell">
       <Topbar />
-      <Sidebar role={user.role} active={page} onChange={setPage} />
+      <Sidebar role={user.role} active={page} onChange={navigateToPage} />
       <main className="main">
         {user.role === 'agent'       && <AgentApp page={page} />}
         {user.role === 'superviseur' && <SupApp   page={page} />}

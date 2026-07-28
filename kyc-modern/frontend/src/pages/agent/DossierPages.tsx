@@ -613,7 +613,14 @@ export function AgentMesDossiers() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ imgs: string[]; idx: number; title?: string } | null>(null);
+  const [rejetTarget, setRejetTarget] = useState<Dossier|null>(null);
+  const [selectedMotif, setSelectedMotif] = useState('');
+  const [customMotif, setCustomMotif] = useState('');
+  const [motifSearch, setMotifSearch] = useState('');
+  const [motifPage, setMotifPage] = useState(1);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300, scope: 'mine' }), [debut, fin, statut, dSearch]);
+  const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
 
   const handleCallTerrain = async (dossier: Dossier) => {
     if (!dossier.wa_agent) {
@@ -633,6 +640,54 @@ export function AgentMesDossiers() {
       setBusy(false);
     }
   };
+
+  const action = async (fn: () => Promise<unknown>, after?: () => void) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+      setSel(null);
+      refetch();
+      after?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const motifs = motifsQ.data?.motifs ?? [];
+  const filteredMotifs = useMemo(() => {
+    const query = motifSearch.trim().toLocaleLowerCase('fr-FR');
+    return motifs.filter(motif => motif.toLocaleLowerCase('fr-FR').includes(query));
+  }, [motifs, motifSearch]);
+  const motifsPerPage = 10;
+  const motifPageCount = Math.max(1, Math.ceil((filteredMotifs.length + 1) / motifsPerPage));
+  const motifPageItems = filteredMotifs.slice((motifPage - 1) * motifsPerPage, motifPage * motifsPerPage);
+
+  useEffect(() => {
+    if (!preview) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+      if (e.key === 'ArrowLeft') setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p);
+      if (e.key === 'ArrowRight') setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [preview]);
+
+  useEffect(() => {
+    if (rejetTarget) {
+      setSelectedMotif('');
+      setCustomMotif('');
+      setMotifSearch('');
+      setMotifPage(1);
+    }
+  }, [rejetTarget]);
+
+  useEffect(() => {
+    if (motifPage > motifPageCount) setMotifPage(motifPageCount);
+  }, [motifPage, motifPageCount]);
 
   const sortedDossiers = useMemo(() => {
     const rows = [...(data?.dossiers ?? [])];
@@ -685,16 +740,112 @@ export function AgentMesDossiers() {
       {error && <Alert kind="error">{error}</Alert>}
       {err && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
-      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} rowActions={d => (
-        <button className="btn btn-success btn-sm" disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
-          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
-        </button>
-      )} /></div>}
+      {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} rowActions={d => {
+        const photoTypes = ['recto', 'verso', 'live'] as const;
+        const imgs = photoTypes.map(type => d[`photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live'] ? api.photoUrlWithToken(d.id, type) : null).filter(Boolean) as string[];
+        return (
+          <div className="agent-actions-inline" style={{ gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={(e) => { e.stopPropagation(); void handleCallTerrain(d); }}>
+              {d.wa_agent ? '📞 Appeler' : 'Pas de WA'}
+            </button>
+            <button className="btn btn-success btn-sm" disabled={busy || d.statut !== 'en_cours'} onClick={(e) => { e.stopPropagation(); void action(() => api.accepterDossier(d.id), () => { localStorage.setItem('gsm_dossier_id', d.id); window.location.href = '/gsm-saisie?dossier=' + d.id; }); }}>
+              ✓ Valider
+            </button>
+            <button className="btn btn-danger btn-sm" disabled={busy || d.statut !== 'en_cours'} onClick={(e) => { e.stopPropagation(); setRejetTarget(d); }}>
+              ✕ Rejeter
+            </button>
+            {imgs.length > 0 && photoTypes.map(type => {
+              const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+              if (!d[field]) return null;
+              const url = api.photoUrlWithToken(d.id, type);
+              const idx = imgs.indexOf(url);
+              return (
+                <button
+                  key={`${d.id}-${type}`}
+                  className="photo-action-chip"
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` }); }}
+                  title={`Ouvrir la photo ${type.toUpperCase()}`}
+                >
+                  <span className="photo-chip-letter">{type === 'recto' ? 'L' : type === 'verso' ? 'V' : 'R'}</span>
+                  <span>{type === 'recto' ? 'Recto' : type === 'verso' ? 'Verso' : 'Live'}</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      }} /></div>}
       {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} actions={
         <button className="btn btn-success" disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
           {sel.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
         </button>
       } />}
+      {rejetTarget && (
+        <Modal title={`Rejeter ${rejetTarget.id}`} onClose={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }} footer={
+          <>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setRejetTarget(null); setSelectedMotif(''); setCustomMotif(''); setMotifSearch(''); setMotifPage(1); }}>Annuler</button>
+            <button className="btn btn-danger btn-sm" disabled={busy || (!selectedMotif || (selectedMotif === 'autre' && !customMotif.trim()))} onClick={() => action(async () => {
+              const finalReason = selectedMotif === 'autre' ? customMotif.trim() : selectedMotif;
+              if (!finalReason) return;
+              if (selectedMotif === 'autre' && finalReason && !motifs.includes(finalReason)) {
+                await api.setRejectionMotifs([...motifs, finalReason]);
+              }
+              await api.rejeterDossier(rejetTarget.id, finalReason);
+              setRejetTarget(null);
+              setSelectedMotif('');
+              setCustomMotif('');
+              localStorage.setItem('gsm_dossier_id', rejetTarget.id);
+              window.location.href = '/gsm-saisie?dossier=' + rejetTarget.id;
+            })}>Confirmer</button>
+          </>
+        }>
+          <div className="field">
+            <label htmlFor="motif-search">Rechercher un motif<span className="req">*</span></label>
+            <input id="motif-search" type="search" value={motifSearch} onChange={e => { setMotifSearch(e.target.value); setMotifPage(1); }} placeholder="Rechercher dans les motifs…" />
+          </div>
+          <div className="rejection-motif-table-wrap">
+            <table className="rejection-motif-table">
+              <thead><tr><th aria-label="Sélection" /><th>Motif</th></tr></thead>
+              <tbody>
+                {motifPageItems.map(motif => (
+                  <tr key={motif} className={selectedMotif === motif ? 'selected' : ''}>
+                    <td><input type="checkbox" checked={selectedMotif === motif} onChange={() => setSelectedMotif(selectedMotif === motif ? '' : motif)} aria-label={`Sélectionner le motif ${motif}`} /></td>
+                    <td onClick={() => setSelectedMotif(selectedMotif === motif ? '' : motif)}>{motif}</td>
+                  </tr>
+                ))}
+                {motifPage === 1 && <tr className={selectedMotif === 'autre' ? 'selected' : ''}><td><input type="checkbox" checked={selectedMotif === 'autre'} onChange={() => setSelectedMotif(selectedMotif === 'autre' ? '' : 'autre')} aria-label="Sélectionner un autre motif" /></td><td onClick={() => setSelectedMotif(selectedMotif === 'autre' ? '' : 'autre')}>Autre</td></tr>}
+                {!motifPageItems.length && <tr><td colSpan={2}>Aucun motif trouvé.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="rejection-motif-pagination">
+            <span>{filteredMotifs.length + 1} motif(s) • Page {motifPage} sur {motifPageCount}</span>
+            <div>
+              <button className="btn btn-ghost btn-sm" disabled={motifPage <= 1} onClick={() => setMotifPage(page => page - 1)}>Précédente</button>
+              <button className="btn btn-ghost btn-sm" disabled={motifPage >= motifPageCount} onClick={() => setMotifPage(page => page + 1)}>Suivante</button>
+            </div>
+          </div>
+          {selectedMotif === 'autre' && (
+            <div className="field" style={{ marginTop: '.75rem' }}>
+              <label>Préciser le motif</label>
+              <textarea value={customMotif} onChange={e => setCustomMotif(e.target.value)} placeholder="Saisissez un motif puis validez" autoFocus />
+            </div>
+          )}
+        </Modal>
+      )}
+      {preview && (
+        <Modal title={preview.title || 'Aperçu'} onClose={() => setPreview(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <img src={preview.imgs[preview.idx]} alt={preview.title || `Aperçu ${preview.idx+1}`} style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '.5rem' }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)} disabled={preview.idx <= 0}>← Précédent</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p)} disabled={preview.idx >= preview.imgs.length - 1}>Suivant →</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

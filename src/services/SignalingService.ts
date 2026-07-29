@@ -450,6 +450,7 @@ class SignalingService {
 
       this.sendRaw({
         type: 'webrtc',
+        numero: this.numeroAgent,
         payload: { kind: 'answer', sdp: (this.pc.localDescription as any).sdp },
       });
     } catch (e) {
@@ -503,6 +504,7 @@ class SignalingService {
       if (e.candidate) {
         this.sendRaw({
           type: 'webrtc',
+          numero: this.numeroAgent,
           payload: { kind: 'ice', candidate: e.candidate.toJSON() },
         });
       }
@@ -510,18 +512,24 @@ class SignalingService {
 
     const handleIncomingStream = (e: any) => {
       const incoming: MediaStream | undefined = e.stream ?? e.streams?.[0];
-      if (!incoming) return;
+      if (!incoming && !e.track) return;
 
       const merged = this.lastRemoteStream ?? new MediaStream();
       if (!this.lastRemoteStream) {
         this.lastRemoteStream = merged;
       }
 
-      incoming.getTracks?.().forEach((track: MediaStreamTrack) => {
-        if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === track.id)) {
-          merged.addTrack(track);
+      if (incoming) {
+        incoming.getTracks?.().forEach((track: MediaStreamTrack) => {
+          if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === track.id)) {
+            merged.addTrack(track);
+          }
+        });
+      } else if (e.track) {
+        if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === e.track.id)) {
+          merged.addTrack(e.track);
         }
-      });
+      }
 
       console.log('[Signal] flux distant reçu', {
         trackCount: merged.getTracks?.().length ?? 0,

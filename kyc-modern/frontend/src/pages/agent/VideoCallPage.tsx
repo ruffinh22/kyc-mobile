@@ -496,7 +496,7 @@ export function AgentVideoCallPage() {
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         logRtc('candidat ICE généré', event.candidate.toJSON());
-        sendWs({ type: 'webrtc', payload: { kind: 'ice', candidate: event.candidate.toJSON() } });
+        sendWs({ type: 'webrtc', numero: normalizeNumero(terrain), payload: { kind: 'ice', candidate: event.candidate.toJSON() } });
       }
     };
 
@@ -525,6 +525,9 @@ export function AgentVideoCallPage() {
           connectionState: pc.connectionState,
           kind: event.track?.kind,
         });
+        if (!remoteStreamRef.current) {
+          remoteStreamRef.current = baseStream;
+        }
         setRemoteStream(baseStream);
       } else {
         logRtcWarn('ontrack appelé sans MediaStream valide', event);
@@ -732,7 +735,7 @@ export function AgentVideoCallPage() {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         logRtc('answer SDP créée et envoyée');
-        sendWs({ type: 'webrtc', payload: { kind: 'answer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
+        sendWs({ type: 'webrtc', numero: normalizeNumero(terrain), payload: { kind: 'answer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
       } catch (e) {
         logRtcWarn('erreur handle offer', e);
       }
@@ -770,7 +773,7 @@ export function AgentVideoCallPage() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       logRtc('offre WebRTC créée et envoyée');
-      sendWs({ type: 'webrtc', payload: { kind: 'offer', sdp: offer.sdp } });
+      sendWs({ type: 'webrtc', numero: normalizeNumero(terrain), payload: { kind: 'offer', sdp: offer.sdp } });
     } catch (e) {
       logRtcWarn('impossible de créer l’offre', e);
       setError('Impossible de préparer l’appel WebRTC.');

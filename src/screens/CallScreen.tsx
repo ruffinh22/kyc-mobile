@@ -133,7 +133,8 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
     if (!remoteStream) return null;
     const streamUrl = (remoteStream as MediaStream & { toURL?: () => string }).toURL?.();
     if (!streamUrl) {
-      console.warn('[CallScreen] remoteStream.toURL() indisponible — RTCView ne peut pas afficher ce flux.');
+      const fallback = (remoteStream as unknown as { id?: string }).id;
+      console.warn('[CallScreen] remoteStream.toURL() indisponible — RTCView ne peut pas afficher ce flux.', fallback);
       return null;
     }
     return streamUrl;
@@ -185,7 +186,9 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
         case 'local':
           setLocalStream(event.stream); break;
         case 'remote':
-          setRemoteStream(event.stream);
+          if (event.stream) {
+            setRemoteStream(event.stream);
+          }
           setHasRemote(true);
           setCallReady(true);
           setConnectionPhase('connected');

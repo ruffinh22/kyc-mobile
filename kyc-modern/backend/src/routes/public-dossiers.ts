@@ -1135,18 +1135,21 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
         if (msg.type === 'webrtc' && role && numero) {
           const payload = msg.payload as { kind?: string } | undefined;
-          const targetNumero = normalizeNumero((msg as any).numero || numero);
-          console.log('[SIGNAL] relay webrtc', { role, numero, targetNumero, kind: payload?.kind, hasPayload: Boolean(msg.payload) });
-          clearPendingCall(targetNumero);
+          const explicitTarget = normalizeNumero((msg as any).numero);
+          const pendingForTerrain = role === 'terrain' ? pendingCalls.get(numero) : undefined;
+          const relayTarget = explicitTarget || (role === 'backoffice' ? numero : undefined);
+          const pendingKey = role === 'terrain' ? numero : (relayTarget || numero);
+          console.log('[SIGNAL] relay webrtc', { role, numero, explicitTarget, relayTarget, pendingForTerrain: Boolean(pendingForTerrain), kind: payload?.kind, hasPayload: Boolean(msg.payload) });
+          clearPendingCall(pendingKey);
           if (role === 'terrain') {
-            const boSocket = backofficeSockets.get(targetNumero);
+            const boSocket = pendingForTerrain?.boSocket ?? (explicitTarget ? backofficeSockets.get(explicitTarget) : null);
             if (boSocket) {
-              try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: targetNumero })); } catch { /* fermé */ }
+              try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: explicitTarget || numero })); } catch { /* fermé */ }
             }
           } else if (role === 'backoffice') {
-            const targetSocket = terrainSockets.get(targetNumero);
+            const targetSocket = terrainSockets.get(relayTarget || numero);
             if (targetSocket) {
-              try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: targetNumero })); } catch { /* fermé */ }
+              try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: relayTarget || numero })); } catch { /* fermé */ }
             }
           }
           return;

@@ -77,6 +77,8 @@ class NotificationService {
   private recentCallUuids = new Map<string, number>();
   private pendingCallUuid: string | null = null;
   private fcmToken: string | null = null;
+  private readonly MAX_PUSH_AGE_MS = 60_000; // ignore delayed FCM pushes after the ring timeout
+  private readonly MAX_PUSH_AGE_MS = 48_000; // ignore delayed call pushes after the ring window
   private listenersBound = false;
   private initialized = false;
   private callKeepConfigured = false;
@@ -346,6 +348,16 @@ class NotificationService {
     // Utilise le callUuid fourni par le serveur, ou en génère un local
     const callUuid  = String(data.callUuid ?? `fcm-${Date.now()}`);
 
+    const sentAtRaw = data.sentAt ?? data.sent_at ?? data.sent_at_ms ?? '';
+    const sentAt = Number(sentAtRaw || 0);
+    if (sentAt > 0) {
+      const age = Date.now() - sentAt;
+      if (age > this.MAX_PUSH_AGE_MS) {
+        console.log('[Notif] incoming-call stale ignoré', { callUuid, age, maxAge: this.MAX_PUSH_AGE_MS });
+        return;
+      }
+    }
+
     // Un appel est déjà affiché/en cours de traitement : le serveur génère un
     // callUuid DIFFÉRENT à chaque tentative (redial back-office, retry...),
     // donc comparer les uuid ne suffit pas — s'il y a déjà un activeCallUuid
@@ -470,7 +482,7 @@ class NotificationService {
       if (id === this.activeCallUuid) this.activeCallUuid = null;
     }
     this.displayedCallUuid = null;
-    this.recentCallUuids.clear();
+    this.pendingCallUuid = null;
     await this.clearPendingIncomingCall();
 
     callSessionService.stopIncomingCallExperience();

@@ -182,6 +182,7 @@ async function sendFcmHttp(payload: any): Promise<boolean> {
           data: payload.data,
           notification: payload.notification,
           android: payload.android,
+          apns: payload.apns,
         },
       }),
     });
@@ -303,8 +304,31 @@ async function sendIncomingCallPush(params: {
       callUuid: params.callUuid,
       sentAt: String(Date.now()),
     },
+    // `priority` top-level : requis par l'API legacy (fcm.googleapis.com/fcm/send).
+    // Sans lui, la priorité par défaut est 'normal', et Android retarde la
+    // livraison tant que le téléphone est en Doze / l'app fermée — le message
+    // n'arrive alors qu'à la prochaine fenêtre de maintenance système, ou
+    // quand l'utilisateur rouvre l'app manuellement (ce qui sort du Doze).
+    // C'est très exactement le bug "ça ne sonne que si l'app est déjà ouverte".
+    priority: 'high',
+    // `android.priority` : équivalent requis par l'API v1 (compte de service),
+    // qui elle ignore le champ top-level ci-dessus et lit cette structure.
     android: {
       priority: 'high',
+    },
+    // Config APNs (iOS) : sans elle, ce push data-only n'a AUCUNE chance de
+    // réveiller l'app côté iOS, même juste en arrière-plan (pas tuée). Ça ne
+    // suffit PAS pour réveiller une app iOS totalement tuée — Apple exige un
+    // VoIP Push (PushKit) + CallKit pour ce cas précis, ce qui est un chantier
+    // natif séparé — mais ça couvre au moins le cas "app en arrière-plan".
+    apns: {
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': 'background',
+      },
+      payload: {
+        aps: { 'content-available': 1 },
+      },
     },
   };
 
@@ -326,6 +350,7 @@ function nowSec()  { return Math.floor(Date.now() / 1000); }
 // erreur MySQL passagère ne doit jamais empêcher l'appel de sonner via le
 // cache déjà à jour — elle est juste loggée.
 function persistFcmToken(numero: string, token: string): void {
+  console.log('[FCM] token enregistré pour terrain', numero, 'preview', token.slice(0, 16));
   terrainTokens.set(numero, token);
   void db.setFcmToken(numero, token).catch((err) => {
     console.warn('[FCM] Échec persistance token en base (cache mémoire OK quand même)', numero, err);
@@ -808,7 +833,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
     const targetSocket = terrainSockets.get(numero);
     const pushToken = terrainTokens.get(numero);
-    const hasFcmServerKey = Boolean(process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || true);
+    const hasFcmServerKey = Boolean(process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || fs.existsSync(serviceAccountPath));
     const callUuid = `server-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     let wsDelivered = false;

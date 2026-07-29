@@ -5,6 +5,11 @@ import { Alert } from '../../components/ui';
 
 const normalizeNumero = (value: string | null | undefined) => String(value || '').replace(/\D/g, '');
 
+// 'disconnected' est un état transitoire fréquent (changement wifi/4G côté
+// terrain, brève coupure) : on lui laisse une fenêtre de grâce avant de
+// tenter un ICE restart, plutôt que de couper l'appel immédiatement.
+const ICE_DISCONNECT_GRACE_MS = 6_000;
+
 type SignalMessage =
   | { type: 'registered'; role: string; numero: string }
   | { type: 'terrain-presence'; enLigne: boolean; numero: string }
@@ -123,6 +128,10 @@ export function AgentVideoCallPage() {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const [connected, setConnected] = useState(false);
+  // Fenêtre de grâce avant de considérer un 'disconnected' comme définitif,
+  // et flag pour n'essayer l'ICE restart qu'une seule fois par appel.
+  const iceDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const iceRestartAttemptedRef = useRef(false);
 
   useEffect(() => {
     const nextPath = `/video-call${terrain ? `?terrain=${encodeURIComponent(terrain)}` : ''}${numeroMtn ? `${terrain ? '&' : '?'}mtn=${encodeURIComponent(numeroMtn)}` : ''}${dossierId ? `${terrain || numeroMtn ? '&' : '?'}dossier=${encodeURIComponent(dossierId)}` : ''}`;
@@ -317,6 +326,11 @@ export function AgentVideoCallPage() {
   };
 
   const cleanupCallResources = () => {
+    if (iceDisconnectTimeoutRef.current) {
+      clearTimeout(iceDisconnectTimeoutRef.current);
+      iceDisconnectTimeoutRef.current = null;
+    }
+    iceRestartAttemptedRef.current = false;
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
@@ -494,22 +508,91 @@ export function AgentVideoCallPage() {
 
     pc.onconnectionstatechange = () => {
       logRtc('état de connexion RTCPeerConnection', pc.connectionState);
+
       if (pc.connectionState === 'connected') {
+        // La connexion est rétablie (ou établie pour la première fois) :
+        // on annule toute fenêtre de grâce en cours et on réarme le
+        // restart pour une éventuelle prochaine coupure.
+        if (iceDisconnectTimeoutRef.current) {
+          clearTimeout(iceDisconnectTimeoutRef.current);
+          iceDisconnectTimeoutRef.current = null;
+        }
+        iceRestartAttemptedRef.current = false;
         setConnected(true);
         setStatus('connected');
         setCallOutcome('connected');
+        return;
       }
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+
+      if (pc.connectionState === 'disconnected') {
+        // Transitoire dans la majorité des cas (bascule wifi/4G, brève perte
+        // de paquets ICE) : on attend la fenêtre de grâce avant d'agir. Si
+        // l'état revient à 'connected' entre-temps, le timer est annulé
+        // ci-dessus. Sinon on tente un ICE restart.
+        if (!iceDisconnectTimeoutRef.current) {
+          logRtc('ICE disconnected — fenêtre de grâce avant restart', ICE_DISCONNECT_GRACE_MS);
+          iceDisconnectTimeoutRef.current = setTimeout(() => {
+            iceDisconnectTimeoutRef.current = null;
+            if (pcRef.current && pcRef.current.connectionState !== 'connected') {
+              logRtc('toujours déconnecté après la fenêtre de grâce, tentative d’ICE restart');
+              void attemptIceRestart();
+            }
+          }, ICE_DISCONNECT_GRACE_MS);
+        }
+        return;
+      }
+
+      if (pc.connectionState === 'failed') {
+        if (iceDisconnectTimeoutRef.current) {
+          clearTimeout(iceDisconnectTimeoutRef.current);
+          iceDisconnectTimeoutRef.current = null;
+        }
+        if (!iceRestartAttemptedRef.current) {
+          logRtc('connexion ICE en échec — tentative d’ICE restart avant abandon');
+          void attemptIceRestart();
+          return;
+        }
+        // Restart déjà tenté sans succès : on abandonne réellement l'appel.
+        logRtc('ICE restart déjà tenté sans succès, fin de l’appel');
         if (status !== 'ended') {
           setStatus('ready');
           setCallOutcome('ended');
           setError(null);
           setInfo('La connexion vidéo a été interrompue');
         }
+        cleanupCallResources();
+        return;
+      }
+
+      if (pc.connectionState === 'closed') {
+        if (iceDisconnectTimeoutRef.current) {
+          clearTimeout(iceDisconnectTimeoutRef.current);
+          iceDisconnectTimeoutRef.current = null;
+        }
       }
     };
 
     return pc;
+  };
+
+  // Renégociation avec iceRestart:true : on reste offerer (le back-office
+  // est toujours l'offerer SDP dans cette architecture — cf. mobile
+  // OutgoingCallScreen/SignalingService), on peut donc regénérer une offre
+  // et la renvoyer via le canal de signalisation existant sans changer les
+  // rôles ni rouvrir un nouvel appel côté terrain.
+  const attemptIceRestart = async () => {
+    const pc = pcRef.current;
+    if (!pc || iceRestartAttemptedRef.current) return;
+    iceRestartAttemptedRef.current = true;
+    try {
+      logRtc('ICE restart : création d’une nouvelle offre (iceRestart=true)');
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      sendWs({ type: 'webrtc', payload: { kind: 'offer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
+      setInfo('Reconnexion vidéo en cours…');
+    } catch (e) {
+      logRtcWarn('ICE restart impossible', e);
+    }
   };
 
   const ensureLocalStream = async () => {
@@ -527,6 +610,20 @@ export function AgentVideoCallPage() {
     return stream;
   };
 
+  const flushPendingCandidates = async (pc: RTCPeerConnection) => {
+    if (pendingCandidatesRef.current.length === 0) return;
+    const candidates = pendingCandidatesRef.current;
+    pendingCandidatesRef.current = [];
+    logRtc('flush candidats ICE en attente', candidates.length);
+    for (const candidate of candidates) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (e) {
+        logRtcWarn('addIceCandidate (flush) failed', e);
+      }
+    }
+  };
+
   const handleWebRTC = async (payload: any) => {
     const pc = await createPeerConnection();
     if (!pc) return;
@@ -539,6 +636,7 @@ export function AgentVideoCallPage() {
         logRtc('réception answer SDP');
         await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
         logRtc('remoteDescription answer appliquée');
+        await flushPendingCandidates(pc);
       } catch (e) {
         logRtcWarn('erreur remoteDescription answer', e);
       }
@@ -550,6 +648,7 @@ export function AgentVideoCallPage() {
         logRtc('réception offer SDP');
         await ensureLocalStream();
         await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+        await flushPendingCandidates(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         logRtc('answer SDP créée et envoyée');
@@ -561,6 +660,16 @@ export function AgentVideoCallPage() {
     }
 
     if (payload.kind === 'ice' && payload.candidate) {
+      // Si l'offer/answer distant n'a pas encore été appliqué, addIceCandidate
+      // échoue (InvalidStateError) et le candidat était jusqu'ici perdu
+      // silencieusement (pendingCandidatesRef existait mais n'était jamais
+      // rempli). On le met en attente et on le rejoue dès que
+      // remoteDescription est posée, y compris lors d'un ICE restart.
+      if (!pc.remoteDescription) {
+        logRtc('candidat ICE reçu avant remoteDescription, mise en attente');
+        pendingCandidatesRef.current.push(payload.candidate);
+        return;
+      }
       try {
         logRtc('ajout candidat ICE distant');
         await pc.addIceCandidate(payload.candidate);
@@ -739,8 +848,8 @@ export function AgentVideoCallPage() {
         .kvc-topbar-left { display: flex; align-items: center; gap: 10px; }
         .kvc-live-dot {
           width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
-          background: var(--text-muted);
-          box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+          background: #CBD5E1;
+          box-shadow: 0 0 0 3px rgba(15,23,42,0.06);
         }
         .kvc-live-dot[data-state="success"] { background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
         .kvc-live-dot[data-state="gold"] { background: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); animation: kvc-pulse 1.5s ease-in-out infinite; }
@@ -770,13 +879,14 @@ export function AgentVideoCallPage() {
           margin-bottom: 10px;
         }
         .kvc-field { display: flex; flex-direction: column; gap: 4px; }
-        .kvc-field span { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); }
+        .kvc-field span { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #64748B; }
         .kvc-field input {
-          background: var(--panel); border: 1px solid var(--hairline); color: var(--text);
+          background: #F8FAFC; border: 1px solid #E2E8F0; color: #0F172A;
           border-radius: 10px; padding: 8px 11px; font-size: 13.5px; font-family: var(--mono);
           outline: none; transition: border-color .15s ease;
         }
-        .kvc-field input:focus { border-color: rgba(255,204,0,0.5); }
+        .kvc-field input::placeholder { color: #94A3B8; }
+        .kvc-field input:focus { border-color: rgba(255,204,0,0.6); background: #fff; }
 
         .kvc-stage {
           position: relative; border-radius: 22px; overflow: hidden;
@@ -878,7 +988,7 @@ export function AgentVideoCallPage() {
 
         .kvc-footer {
           display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-          margin-top: 12px; padding: 0 4px; font-size: 12.5px; color: var(--text-muted);
+          margin-top: 12px; padding: 0 4px; font-size: 12.5px; color: #64748B;
         }
         .kvc-footer .dot { opacity: 0.5; }
 

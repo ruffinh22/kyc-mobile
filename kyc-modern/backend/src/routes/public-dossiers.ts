@@ -36,6 +36,13 @@ const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const signalingPeers = new Map<string, Set<WsSocket>>();
 const terrainSockets = new Map<string, WsSocket>();
 const backofficeSockets = new Map<string, WsSocket>();
+// Cache mémoire des tokens FCM terrain, pour un lookup synchrone instantané
+// dans le chemin WS (hot path). La vraie source de vérité est la table
+// MySQL `terrain_fcm_tokens` (voir db.setFcmToken/getAllFcmTokens) : chaque
+// écriture ici est répercutée en base (write-through), et ce cache est
+// rechargé intégralement au démarrage du serveur (voir warmLoadFcmTokens
+// plus bas) — ainsi un redémarrage/déploi/crash ne fait plus perdre les
+// tokens déjà connus.
 const terrainTokens = new Map<string, string>();
 const terrainPresenceTimers = new Map<string, NodeJS.Timeout>();
 const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket; numeroMtn: string; timer: NodeJS.Timeout }>();
@@ -313,7 +320,37 @@ function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
 function nowSec()  { return Math.floor(Date.now() / 1000); }
 
+// ── Persistance write-through des tokens FCM terrain ─────────────────────────
+// Met à jour le cache mémoire IMMÉDIATEMENT (synchrone, pour ne jamais
+// ralentir le chemin WS/HTTP), et répercute en base en tâche de fond. Une
+// erreur MySQL passagère ne doit jamais empêcher l'appel de sonner via le
+// cache déjà à jour — elle est juste loggée.
+function persistFcmToken(numero: string, token: string): void {
+  terrainTokens.set(numero, token);
+  void db.setFcmToken(numero, token).catch((err) => {
+    console.warn('[FCM] Échec persistance token en base (cache mémoire OK quand même)', numero, err);
+  });
+}
+
+// ── Rechargement des tokens connus au démarrage du serveur ──────────────────
+// Sans ça, un redémarrage (déploi, crash, PM2) vide le cache mémoire et le
+// serveur "oublie" tous les terrains tant qu'ils ne se reconnectent pas en
+// WS — exactement ce qu'on veut éviter pour un comportement pro.
+async function warmLoadFcmTokens(): Promise<void> {
+  try {
+    const rows = await db.getAllFcmTokens();
+    for (const { numero, fcm_token } of rows) {
+      terrainTokens.set(numero, fcm_token);
+    }
+    console.log(`[FCM] ${rows.length} token(s) terrain rechargé(s) depuis la base au démarrage`);
+  } catch (err) {
+    console.warn('[FCM] Échec rechargement des tokens au démarrage (le cache repartira vide)', err);
+  }
+}
+
 export async function publicDossierRoutes(app: any): Promise<void> {
+  void warmLoadFcmTokens();
+
 
   app.get('/api/turn-credentials', async (req: FastifyRequest, reply: any) => {
     const query = (req.query ?? {}) as { numero?: string };
@@ -357,7 +394,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       return reply.code(400).send({ success: false, error: 'numero et token requis' });
     }
 
-    terrainTokens.set(numero, token);
+    persistFcmToken(numero, token);
     return reply.send({
       success: true,
       registered: true,
@@ -873,11 +910,26 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           if (role === 'terrain') {
             clearTerrainPresenceTimer(numero);
             terrainSockets.set(numero, socket);
-            if (msg.fcmToken) terrainTokens.set(numero, String(msg.fcmToken));
+            if (msg.fcmToken) persistFcmToken(numero, String(msg.fcmToken));
             send({ type: 'registered', role: 'terrain', numero });
             const boSocket = backofficeSockets.get(numero);
             if (boSocket) {
               sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: true, numero });
+            }
+
+            // Reconnexion pendant qu'un appel était en attente côté push
+            // seul (l'app venait d'être réveillée par la notification) :
+            // on relaie maintenant l'appel entrant en direct sur ce socket
+            // fraîchement ouvert, ET on prévient le web qu'il peut enfin
+            // créer son offre SDP — jusque-là il n'y avait aucun socket
+            // terrain vivant pour la relayer.
+            const pending = pendingCalls.get(numero);
+            if (pending) {
+              sendSocketPayload(socket, {
+                type: 'incoming-call', numeroMtn: pending.numeroMtn, numero, callUuid: pending.callUuid,
+              });
+              sendSocketPayload(pending.boSocket, { type: 'call-delivered', numero, callUuid: pending.callUuid });
+              console.log('[SIGNAL] terrain reconnecté pendant appel en attente (push)', { numero, callUuid: pending.callUuid });
             }
           } else if (role === 'backoffice') {
             backofficeSockets.set(numero, socket);
@@ -904,12 +956,34 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             void sendIncomingCallPush({ token: pushToken, numero: target, numeroMtn, callUuid });
           }
 
+          clearPendingCall(target);
+
           if (!targetSocket) {
-            send({ type: 'terrain-absent', numero: target, callUuid, pushAttempted: Boolean(pushToken) });
+            if (!pushToken) {
+              // Vraiment aucun moyen de joindre ce terrain : ni WS, ni token
+              // push connu. Là seulement, c'est un échec immédiat légitime.
+              send({ type: 'terrain-absent', numero: target, callUuid, pushAttempted: false });
+              return;
+            }
+
+            // Le WS est fermé (app tuée / verrouillée) mais on a un token FCM :
+            // on tente le réveil via push et on fait "sonner" le web, comme
+            // WhatsApp — jamais d'échec immédiat tant que le délai de sonnerie
+            // n'est pas écoulé. Le web reste en 'ringing' SANS créer d'offre
+            // SDP tout de suite (elle serait perdue, aucun socket terrain pour
+            // la relayer) : voir le handler 'register' plus bas, qui bascule
+            // en 'call-delivered' dès que le terrain se reconnecte à temps.
+            send({ type: 'call-ringing' });
+
+            const pushTimer = setTimeout(() => {
+              pendingCalls.delete(target);
+              sendSocketPayload(socket, { type: 'no-answer', numero: target, callUuid });
+              console.log('[SIGNAL] no-answer timeout (push seul, jamais reconnecté)', { target, callUuid });
+            }, CALL_RING_TIMEOUT_MS);
+
+            pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer: pushTimer });
             return;
           }
-
-          clearPendingCall(target);
           // callUuid désormais transmis au mobile : indispensable pour que le
           // chemin WS et le chemin push (s'ils arrivent tous les deux)
           // convergent vers le MÊME identifiant d'appel côté SignalingService/

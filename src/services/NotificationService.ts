@@ -203,6 +203,16 @@ class NotificationService {
   }
 
   // ── Setup Firebase Messaging ─────────────────────────────────────────────
+  // IMPORTANT : setBackgroundMessageHandler N'EST PLUS enregistré ici.
+  // Cette méthode ne tourne que lorsque App.tsx a monté (via init() appelé
+  // depuis un useEffect) — c'est-à-dire seulement si l'utilisateur (ou l'OS)
+  // a déjà lancé un contexte JS complet. Si l'app a été tuée et n'a JAMAIS
+  // été rouverte, ce useEffect ne s'exécute jamais, et un enregistrement du
+  // handler ici arriverait de toute façon trop tard : sur Android, FCM lance
+  // un contexte JS "headless" séparé rien que pour exécuter le handler, et il
+  // exige que celui-ci soit déjà enregistré de façon SYNCHRONE dès le chargement
+  // du bundle — donc dans index.js, avant AppRegistry.registerComponent, pas ici.
+  // Voir handleHeadlessMessage() plus bas + index.js.
   private async setupFCM (): Promise<void> {
     if (this.fcmConfigured) return;
     this.fcmConfigured = true;
@@ -237,22 +247,34 @@ class NotificationService {
       this.handlePushPayload(msg);
     });
 
-    // App en background — tap sur notification
+    // App en background (pas tuée, juste minimisée) — tap sur notification
     messaging().onNotificationOpenedApp((msg) => {
       console.log('[FCM] notification ouverte depuis background', msg.data);
       this.handlePushPayload(msg);
     });
 
-    // App terminée — message data-only HIGH_PRIORITY
-    messaging().setBackgroundMessageHandler(async (msg) => {
-      console.log('[FCM] background message handler', msg.data);
-      this.handlePushPayload(msg);
-      return Promise.resolve();
-    });
-
-    // App ouverte depuis une notification
+    // App ouverte depuis une notification (cold start déclenché par un tap,
+    // différent du cold start headless géré par handleHeadlessMessage)
     const initial = await messaging().getInitialNotification();
     if (initial) this.handlePushPayload(initial);
+  }
+
+  // ── Handler headless — appelé depuis index.js, PAS depuis App.tsx ───────
+  // C'est le chemin qui manquait pour un comportement "façon WhatsApp" : un
+  // appel doit sonner même si l'app n'a pas été ouverte une seule fois depuis
+  // le dernier redémarrage du téléphone. Dans ce cas, App.tsx ne monte jamais
+  // — donc aucun état initialisé par init()/registerBackgroundHandlers() ne
+  // peut être supposé prêt. Cette méthode est donc volontairement
+  // autosuffisante : elle configure CallKeep elle-même (idempotent via
+  // callKeepConfigured) avant d'afficher l'appel, sans dépendre de callbacks.
+  async handleHeadlessMessage (msg: FirebaseMessagingTypes.RemoteMessage): Promise<void> {
+    console.log('[FCM] headless background message', msg.data);
+    try {
+      await this.setupCallKeep();
+    } catch (e) {
+      console.warn('[Notif] setupCallKeep (headless) failed:', e);
+    }
+    await this.handlePushPayload(msg);
   }
 
   // ── Récupération du token FCM avec tentatives successives ────────────────

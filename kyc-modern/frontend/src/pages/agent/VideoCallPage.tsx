@@ -20,6 +20,73 @@ type SignalMessage =
   | { type: 'pong' }
   | { type: 'terrain-absent'; numero: string };
 
+// ── Icônes ────────────────────────────────────────────────────────────────
+// Traits fins, cohérents, plutôt que des emoji (rendu variable selon l'OS).
+type IconProps = { size?: number };
+const strokeProps = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+
+const IconMic = ({ size = 20 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8" />
+  </svg>
+);
+const IconMicOff = ({ size = 20 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M3 3l18 18" />
+    <path d="M9 9v5a3 3 0 0 0 4.6 2.55M15 9.5V5a3 3 0 0 0-5.9-.8" />
+    <path d="M5 11a7 7 0 0 0 10.3 6.2M19 11a7 7 0 0 1-1 3.6" />
+    <path d="M12 18v4M8 22h8" />
+  </svg>
+);
+const IconCam = ({ size = 20 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <rect x="2" y="6" width="14" height="12" rx="3" />
+    <path d="M16 10.5l5-3v9l-5-3" />
+  </svg>
+);
+const IconCamOff = ({ size = 20 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M2 2l20 20" />
+    <path d="M16 10.5l5-3v9l-5-3" />
+    <path d="M14 6H5a3 3 0 0 0-3 3v6c0 .9.4 1.7 1 2.3" />
+    <path d="M9.5 18H13a3 3 0 0 0 3-3v-1.5" />
+  </svg>
+);
+const IconPhoneCall = ({ size = 22 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M4 5c0 8.5 6.5 15 15 15l1.5-3.6a1.5 1.5 0 0 0-.9-2L15.8 13a1.5 1.5 0 0 0-1.7.4l-1.4 1.6a11 11 0 0 1-4.7-4.7L9.6 8.9a1.5 1.5 0 0 0 .4-1.7L8.6 3.4A1.5 1.5 0 0 0 6.6 2.5L4 4Z" />
+  </svg>
+);
+const IconPhoneOff = ({ size = 22 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M3 3l18 18" />
+    <path d="M20.5 16.4l.5-1.2a1.5 1.5 0 0 0-.9-2L15.8 12a1.5 1.5 0 0 0-1.7.4l-1.4 1.6a11.1 11.1 0 0 1-3.2-2.4M9.6 7.9L8.6 3.4A1.5 1.5 0 0 0 6.6 2.5L4 4c0 3.4 1 6.6 2.7 9.3" />
+  </svg>
+);
+const IconRotate = ({ size = 18 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M3 12a9 9 0 1 1 2.6 6.3" />
+    <path d="M3 21v-5h5" />
+  </svg>
+);
+const IconExpand = ({ size = 18 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M9 3H3v6M15 21h6v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
+const IconShrink = ({ size = 18 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <path d="M9 3v4a2 2 0 0 1-2 2H3M15 21v-4a2 2 0 0 1 2-2h4M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
+const IconUser = ({ size = 36 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...strokeProps}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+  </svg>
+);
+
 export function AgentVideoCallPage() {
   const { user } = useAuth();
   const params = useMemo(() => new URLSearchParams(window.location.search), [window.location.search]);
@@ -44,6 +111,10 @@ export function AgentVideoCallPage() {
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [callElapsed, setCallElapsed] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Mode "focus" : clic sur le flux terrain → il occupe toute la scène,
+  // ma caméra devient une vignette minuscule. Indépendant du plein écran
+  // navigateur (isFullscreen), qui reste géré séparément.
+  const [focusTerrain, setFocusTerrain] = useState(false);
   const [callOutcome, setCallOutcome] = useState<'idle' | 'connecting' | 'ringing' | 'connected' | 'ended' | 'rejected' | 'no-answer' | 'unavailable'>('idle');
   const [networkQuality, setNetworkQuality] = useState<'excellent' | 'good' | 'fair' | 'poor' | 'unknown'>('unknown');
   const wsRef = useRef<WebSocket | null>(null);
@@ -551,6 +622,23 @@ export function AgentVideoCallPage() {
     return '—';
   }, [status]);
 
+  const statusTone = useMemo(() => {
+    if (status === 'connected') return 'success';
+    if (status === 'calling' || status === 'connecting') return 'gold';
+    if (status === 'ended') return 'danger';
+    return 'muted';
+  }, [status]);
+
+  const stageMessage = useMemo(() => {
+    if (callOutcome === 'rejected') return 'L’agent terrain a refusé l’appel.';
+    if (callOutcome === 'no-answer') return 'Aucune réponse n’a été reçue.';
+    if (callOutcome === 'unavailable') return 'Le terrain est indisponible pour l’instant.';
+    if (status === 'connected') return 'Communication stable avec l’agent terrain.';
+    if (status === 'calling') return 'Le terrain est en train de répondre à l’appel…';
+    if (status === 'connecting') return 'Préparation de la liaison audio et vidéo…';
+    return 'Prêt à lancer l’appel vers le terrain.';
+  }, [status, callOutcome]);
+
   const networkLabel = useMemo(() => {
     if (networkQuality === 'excellent') return 'Réseau excellent';
     if (networkQuality === 'good') return 'Réseau bon';
@@ -560,113 +648,297 @@ export function AgentVideoCallPage() {
   }, [networkQuality]);
 
   return (
-    <>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Appel vidéo terrain</h1>
-          <p className="page-sub">Interface professionnelle pour joindre l’agent terrain depuis le back-office.</p>
+    <div className="kvc">
+      <style>{`
+        .kvc {
+          --ink: #0B1220;
+          --ink-2: #101A2E;
+          --panel: rgba(255,255,255,0.05);
+          --hairline: rgba(255,255,255,0.10);
+          --gold: #FFCC00;
+          --gold-dim: rgba(255,204,0,0.14);
+          --success: #22C55E;
+          --success-dim: rgba(34,197,94,0.14);
+          --danger: #EF4444;
+          --danger-dim: rgba(239,68,68,0.14);
+          --text: #F8FAFC;
+          --text-muted: rgba(226,232,240,0.60);
+          --text-soft: rgba(226,232,240,0.82);
+          --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+          font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          color: var(--text);
+          max-width: 1080px;
+          margin: 0 auto;
+          padding: 10px 4px 24px;
+        }
+        .kvc-topbar {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; padding: 4px 2px 14px; flex-wrap: wrap;
+        }
+        .kvc-topbar-left { display: flex; align-items: center; gap: 10px; }
+        .kvc-live-dot {
+          width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+          background: var(--text-muted);
+          box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+        }
+        .kvc-live-dot[data-state="success"] { background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
+        .kvc-live-dot[data-state="gold"] { background: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); animation: kvc-pulse 1.5s ease-in-out infinite; }
+        .kvc-live-dot[data-state="danger"] { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-dim); }
+        @keyframes kvc-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+        .kvc-title { font-size: 19px; font-weight: 800; letter-spacing: -0.3px; margin: 0; line-height: 1.2; }
+        .kvc-sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 0; }
+        .kvc-topbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+        .kvc-chip {
+          font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+          background: var(--panel); border: 1px solid var(--hairline); color: var(--text-soft);
+          white-space: nowrap;
+        }
+        .kvc-chip--success { color: #86EFAC; border-color: rgba(34,197,94,0.35); background: var(--success-dim); }
+        .kvc-chip--gold { color: #FFE066; border-color: rgba(255,204,0,0.35); background: var(--gold-dim); }
+        .kvc-chip--danger { color: #FCA5A5; border-color: rgba(239,68,68,0.35); background: var(--danger-dim); }
+
+        .kvc-alerts { margin-bottom: 10px; }
+
+        .kvc-config {
+          display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+          margin-bottom: 10px;
+        }
+        .kvc-field { display: flex; flex-direction: column; gap: 4px; }
+        .kvc-field span { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text-muted); }
+        .kvc-field input {
+          background: var(--panel); border: 1px solid var(--hairline); color: var(--text);
+          border-radius: 10px; padding: 8px 11px; font-size: 13.5px; font-family: var(--mono);
+          outline: none; transition: border-color .15s ease;
+        }
+        .kvc-field input:focus { border-color: rgba(255,204,0,0.5); }
+
+        .kvc-stage {
+          position: relative; border-radius: 22px; overflow: hidden;
+          background: linear-gradient(180deg, var(--ink-2) 0%, var(--ink) 100%);
+          border: 1px solid var(--hairline);
+          aspect-ratio: 16 / 9.2;
+          box-shadow: 0 20px 50px -20px rgba(0,0,0,0.6);
+        }
+        .kvc-stage.is-focus {
+          position: fixed; inset: 0; z-index: 60; border-radius: 0;
+          aspect-ratio: unset; max-width: none;
+        }
+        .kvc-remote {
+          position: absolute; inset: 0; cursor: zoom-in;
+        }
+        .kvc-stage.is-focus .kvc-remote { cursor: zoom-out; }
+        .kvc-video { width: 100%; height: 100%; object-fit: cover; display: block; background: #060A12; }
+        .kvc-placeholder {
+          position: absolute; inset: 0; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; gap: 10px;
+          color: var(--text-muted); text-align: center; padding: 0 20px;
+        }
+        .kvc-placeholder svg { opacity: 0.5; }
+        .kvc-placeholder p { font-size: 13px; margin: 0; max-width: 280px; }
+
+        .kvc-expand-btn {
+          position: absolute; top: 14px; right: 14px; z-index: 3;
+          width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--hairline);
+          background: rgba(11,18,32,0.55); backdrop-filter: blur(6px); color: #fff;
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
+          opacity: 0; transition: opacity .15s ease;
+        }
+        .kvc-remote:hover .kvc-expand-btn { opacity: 1; }
+
+        .kvc-local {
+          position: absolute; right: 16px; bottom: 16px; z-index: 4;
+          width: 168px; aspect-ratio: 4/3; border-radius: 14px; overflow: hidden;
+          border: 1.5px solid rgba(255,255,255,0.18);
+          box-shadow: 0 10px 30px -8px rgba(0,0,0,0.6);
+          transition: width .2s ease, bottom .2s ease, right .2s ease;
+        }
+        .kvc-local.is-mini { width: 96px; bottom: 96px; right: 16px; opacity: 0.92; }
+        .kvc-cam-off {
+          position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: #0D1526; color: var(--text-muted);
+        }
+
+        .kvc-stage-meta {
+          position: absolute; top: 14px; left: 14px; z-index: 3;
+          display: flex; gap: 8px; flex-wrap: wrap; max-width: 60%;
+          pointer-events: none;
+        }
+        .kvc-meta-pill {
+          font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
+          background: rgba(6,10,18,0.55); backdrop-filter: blur(6px);
+          border: 1px solid rgba(255,255,255,0.12); color: var(--text-soft);
+        }
+        .kvc-mono { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: 0.3px; }
+        .kvc-signal--excellent { color: #86EFAC; }
+        .kvc-signal--good { color: #BEF264; }
+        .kvc-signal--fair { color: #FDE68A; }
+        .kvc-signal--poor { color: #FCA5A5; }
+
+        .kvc-stage-caption {
+          position: absolute; left: 14px; bottom: 14px; z-index: 3;
+          max-width: 46%; pointer-events: none;
+        }
+        .kvc-stage-caption p {
+          margin: 0; font-size: 12.5px; color: var(--text-soft);
+          background: rgba(6,10,18,0.5); backdrop-filter: blur(6px);
+          border: 1px solid rgba(255,255,255,0.10); border-radius: 10px;
+          padding: 7px 11px; line-height: 1.4;
+        }
+
+        .kvc-dock {
+          position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+          z-index: 5; display: flex; align-items: center; gap: 10px;
+          background: rgba(6,10,18,0.55); backdrop-filter: blur(10px);
+          border: 1px solid rgba(255,255,255,0.10); border-radius: 999px;
+          padding: 8px; box-shadow: 0 12px 30px -10px rgba(0,0,0,0.6);
+        }
+        .kvc-dock-btn {
+          width: 46px; height: 46px; border-radius: 50%; border: none;
+          background: rgba(255,255,255,0.08); color: #fff;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: background .15s ease, transform .1s ease;
+        }
+        .kvc-dock-btn:hover { background: rgba(255,255,255,0.15); }
+        .kvc-dock-btn:active { transform: scale(0.94); }
+        .kvc-dock-btn.is-off { background: rgba(239,68,68,0.22); color: #FCA5A5; }
+        .kvc-dock-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .kvc-dock-btn--call {
+          width: 56px; height: 56px; background: var(--gold); color: #1A1300;
+          box-shadow: 0 0 0 0 rgba(255,204,0,0.5);
+        }
+        .kvc-dock-btn--call:not(:disabled):hover { background: #FFD633; }
+        .kvc-dock-btn--hangup { width: 56px; height: 56px; background: var(--danger); color: #fff; }
+        .kvc-dock-btn--hangup:hover { background: #F87171; }
+
+        .kvc-footer {
+          display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+          margin-top: 12px; padding: 0 4px; font-size: 12.5px; color: var(--text-muted);
+        }
+        .kvc-footer .dot { opacity: 0.5; }
+
+        @media (max-width: 640px) {
+          .kvc-config { grid-template-columns: 1fr; }
+          .kvc-local { width: 108px; }
+          .kvc-local.is-mini { width: 76px; bottom: 84px; }
+          .kvc-stage-caption { max-width: 70%; }
+        }
+      `}</style>
+
+      <div className="kvc-topbar">
+        <div className="kvc-topbar-left">
+          <span className="kvc-live-dot" data-state={statusTone} />
+          <div>
+            <h1 className="kvc-title">Appel vidéo terrain</h1>
+            <p className="kvc-sub">Centre de certification KYC · MTN Congo</p>
+          </div>
+        </div>
+        <div className="kvc-topbar-right">
+          <span className={`kvc-chip ${presence ? 'kvc-chip--success' : ''}`}>
+            Terrain {presence ? 'en ligne' : 'hors ligne'}
+          </span>
+          <span className={`kvc-chip kvc-chip--${statusTone}`}>{statusLabel}</span>
         </div>
       </div>
 
-      {error && <Alert kind="error">{error}</Alert>}
-      {info && <Alert kind="success">{info}</Alert>}
+      {(error || info) && (
+        <div className="kvc-alerts">
+          {error && <Alert kind="error">{error}</Alert>}
+          {info && <Alert kind="success">{info}</Alert>}
+        </div>
+      )}
 
-      <div className="card">
-        <div className="field-grid">
-          <div className="field">
-            <label>Numéro agent terrain (WA)</label>
+      {!focusTerrain && (
+        <div className="kvc-config">
+          <label className="kvc-field">
+            <span>Agent terrain (WA)</span>
             <input value={terrain} onChange={(e) => setTerrain(e.target.value)} placeholder="Ex: 0700000000" />
-          </div>
-          <div className="field">
-            <label>Dossier</label>
+          </label>
+          <label className="kvc-field">
+            <span>Dossier</span>
             <input value={dossierId} onChange={(e) => setDossierId(e.target.value)} placeholder="ID dossier" />
-          </div>
-          <div className="field">
-            <label>Numéro abonné MTN</label>
+          </label>
+          <label className="kvc-field">
+            <span>Numéro MTN</span>
             <input value={numeroMtn} onChange={(e) => setNumeroMtn(e.target.value)} placeholder="Numéro MTN du dossier" />
-          </div>
+          </label>
         </div>
-      </div>
+      )}
 
-      <div className="card">
-        <div className="call-status-row">
-          <div>
-            <p className="card-title">État de l’appel</p>
-            <p className="page-sub">Signalisation : {statusLabel} · Terrain : {presence ? 'en ligne' : 'hors ligne'}</p>
-          </div>
-          <div className="call-actions-row">
-            <span className={`role-chip ${connected ? 'admin' : status === 'calling' ? 'superviseur' : 'agent'}`} style={{ padding: '6px 10px' }}>
-              {connected ? 'connecté' : status === 'calling' ? 'sonne' : 'prêt'}
-            </span>
-            <button className="btn btn-primary btn-sm" disabled={!terrain || status === 'calling' || status === 'connected'} onClick={startCall}>
-              Démarrer l’appel
+      <div className={`kvc-stage ${focusTerrain ? 'is-focus' : ''}`}>
+        <div
+          className="kvc-remote"
+          onClick={() => remoteStream && setFocusTerrain((f) => !f)}
+        >
+          <video ref={remoteVideoRef} autoPlay playsInline className="kvc-video" />
+          {!remoteStream && (
+            <div className="kvc-placeholder">
+              <IconUser size={40} />
+              <p>{callOutcome === 'ringing' ? 'Le terrain sonne, en attente de réponse…' : status === 'connecting' ? 'Préparation de la liaison…' : 'En attente du flux vidéo terrain'}</p>
+            </div>
+          )}
+          {remoteStream && (
+            <button
+              className="kvc-expand-btn"
+              onClick={(e) => { e.stopPropagation(); setFocusTerrain((f) => !f); }}
+              title={focusTerrain ? 'Réduire' : 'Agrandir le flux terrain'}
+            >
+              {focusTerrain ? <IconShrink /> : <IconExpand />}
             </button>
-            <button className="btn btn-ghost btn-sm" disabled={!connected && status !== 'calling'} onClick={hangUp}>
-              Raccrocher
+          )}
+        </div>
+
+        <div className={`kvc-local ${focusTerrain ? 'is-mini' : ''}`}>
+          <video ref={localVideoRef} autoPlay muted playsInline className="kvc-video" />
+          {!camOn && <div className="kvc-cam-off"><IconCamOff size={22} /></div>}
+        </div>
+
+        <div className="kvc-stage-meta">
+          <span className="kvc-meta-pill kvc-mono">⏱ {formatDuration(callElapsed)}</span>
+          <span className={`kvc-meta-pill kvc-mono kvc-signal--${networkQuality}`}>{networkLabel}</span>
+        </div>
+
+        {!focusTerrain && (
+          <div className="kvc-stage-caption">
+            <p>{stageMessage}</p>
+          </div>
+        )}
+
+        <div className="kvc-dock">
+          <button className="kvc-dock-btn" onClick={restartCall} title="Recommencer">
+            <IconRotate />
+          </button>
+          <button className={`kvc-dock-btn ${!micOn ? 'is-off' : ''}`} onClick={toggleMic} title={micOn ? 'Couper le micro' : 'Activer le micro'}>
+            {micOn ? <IconMic /> : <IconMicOff />}
+          </button>
+
+          {status === 'calling' || status === 'connected' ? (
+            <button className="kvc-dock-btn kvc-dock-btn--hangup" onClick={hangUp} title="Raccrocher">
+              <IconPhoneOff />
             </button>
-            <button className="btn btn-sm" onClick={restartCall}>
-              Recommencer
+          ) : (
+            <button className="kvc-dock-btn kvc-dock-btn--call" disabled={!terrain} onClick={startCall} title="Démarrer l’appel">
+              <IconPhoneCall />
             </button>
-            <button className="btn btn-sm" onClick={toggleFullscreen}>
-              {isFullscreen ? '🗗 Sortir plein écran' : '🗖 Plein écran'}
-            </button>
-          </div>
+          )}
+
+          <button className={`kvc-dock-btn ${!camOn ? 'is-off' : ''}`} onClick={toggleCamera} title={camOn ? 'Couper la caméra' : 'Activer la caméra'}>
+            {camOn ? <IconCam /> : <IconCamOff />}
+          </button>
+          <button className="kvc-dock-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Quitter le plein écran' : 'Plein écran navigateur'}>
+            {isFullscreen ? <IconShrink /> : <IconExpand />}
+          </button>
         </div>
       </div>
 
-      <div className={`call-stage ${status === 'connected' ? 'connected' : status === 'calling' ? 'calling' : status === 'ended' ? 'ended' : status === 'connecting' ? 'connecting' : 'idle'}`}>
-        <div className="connection-indicator">
-          <span className="pulse-dot" />
-          <div>
-            <strong>{status === 'connected' ? 'Connexion établie' : status === 'calling' ? 'Appel en cours' : status === 'connecting' ? 'Connexion en cours' : status === 'ended' ? 'Fin d’appel' : 'Prêt à appeler'}</strong>
-            <p>{callOutcome === 'rejected' ? 'L’agent terrain a refusé l’appel.' : callOutcome === 'no-answer' ? 'Aucune réponse n’a été reçue.' : callOutcome === 'unavailable' ? 'Le terrain est indisponible pour l’instant.' : status === 'connected' ? 'Communication stable avec l’agent terrain.' : 'La plateforme prépare la liaison audio et vidéo.'}</p>
-          </div>
+      {!focusTerrain && (
+        <div className="kvc-footer">
+          <span>{user?.prenom} {user?.nom}</span>
+          <span className="dot">·</span>
+          <span>Dossier {dossierId || '—'}</span>
+          <span className="dot">·</span>
+          <span className="kvc-mono">{terrain || '—'}</span>
         </div>
-        <div className="call-stage-meta">
-          <span className="timer-pill">⏱ {formatDuration(callElapsed)}</span>
-          <span className={`signal-pill ${networkQuality}`}>{networkLabel}</span>
-          <span className="signal-pill">{statusLabel}</span>
-        </div>
-      </div>
-
-      <div className={`call-hero ${status === 'connected' ? 'connected' : status === 'calling' ? 'calling' : status === 'connecting' ? 'connecting' : ''}`}>
-        <div className="call-hero-badge">Session vidéo</div>
-        <div className="call-hero-title">{status === 'connected' ? 'Connexion sécurisée établie' : status === 'calling' ? 'Raccordement en cours…' : status === 'connecting' ? 'Préparation de la liaison' : 'Interface de communication prête'}</div>
-        <div className="call-hero-sub">{status === 'connected' ? 'Les flux audio et vidéo sont maintenant synchronisés avec l’agent terrain.' : status === 'calling' ? 'Le terrain est actuellement en train de répondre à l’appel.' : 'La plateforme initialise la connexion et prépare l’échange vidéo.'}</div>
-      </div>
-
-      <div className="video-grid">
-        <div className={`video-panel ${status === 'calling' || status === 'connecting' ? 'is-calling' : ''} ${connected ? 'is-connected' : ''}`}>
-          <div className="card-header" style={{ marginBottom: '.75rem' }}>
-            <span className="card-title" style={{ marginBottom: 0 }}>Ma caméra</span>
-            <span className="role-chip agent">local</span>
-          </div>
-          <video ref={localVideoRef} autoPlay muted playsInline />
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-sm" onClick={toggleMic}>{micOn ? '🎙 Micro activé' : '🔇 Micro coupé'}</button>
-            <button className="btn btn-sm" onClick={toggleCamera}>{camOn ? '📹 Caméra activée' : '📷 Caméra coupée'}</button>
-          </div>
-        </div>
-        <div className="video-panel">
-          <div className="card-header" style={{ marginBottom: '.75rem' }}>
-            <span className="card-title" style={{ marginBottom: 0 }}>Flux terrain</span>
-            <span className={`role-chip ${connected ? 'admin' : 'superviseur'}`}>{connected ? 'en direct' : 'en attente'}</span>
-          </div>
-          <video ref={remoteVideoRef} autoPlay playsInline />
-          <div style={{ marginTop: 10, fontSize: 13, color: 'rgba(255,255,255,.72)' }}>
-            {connected ? 'Flux distant connecté et stable' : 'Attente de la réponse du terrain'}
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="field-grid">
-          <div className="field"><label>Opérateur</label><div>{user?.prenom} {user?.nom}</div></div>
-          <div className="field"><label>Dossier</label><div>{dossierId || 'Aucun'}</div></div>
-          <div className="field"><label>Numéro terrain</label><div>{terrain || 'Aucun'}</div></div>
-          <div className="field"><label>Numéro MTN</label><div>{numeroMtn || 'Aucun'}</div></div>
-        </div>
-      </div>
-    </>
+      )}
+    </div>
   );
 }

@@ -10,31 +10,50 @@ import {
 } from '../types';
 import { runMigrations } from './migrations';
 
-let pool: Pool;
+let pool: Pool | null = null;
+let dbInitError: Error | null = null;
 
 // ── Initialisation ────────────────────────────────────────────────────────────
 
-export async function initDb(): Promise<void> {
-  pool = mysql.createPool({
-    host:             process.env.DB_HOST     || '127.0.0.1',
-    port:             parseInt(process.env.DB_PORT || '3306', 10),
-    user:             process.env.DB_USER     || 'root',
-    password:         process.env.DB_PASS     || '',
-    database:         process.env.DB_NAME     || 'kyc_v4',
-    waitForConnections: true,
-    connectionLimit:  parseInt(process.env.DB_POOL_LIMIT || '10', 10),
-    queueLimit: 0,
-    enableKeepAlive: true,
-    timezone: '+00:00',
-    charset: 'utf8mb4',
-  });
+function getPoolOrThrow(): Pool {
+  if (!pool) {
+    throw new Error(dbInitError?.message || 'Base de données indisponible au démarrage');
+  }
+  return pool;
+}
 
-  const conn = await pool.getConnection();
-  await conn.ping();
-  conn.release();
-  await runMigrations(pool);
-  await ensurePresenceSchema();
-  console.log('[DB] MySQL connecté :', process.env.DB_NAME);
+export function isDbAvailable(): boolean {
+  return pool !== null;
+}
+
+export async function initDb(): Promise<void> {
+  try {
+    pool = mysql.createPool({
+      host:             process.env.DB_HOST     || '127.0.0.1',
+      port:             parseInt(process.env.DB_PORT || '3306', 10),
+      user:             process.env.DB_USER     || 'root',
+      password:         process.env.DB_PASS     || '',
+      database:         process.env.DB_NAME     || 'kyc_v4',
+      waitForConnections: true,
+      connectionLimit:  parseInt(process.env.DB_POOL_LIMIT || '10', 10),
+      queueLimit: 0,
+      enableKeepAlive: true,
+      timezone: '+00:00',
+      charset: 'utf8mb4',
+    });
+
+    const conn = await pool.getConnection();
+    await conn.ping();
+    conn.release();
+    await runMigrations(pool);
+    await ensurePresenceSchema();
+    dbInitError = null;
+    console.log('[DB] MySQL connecté :', process.env.DB_NAME);
+  } catch (error) {
+    dbInitError = error instanceof Error ? error : new Error(String(error));
+    pool = null;
+    console.error('[DB] MySQL indisponible au démarrage, le backend continuera sans base de données :', dbInitError.message);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -43,7 +62,8 @@ export async function initDb(): Promise<void> {
 type P = any[];
 
 export async function query<T extends RowDataPacket>(sql: string, params: P = []): Promise<T[]> {
-  const [rows] = await pool.execute<T[]>(sql, params);
+  const activePool = getPoolOrThrow();
+  const [rows] = await activePool.execute<T[]>(sql, params);
   return rows;
 }
 
@@ -53,7 +73,8 @@ async function queryOne<T extends RowDataPacket>(sql: string, params: P = []): P
 }
 
 export async function exec(sql: string, params: P = []): Promise<ResultSetHeader> {
-  const [result] = await pool.execute<ResultSetHeader>(sql, params);
+  const activePool = getPoolOrThrow();
+  const [result] = await activePool.execute<ResultSetHeader>(sql, params);
   return result;
 }
 
@@ -82,6 +103,33 @@ function nowSec(): number {
 }
 
 export { nowSec };
+
+export async function setFcmToken(numero: string, token: string): Promise<void> {
+  const activePool = getPoolOrThrow();
+  await activePool.query(
+    `INSERT INTO terrain_fcm_tokens (numero, fcm_token)
+     VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE fcm_token = VALUES(fcm_token), updated_at = CURRENT_TIMESTAMP`,
+    [numero, token],
+  );
+}
+
+export async function getFcmToken(numero: string): Promise<string | null> {
+  const activePool = getPoolOrThrow();
+  const [rows] = await activePool.query<RowDataPacket[]>(
+    `SELECT fcm_token FROM terrain_fcm_tokens WHERE numero = ? LIMIT 1`,
+    [numero],
+  );
+  return rows.length ? String(rows[0].fcm_token) : null;
+}
+
+export async function getAllFcmTokens(): Promise<Array<{ numero: string; fcm_token: string }>> {
+  const activePool = getPoolOrThrow();
+  const [rows] = await activePool.query<RowDataPacket[]>(
+    `SELECT numero, fcm_token FROM terrain_fcm_tokens`,
+  );
+  return rows.map((r) => ({ numero: String(r.numero), fcm_token: String(r.fcm_token) }));
+}
 
 async function ensurePresenceSchema(): Promise<void> {
   if (!pool) return;
@@ -365,7 +413,8 @@ export async function getDossiers(params: {
     p.push(s, s, s);
   }
 
-  const [countRows] = await pool.execute<RowDataPacket[]>(
+  const activePool = getPoolOrThrow();
+  const [countRows] = await activePool.execute<RowDataPacket[]>(
     `SELECT COUNT(*) AS n FROM dossiers ${where}`, p as P
   );
   const total = (countRows[0] as RowDataPacket)['n'] as number;
@@ -812,7 +861,8 @@ export async function getAuditLogs(params: {
   if (params.debut)     { where += ' AND created_at>=?';    p.push(params.debut); }
   if (params.fin)       { where += ' AND created_at<=?';    p.push(params.fin); }
 
-  const [countRows] = await pool.execute<RowDataPacket[]>(
+  const activePool = getPoolOrThrow();
+  const [countRows] = await activePool.execute<RowDataPacket[]>(
     `SELECT COUNT(*) AS n FROM audit_log ${where}`, p as P
   );
   const total = (countRows[0] as RowDataPacket)['n'] as number;

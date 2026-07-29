@@ -57,7 +57,7 @@ export default function App() {
     const callState = useCallStore.getState();
     const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
 
-    if (callState.status === 'active' || callState.status === 'connecting') {
+    if (callState.status === 'connecting' || callState.status === 'active') {
       console.log('[App] appel déjà en cours, navigation IncomingCall ignorée', { callUuid, numeroMtn, status: callState.status });
       return;
     }

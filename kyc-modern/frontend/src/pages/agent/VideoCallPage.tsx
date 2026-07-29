@@ -134,14 +134,31 @@ export function AgentVideoCallPage() {
   }, [terrain, numeroMtn, dossierId]);
 
   useEffect(() => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStream;
+    const video = localVideoRef.current;
+    if (!video) return;
+    if (localStream) {
+      if (video.srcObject !== localStream) {
+        video.srcObject = localStream;
+      }
+      video.muted = true;
+      video.play().catch(() => undefined);
+    } else {
+      video.srcObject = null;
     }
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    const video = remoteVideoRef.current;
+    if (!video) return;
+    if (remoteStream) {
+      if (video.srcObject !== remoteStream) {
+        video.srcObject = remoteStream;
+      }
+      video.play().catch((err) => {
+        logRtcWarn('lecture vidéo distante impossible', err);
+      });
+    } else {
+      video.srcObject = null;
     }
   }, [remoteStream]);
 
@@ -461,11 +478,7 @@ export function AgentVideoCallPage() {
           connectionState: pc.connectionState,
           kind: event.track?.kind,
         });
-        setRemoteStream(stream);
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = stream;
-          remoteVideoRef.current.play().catch((err) => logRtcWarn('play() du flux distant impossible', err));
-        }
+        setRemoteStream((prev) => (prev === stream ? prev : stream));
       } else {
         logRtcWarn('ontrack appelé sans MediaStream valide', event);
       }
@@ -721,6 +734,7 @@ export function AgentVideoCallPage() {
         .kvc-topbar {
           display: flex; align-items: center; justify-content: space-between;
           gap: 12px; padding: 4px 2px 14px; flex-wrap: wrap;
+          color: #0F172A;
         }
         .kvc-topbar-left { display: flex; align-items: center; gap: 10px; }
         .kvc-live-dot {
@@ -732,17 +746,22 @@ export function AgentVideoCallPage() {
         .kvc-live-dot[data-state="gold"] { background: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); animation: kvc-pulse 1.5s ease-in-out infinite; }
         .kvc-live-dot[data-state="danger"] { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-dim); }
         @keyframes kvc-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
-        .kvc-title { font-size: 19px; font-weight: 800; letter-spacing: -0.3px; margin: 0; line-height: 1.2; }
-        .kvc-sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 0; }
+        .kvc-title {
+          font-size: 19px; font-weight: 800; letter-spacing: -0.3px; margin: 0; line-height: 1.2;
+          color: #0F172A;
+        }
+        .kvc-sub {
+          font-size: 12.5px; color: #475569; margin: 2px 0 0;
+        }
         .kvc-topbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
         .kvc-chip {
           font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
-          background: var(--panel); border: 1px solid var(--hairline); color: var(--text-soft);
-          white-space: nowrap;
+          background: rgba(255,255,255,0.92); border: 1px solid rgba(15,23,42,0.14); color: #0F172A;
+          white-space: nowrap; box-shadow: 0 1px 2px rgba(15,23,42,0.06);
         }
-        .kvc-chip--success { color: #86EFAC; border-color: rgba(34,197,94,0.35); background: var(--success-dim); }
-        .kvc-chip--gold { color: #FFE066; border-color: rgba(255,204,0,0.35); background: var(--gold-dim); }
-        .kvc-chip--danger { color: #FCA5A5; border-color: rgba(239,68,68,0.35); background: var(--danger-dim); }
+        .kvc-chip--success { color: #166534; border-color: rgba(34,197,94,0.35); background: rgba(220,252,231,0.95); }
+        .kvc-chip--gold { color: #8A5A00; border-color: rgba(255,204,0,0.35); background: rgba(255,247,205,0.95); }
+        .kvc-chip--danger { color: #991B1B; border-color: rgba(239,68,68,0.35); background: rgba(254,226,226,0.95); }
 
         .kvc-alerts { margin-bottom: 10px; }
 

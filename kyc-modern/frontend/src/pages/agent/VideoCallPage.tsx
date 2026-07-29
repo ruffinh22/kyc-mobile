@@ -245,6 +245,14 @@ export function AgentVideoCallPage() {
     setTimeout(() => setInfo(null), 6000);
   };
 
+  const logRtc = (...args: unknown[]) => {
+    console.log('[VideoCall][RTC]', ...args);
+  };
+
+  const logRtcWarn = (...args: unknown[]) => {
+    console.warn('[VideoCall][RTC]', ...args);
+  };
+
   const connect = () => {
     if (!terrain) {
       setError('Numéro terrain requis pour ouvrir l’interface vidéo.');
@@ -265,6 +273,7 @@ export function AgentVideoCallPage() {
     ws.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data) as SignalMessage;
+        logRtc('message WebSocket reçu', msg.type, msg);
         handleSignalMessage(msg);
       } catch (e) {
         console.warn('[VideoCall] impossible de parser message WS', e);
@@ -435,9 +444,11 @@ export function AgentVideoCallPage() {
 
     const pc = new RTCPeerConnection({ iceServers });
     pcRef.current = pc;
+    logRtc('PeerConnection créée', { iceServers });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        logRtc('candidat ICE généré', event.candidate.toJSON());
         sendWs({ type: 'webrtc', payload: { kind: 'ice', candidate: event.candidate.toJSON() } });
       }
     };
@@ -445,11 +456,31 @@ export function AgentVideoCallPage() {
     pc.ontrack = (event) => {
       const stream = event.streams && event.streams[0] ? event.streams[0] : null;
       if (stream instanceof MediaStream) {
+        logRtc('flux distant reçu', {
+          trackCount: stream.getTracks().length,
+          connectionState: pc.connectionState,
+          kind: event.track?.kind,
+        });
         setRemoteStream(stream);
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.play().catch((err) => logRtcWarn('play() du flux distant impossible', err));
+        }
+      } else {
+        logRtcWarn('ontrack appelé sans MediaStream valide', event);
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      logRtc('état ICE', pc.iceConnectionState);
+    };
+
+    pc.onnegotiationneeded = () => {
+      logRtc('nécessité de renégociation');
+    };
+
     pc.onconnectionstatechange = () => {
+      logRtc('état de connexion RTCPeerConnection', pc.connectionState);
       if (pc.connectionState === 'connected') {
         setConnected(true);
         setStatus('connected');
@@ -470,10 +501,15 @@ export function AgentVideoCallPage() {
 
   const ensureLocalStream = async () => {
     if (localStream) return localStream;
+    logRtc('demande d’accès caméra/micro');
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    logRtc('flux local obtenu', { videoTracks: stream.getVideoTracks().length, audioTracks: stream.getAudioTracks().length });
     setLocalStream(stream);
     if (pcRef.current) {
-      stream.getTracks().forEach((track) => pcRef.current?.addTrack(track, stream));
+      stream.getTracks().forEach((track) => {
+        logRtc('ajout du track local au PC', track.kind);
+        pcRef.current?.addTrack(track, stream);
+      });
     }
     return stream;
   };
@@ -483,33 +519,41 @@ export function AgentVideoCallPage() {
     if (!pc) return;
     if (!payload || typeof payload.kind !== 'string') return;
 
+    logRtc('traitement payload WebRTC', payload.kind);
+
     if (payload.kind === 'answer') {
       try {
+        logRtc('réception answer SDP');
         await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+        logRtc('remoteDescription answer appliquée');
       } catch (e) {
-        console.warn('[VideoCall] erreur remoteDescription answer', e);
+        logRtcWarn('erreur remoteDescription answer', e);
       }
       return;
     }
 
     if (payload.kind === 'offer') {
       try {
+        logRtc('réception offer SDP');
         await ensureLocalStream();
         await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+        logRtc('answer SDP créée et envoyée');
         sendWs({ type: 'webrtc', payload: { kind: 'answer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
       } catch (e) {
-        console.warn('[VideoCall] erreur handle offer', e);
+        logRtcWarn('erreur handle offer', e);
       }
       return;
     }
 
     if (payload.kind === 'ice' && payload.candidate) {
       try {
+        logRtc('ajout candidat ICE distant');
         await pc.addIceCandidate(payload.candidate);
+        logRtc('candidat ICE ajouté');
       } catch (e) {
-        console.warn('[VideoCall] addIceCandidate failed', e);
+        logRtcWarn('addIceCandidate failed', e);
       }
       return;
     }
@@ -520,11 +564,13 @@ export function AgentVideoCallPage() {
     await ensureLocalStream();
     if (!pc) return;
     try {
+      logRtc('création de l’offre WebRTC');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      logRtc('offre WebRTC créée et envoyée');
       sendWs({ type: 'webrtc', payload: { kind: 'offer', sdp: offer.sdp } });
     } catch (e) {
-      console.warn('[VideoCall] impossible de créer l’offre', e);
+      logRtcWarn('impossible de créer l’offre', e);
       setError('Impossible de préparer l’appel WebRTC.');
     }
   };
@@ -544,6 +590,7 @@ export function AgentVideoCallPage() {
     setCallStartedAt(Date.now());
     setCallElapsed(0);
     setInfo('Lancement de l’appel vers le terrain...');
+    logRtc('début d’appel', { terrain: normalizeNumero(terrain), numeroMtn });
     sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
   };
 

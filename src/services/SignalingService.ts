@@ -265,8 +265,20 @@ class SignalingService {
 
       // ── Appel entrant : back-office appelle le terrain ─────────────────────
       case 'incoming-call':
+        console.log('[Signal] incoming-call reçu', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
+        const currentCallUuid = store.callUuid || '';
+        const sameCallAlreadyHandled = !!currentCallUuid && currentCallUuid === (msg.callUuid || '');
+        if (sameCallAlreadyHandled && store.status === 'incoming') {
+          console.log('[Signal] doublon incoming-call ignoré', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
+          break;
+        }
         store.setIncomingCall(msg.numeroMtn, msg.callUuid);
-        this.callbacks?.onIncomingCall(msg.numeroMtn, msg.callUuid);
+        if (this.callbacks?.onIncomingCall) {
+          setTimeout(() => {
+            console.log('[Signal] déclenche onIncomingCall', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
+            this.callbacks?.onIncomingCall(msg.numeroMtn, msg.callUuid);
+          }, 80);
+        }
         break;
 
       // ── Signalisation WebRTC (offer / answer / ice) ───────────────────────
@@ -402,19 +414,28 @@ class SignalingService {
           video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
         });
       } catch (e: any) {
-        const msg = e?.name === 'NotAllowedError'
-          ? 'Permission caméra/micro refusée'
-          : 'Caméra ou micro indisponible';
-        this.callbacks?.onMediaError?.(msg);
-        this.endCallCleanup();
-        this.ensureLocalStreamPromise = null;
-        throw e;
+        try {
+          console.warn('[Signal] getUserMedia vidéo impossible, repli audio seul', e);
+          stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+          console.log('[Signal] flux local audio seul prêt');
+        } catch (audioErr: any) {
+          const msg = audioErr?.name === 'NotAllowedError'
+            ? 'Permission caméra/micro refusée'
+            : 'Caméra ou micro indisponible';
+          this.callbacks?.onMediaError?.(msg);
+          this.endCallCleanup();
+          this.ensureLocalStreamPromise = null;
+          throw audioErr;
+        }
       }
 
       this.localStream = stream;
       stream.getTracks().forEach((track: MediaStreamTrack) => {
+        track.enabled = track.kind === 'audio' ? true : track.enabled;
         this.pc!.addTrack(track, stream);
       });
+      const trackKinds = stream.getTracks().map((track: MediaStreamTrack) => track.kind).join(',');
+      console.log('[Signal] flux local prêt', { trackKinds, audioEnabled: stream.getAudioTracks().some((t: MediaStreamTrack) => t.enabled) });
       this.emitStream({ type: 'local', stream });
       return stream;
     })();

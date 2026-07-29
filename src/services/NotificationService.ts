@@ -73,6 +73,8 @@ export type NotifCallbacks = {
 class NotificationService {
   private callbacks: NotifCallbacks | null = null;
   private activeCallUuid: string | null = null;
+  private displayedCallUuid: string | null = null;
+  private recentCallUuids = new Map<string, number>();
   private fcmToken: string | null = null;
   private listenersBound = false;
   private initialized = false;
@@ -343,10 +345,23 @@ class NotificationService {
     // Utilise le callUuid fourni par le serveur, ou en génère un local
     const callUuid  = String(data.callUuid ?? `fcm-${Date.now()}`);
 
+    const now = Date.now();
+    const lastSeenAt = this.recentCallUuids.get(callUuid);
+    if (lastSeenAt && now - lastSeenAt < 4_000) {
+      console.log('[Notif] doublon incoming-call ignoré', callUuid);
+      return;
+    }
+    this.recentCallUuids.set(callUuid, now);
+    this.recentCallUuids.forEach((seenAt, uuid) => {
+      if (now - seenAt > 30_000) this.recentCallUuids.delete(uuid);
+    });
+
     this.activeCallUuid = callUuid;
     await this.persistPendingIncomingCall(callUuid, numeroMtn);
     this.showIncomingCall(callUuid, numeroMtn);
-    this.callbacks?.onIncomingCall(callUuid, numeroMtn);
+    setTimeout(() => {
+      this.callbacks?.onIncomingCall(callUuid, numeroMtn);
+    }, 100);
   }
 
   private async persistPendingIncomingCall (callUuid: string, numeroMtn: string): Promise<void> {
@@ -377,11 +392,17 @@ class NotificationService {
   // parallèle du WS pour la fiabilité), on ignore le second déclenchement au
   // lieu de relancer une 2e fois la sonnerie/CallKeep pour le même appel.
   showIncomingCall (callUuid: string, numeroMtn: string): void {
-    if (this.activeCallUuid === callUuid) {
-      console.log('[Notif] showIncomingCall ignoré (déjà actif) :', callUuid);
+    if (this.activeCallUuid && this.activeCallUuid !== callUuid) {
+      console.log('[Notif] un autre appel est déjà affiché, nouvel appel ignoré', { active: this.activeCallUuid, incoming: callUuid });
       return;
     }
+    if (this.displayedCallUuid === callUuid) {
+      console.log('[Notif] showIncomingCall ignoré (déjà affiché) :', callUuid);
+      return;
+    }
+
     this.activeCallUuid = callUuid;
+    this.displayedCallUuid = callUuid;
     callSessionService.startIncomingCallExperience();
 
     try {
@@ -417,6 +438,7 @@ class NotificationService {
     if (id) {
       CallKeep.setCurrentCallActive(id);
     }
+    this.displayedCallUuid = null;
     await this.clearPendingIncomingCall();
     try {
       KycCallModule()?.answerCall?.();
@@ -432,6 +454,8 @@ class NotificationService {
       CallKeep.endCall(id);
       if (id === this.activeCallUuid) this.activeCallUuid = null;
     }
+    this.displayedCallUuid = null;
+    this.recentCallUuids.clear();
     await this.clearPendingIncomingCall();
 
     callSessionService.stopIncomingCallExperience();

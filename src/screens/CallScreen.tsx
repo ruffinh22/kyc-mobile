@@ -129,6 +129,7 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   const [connectionPhase, setConnectionPhase] = useState<'connecting' | 'reconnecting' | 'fallback' | 'connected' | 'paused'>(initialRemote ? 'connected' : 'connecting');
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
   const remoteStreamUrl = useMemo(() => {
     if (!remoteStream) return null;
     const streamUrl = (remoteStream as MediaStream & { toURL?: () => string }).toURL?.();
@@ -165,6 +166,27 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   // en pleine conversation. L'arrêt se fait via notificationService.endNativeCall()
   // dans handleEndCall, pas ici.
 
+  const scheduleUiUpdate = useCallback((update: () => void) => {
+    if (!mountedRef.current) return;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (mountedRef.current) update();
+      });
+    } else {
+      setTimeout(() => {
+        if (mountedRef.current) update();
+      }, 0);
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stopTimer();
+    };
+  }, []);
+
   // ── Abonnement streams ────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -172,10 +194,14 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
     const startCallFlow = async () => {
       try {
         await signalingService.acceptCall();
-        if (!cancelled) setStatusTxt('Connexion vidéo…');
+        if (!cancelled) {
+          scheduleUiUpdate(() => setStatusTxt('Connexion vidéo…'));
+        }
       } catch (e) {
         console.warn('[CallScreen] acceptCall failed', e);
-        if (!cancelled) setStatusTxt('Connexion impossible');
+        if (!cancelled) {
+          scheduleUiUpdate(() => setStatusTxt('Connexion impossible'));
+        }
       }
     };
 
@@ -184,36 +210,42 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
     const unsub = signalingService.addStreamListener((event) => {
       switch (event.type) {
         case 'local':
-          setLocalStream(event.stream); break;
+          scheduleUiUpdate(() => setLocalStream(event.stream)); break;
         case 'remote':
-          if (event.stream) {
-            setRemoteStream(event.stream);
-          }
-          setHasRemote(true);
-          setCallReady(true);
-          setConnectionPhase('connected');
-          setStatusTxt('Connecté');
-          notificationService.setCallConnected(callUuid);
-          startTimer();
+          scheduleUiUpdate(() => {
+            if (event.stream) {
+              setRemoteStream(event.stream);
+            }
+            setHasRemote(true);
+            setCallReady(true);
+            setConnectionPhase('connected');
+            setStatusTxt('Connecté');
+            notificationService.setCallConnected(callUuid);
+            startTimer();
+          });
           break;
         case 'reconnecting':
-          setReconnecting(true);
-          setLowNetwork(true);
-          setConnectionPhase('reconnecting');
-          setStatusTxt('Reconnexion…');
+          scheduleUiUpdate(() => {
+            setReconnecting(true);
+            setLowNetwork(true);
+            setConnectionPhase('reconnecting');
+            setStatusTxt('Reconnexion…');
+          });
           break;
         case 'reconnected':
-          setReconnecting(false);
-          setLowNetwork(false);
-          setConnectionPhase('connected');
-          setStatusTxt('Connecté');
+          scheduleUiUpdate(() => {
+            setReconnecting(false);
+            setLowNetwork(false);
+            setConnectionPhase('connected');
+            setStatusTxt('Connecté');
+          });
           break;
         case 'ended':
-          handleEndCall(false); break;
+          scheduleUiUpdate(() => handleEndCall(false)); break;
       }
     });
     return () => { cancelled = true; unsub(); stopTimer(); };
-  }, []);
+  }, [callUuid, scheduleUiUpdate]);
 
   useEffect(() => {
     const target = connectionPhase === 'connected' ? 1 : connectionPhase === 'reconnecting' || connectionPhase === 'paused' ? 0.72 : connectionPhase === 'fallback' ? 0.45 : 0.2;
@@ -262,9 +294,11 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
       clearTimeout(hideTimeout.current);
       hideTimeout.current = null;
     }
-    setControlsVis(true);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
-  }, [fadeAnim]);
+    scheduleUiUpdate(() => {
+      setControlsVis(true);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    });
+  }, [fadeAnim, scheduleUiUpdate]);
 
   useEffect(() => {
     if (remoteStream || hasRemote || callReady) {
@@ -275,12 +309,14 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   // ── Timer ─────────────────────────────────────────────────────────────────
   const startTimer = () => {
     callStartAt.current = Date.now();
-    setTimerSec(0);
-    callStore.setCallDuration(0);
+    scheduleUiUpdate(() => {
+      setTimerSec(0);
+      callStore.setCallDuration(0);
+    });
     timerRef.current = setInterval(() => {
       setTimerSec(s => {
         const next = s + 1;
-        callStore.setCallDuration(next);
+        scheduleUiUpdate(() => callStore.setCallDuration(next));
         return next;
       });
     }, 1000);
@@ -300,25 +336,45 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
     if (callUuid) {
       void callHistoryService.upsert({ callUuid, numeroMtn, durationSec: finalDuration });
     }
-    callStore.resetCall();
-    navigation.replace('Idle');
-  }, [callUuid, numeroMtn, navigation, callStore, timerSec]);
+    scheduleUiUpdate(() => {
+      callStore.resetCall();
+      navigation.replace('Idle');
+    });
+  }, [callUuid, numeroMtn, navigation, callStore, timerSec, scheduleUiUpdate]);
 
-  const handleToggleMic    = () => { const on = signalingService.toggleMic();    setIsMicOn(on);    callStore.setMicOn(on);    showControls(); };
-  const handleToggleCamera = () => { const on = signalingService.toggleCamera(); setIsCameraOn(on); callStore.setCameraOn(on); showControls(); };
+  const handleToggleMic = () => {
+    const on = signalingService.toggleMic();
+    scheduleUiUpdate(() => {
+      setIsMicOn(on);
+      callStore.setMicOn(on);
+      showControls();
+    });
+  };
+  const handleToggleCamera = () => {
+    const on = signalingService.toggleCamera();
+    scheduleUiUpdate(() => {
+      setIsCameraOn(on);
+      callStore.setCameraOn(on);
+      showControls();
+    });
+  };
   const handleSwitchCamera = async () => { try { await signalingService.switchCamera(); } catch {} showControls(); };
   const handleRetryConnection = async () => {
-    setRetryCount(c => c + 1);
-    setConnectionPhase('connecting');
-    setLowNetwork(false);
-    setReconnecting(false);
-    setStatusTxt('Nouvelle tentative…');
+    scheduleUiUpdate(() => {
+      setRetryCount(c => c + 1);
+      setConnectionPhase('connecting');
+      setLowNetwork(false);
+      setReconnecting(false);
+      setStatusTxt('Nouvelle tentative…');
+    });
     try {
       await signalingService.acceptCall();
-      setStatusTxt('Connexion vidéo…');
+      scheduleUiUpdate(() => setStatusTxt('Connexion vidéo…'));
     } catch {
-      setConnectionPhase('paused');
-      setStatusTxt('Réessai impossible');
+      scheduleUiUpdate(() => {
+        setConnectionPhase('paused');
+        setStatusTxt('Réessai impossible');
+      });
     }
   };
 

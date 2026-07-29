@@ -46,6 +46,7 @@ const backofficeSockets = new Map<string, WsSocket>();
 const terrainTokens = new Map<string, string>();
 const terrainPresenceTimers = new Map<string, NodeJS.Timeout>();
 const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket; numeroMtn: string; timer: NodeJS.Timeout }>();
+const pendingWebrtc = new Map<string, Array<{ payload: unknown; numero: string; role: string }>>();
 
 const CALL_RING_TIMEOUT_MS = 45_000;
 const TERRAIN_PRESENCE_GRACE_MS = 20_000;
@@ -945,12 +946,6 @@ export async function publicDossierRoutes(app: any): Promise<void> {
               sendSocketPayload(boSocket, { type: 'terrain-presence', enLigne: true, numero });
             }
 
-            // Reconnexion pendant qu'un appel était en attente côté push
-            // seul (l'app venait d'être réveillée par la notification) :
-            // on relaie maintenant l'appel entrant en direct sur ce socket
-            // fraîchement ouvert, ET on prévient le web qu'il peut enfin
-            // créer son offre SDP — jusque-là il n'y avait aucun socket
-            // terrain vivant pour la relayer.
             const pending = pendingCalls.get(numero);
             if (pending) {
               sendSocketPayload(socket, {
@@ -958,6 +953,19 @@ export async function publicDossierRoutes(app: any): Promise<void> {
               });
               sendSocketPayload(pending.boSocket, { type: 'call-delivered', numero, callUuid: pending.callUuid });
               console.log('[SIGNAL] terrain reconnecté pendant appel en attente (push)', { numero, callUuid: pending.callUuid });
+            }
+
+            const buffered = pendingWebrtc.get(numero);
+            if (buffered?.length) {
+              console.log('[SIGNAL] replay WebRTC tamponné après reconnexion terrain', { numero, count: buffered.length });
+              for (const entry of buffered) {
+                try {
+                  socket.send(JSON.stringify({ type: 'webrtc', payload: entry.payload, numero: entry.numero }));
+                } catch {
+                  // ignore
+                }
+              }
+              pendingWebrtc.delete(numero);
             }
           } else if (role === 'backoffice') {
             backofficeSockets.set(numero, socket);
@@ -1145,11 +1153,23 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             const boSocket = pendingForTerrain?.boSocket ?? (explicitTarget ? backofficeSockets.get(explicitTarget) : null);
             if (boSocket) {
               try { boSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: explicitTarget || numero })); } catch { /* fermé */ }
+            } else {
+              const key = explicitTarget || numero;
+              const buffered = pendingWebrtc.get(key) ?? [];
+              buffered.push({ payload: msg.payload, numero: explicitTarget || numero, role });
+              pendingWebrtc.set(key, buffered);
+              console.log('[SIGNAL] WebRTC tamponné côté terrain, attente du back-office', { key, kind: payload?.kind });
             }
           } else if (role === 'backoffice') {
             const targetSocket = terrainSockets.get(relayTarget || numero);
             if (targetSocket) {
               try { targetSocket.send(JSON.stringify({ type: 'webrtc', payload: msg.payload, numero: relayTarget || numero })); } catch { /* fermé */ }
+            } else {
+              const key = relayTarget || numero;
+              const buffered = pendingWebrtc.get(key) ?? [];
+              buffered.push({ payload: msg.payload, numero: relayTarget || numero, role });
+              pendingWebrtc.set(key, buffered);
+              console.log('[SIGNAL] WebRTC tamponné côté back-office, attente du terrain', { key, kind: payload?.kind });
             }
           }
           return;

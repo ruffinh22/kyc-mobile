@@ -54,16 +54,30 @@ export default function App() {
   };
 
   const openIncomingCallRoute = async (callUuid: string, numeroMtn: string) => {
-    useCallStore.getState().setIncomingCall(numeroMtn, callUuid);
+    const callState = useCallStore.getState();
+    const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+
+    if (callState.status === 'active' || callState.status === 'connecting') {
+      console.log('[App] appel déjà en cours, navigation IncomingCall ignorée', { callUuid, numeroMtn, status: callState.status });
+      return;
+    }
+    if (currentRoute === 'IncomingCall' || currentRoute === 'Call') {
+      console.log('[App] route déjà ouverte, navigation IncomingCall ignorée', { callUuid, numeroMtn, currentRoute });
+      return;
+    }
+
+    console.log('[App] ouverture IncomingCall', { callUuid, numeroMtn });
+    callState.setIncomingCall(numeroMtn, callUuid);
     await AsyncStorage.setItem('pending_incoming_call', JSON.stringify({ callUuid, numeroMtn }));
 
-    const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
-    if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
-
-    navigationRef.current?.reset({
-      index: 0,
-      routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
-    });
+    try {
+      navigationRef.current?.reset({
+        index: 0,
+        routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
+      });
+    } catch (err) {
+      console.warn('[App] Impossible d’ouvrir IncomingCall route', err);
+    }
   };
 
   const restorePendingCallFromNative = async () => {
@@ -107,7 +121,9 @@ export default function App() {
 
     const handleIncomingFromAppStart = (callUuid: string, numeroMtn: string) => {
       if (cancelled) return;
-      void openIncomingCallRoute(callUuid, numeroMtn);
+      setTimeout(() => {
+        void openIncomingCallRoute(callUuid, numeroMtn);
+      }, 120);
     };
 
     const handleAcceptedFromAppStart = async (uuid: string) => {

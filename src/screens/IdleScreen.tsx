@@ -117,8 +117,11 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
 
   // ── Appel entrant ───────────────────────────────────────────────────────
   const handleIncomingCall = useCallback((callUuid: string, numeroMtn: string) => {
+    console.log('[Idle] navigation vers IncomingCall', { callUuid, numeroMtn });
     callStore.setIncomingCall(numeroMtn, callUuid);
-    navigation.navigate('IncomingCall', { numeroMtn, callUuid });
+    setTimeout(() => {
+      navigation.navigate('IncomingCall', { numeroMtn, callUuid });
+    }, 120);
   }, [navigation, callStore]);
 
   // ── Exemption batterie (une seule fois, dès que l'app est au premier plan) ──
@@ -169,11 +172,17 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
         onIncomingCall: (numeroMtn, serverCallUuid) => {
           // Réutilise le callUuid émis par le serveur quand il est présent
           // (voir public-dossiers.ts) : c'est le MÊME identifiant que celui
-          // que le push FCM utilisera pour cet appel, donc showIncomingCall
-          // ci-dessous détecte correctement le doublon si les deux chemins
-          // arrivent. Le repli `ws-${Date.now()}` ne sert que si un ancien
-          // build serveur ne transmet pas encore callUuid.
+          // que le push FCM utilisera pour cet appel, donc on ignore les doublons
+          // si le même appel est déjà traité.
           const uuid = serverCallUuid || `ws-${Date.now()}`;
+          if (callStore.status === 'active' || callStore.status === 'connecting') {
+            console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { callUuid: uuid, numeroMtn });
+            return;
+          }
+          if (callStore.status === 'incoming' && callStore.callUuid === uuid) {
+            console.log('[Idle] doublon incoming-call ignoré', { callUuid: uuid, numeroMtn });
+            return;
+          }
           callStore.setIncomingCall(numeroMtn, uuid);
           void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
           notificationService.showIncomingCall(uuid, numeroMtn);

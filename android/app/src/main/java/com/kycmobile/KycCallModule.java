@@ -8,6 +8,8 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
 
+import androidx.core.app.NotificationManagerCompat;
+
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
@@ -164,6 +166,38 @@ public class KycCallModule extends ReactContextBaseJavaModule {
             // cas on log seulement — un guide manuel restera nécessaire pour ces
             // appareils (paramètres constructeur hors API standard Android).
             Log.e(TAG, "Error requesting battery optimization exemption", e);
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public boolean canUseFullScreenIntent() {
+        try {
+            return NotificationManagerCompat.from(getReactApplicationContext()).canUseFullScreenIntent();
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking full screen intent permission", e);
+            return false;
+        }
+    }
+
+    @ReactMethod
+    public void requestFullScreenIntentPermission() {
+        try {
+            Intent intent = new Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT");
+            intent.setData(Uri.parse("package:" + getReactApplicationContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getReactApplicationContext().startActivity(intent);
+            Log.i(TAG, "Requested full screen intent permission settings");
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to open full screen intent settings, falling back to app details", e);
+            try {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getReactApplicationContext().getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getReactApplicationContext().startActivity(intent);
+                Log.i(TAG, "Opened app details settings as fallback");
+            } catch (Exception fallback) {
+                Log.e(TAG, "Unable to open app details settings", fallback);
+            }
         }
     }
 

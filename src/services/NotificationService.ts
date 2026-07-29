@@ -20,6 +20,8 @@ import { callSessionService } from './CallSessionService';
 interface KycCallNativeModule {
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestIgnoreBatteryOptimizations?: () => void;
+  canUseFullScreenIntent?: () => boolean;
+  requestFullScreenIntentPermission?: () => void;
   startForegroundWithCallData?: (numeroMtn: string, callUuid: string) => void;
   startForeground?: (numeroMtn: string) => void;
   answerCall?: () => void;
@@ -84,6 +86,7 @@ class NotificationService {
 
     this.initialized = true;
     await this.registerBackgroundHandlers();
+    await this.ensureFullScreenIntentPermission();
   }
 
   async registerBackgroundHandlers (): Promise<void> {
@@ -131,6 +134,20 @@ class NotificationService {
     } catch (e) {
       console.warn('[Notif] Vérification exemption batterie indisponible:', e);
       return false;
+    }
+  }
+
+  async ensureFullScreenIntentPermission (): Promise<boolean> {
+    if (Platform.OS !== 'android' || Platform.Version < 34) return true;
+    try {
+      const canUse = KycCallModule()?.canUseFullScreenIntent?.();
+      if (canUse) return true;
+
+      KycCallModule()?.requestFullScreenIntentPermission?.();
+      return false;
+    } catch (e) {
+      console.warn('[Notif] Vérification full screen intent impossible:', e);
+      return true;
     }
   }
 

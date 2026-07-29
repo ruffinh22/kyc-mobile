@@ -151,7 +151,10 @@ async function sendFcmHttp(payload: any): Promise<boolean> {
 
       const text = await response.text();
       console.log('[FCM] legacy response', response.status, text);
-      return response.ok;
+      if (response.ok) {
+        return true;
+      }
+      console.warn('[FCM] legacy push failed, falling back to v1 API');
     } catch (err) {
       console.warn('[FCM] legacy push exception', err);
     }

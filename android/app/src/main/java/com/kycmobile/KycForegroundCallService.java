@@ -274,6 +274,7 @@ public class KycForegroundCallService extends Service {
         return baseNotifBuilder(numeroMtn)
             .setContentTitle("Appel vidéo entrant")
             .setContentText("Numéro : " + numeroMtn)
+            .setFullScreenIntent(createIncomingCallPendingIntent(), true)
             .build();
     }
 
@@ -283,6 +284,23 @@ public class KycForegroundCallService extends Service {
             .setContentTitle("Appel KYC en cours")
             .setContentText("Numéro : " + numeroMtn)
             .build();
+    }
+
+    private PendingIntent createIncomingCallPendingIntent() {
+        Intent fullscreenIntent = new Intent(this, MainActivity.class);
+        fullscreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (currentCallUuid != null) {
+            fullscreenIntent.putExtra(EXTRA_CALL_UUID, currentCallUuid);
+        }
+        if (currentNumero != null) {
+            fullscreenIntent.putExtra(EXTRA_NUMBER, currentNumero);
+        }
+
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+            ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            : PendingIntent.FLAG_UPDATE_CURRENT;
+
+        return PendingIntent.getActivity(this, 1, fullscreenIntent, flags);
     }
 
     private NotificationCompat.Builder baseNotifBuilder(String numeroMtn) {
@@ -305,7 +323,7 @@ public class KycForegroundCallService extends Service {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
     }

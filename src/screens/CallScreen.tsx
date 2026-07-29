@@ -132,12 +132,20 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   const remoteStreamUrl = useMemo(() => {
     if (!remoteStream) return null;
     const streamUrl = (remoteStream as MediaStream & { toURL?: () => string }).toURL?.();
-    return streamUrl || (remoteStream as MediaStream & { id?: string }).id || null;
+    if (!streamUrl) {
+      console.warn('[CallScreen] remoteStream.toURL() indisponible — RTCView ne peut pas afficher ce flux.');
+      return null;
+    }
+    return streamUrl;
   }, [remoteStream]);
   const localStreamUrl = useMemo(() => {
     if (!localStream) return null;
     const streamUrl = (localStream as MediaStream & { toURL?: () => string }).toURL?.();
-    return streamUrl || (localStream as MediaStream & { id?: string }).id || null;
+    if (!streamUrl) {
+      console.warn('[CallScreen] localStream.toURL() indisponible — RTCView ne peut pas afficher ce flux.');
+      return null;
+    }
+    return streamUrl;
   }, [localStream]);
   const callStartAt = useRef<number | null>(null);
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);

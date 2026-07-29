@@ -36,11 +36,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import { MediaStream } from 'react-native-webrtc';
 import type {
   RTCPeerConnection,
   RTCIceCandidate,
   RTCSessionDescription,
-  MediaStream,
   MediaStreamTrack,
 } from 'react-native-webrtc';
 import { useCallStore } from '../store/callStore';
@@ -509,14 +509,26 @@ class SignalingService {
     });
 
     const handleIncomingStream = (e: any) => {
-      const stream: MediaStream | undefined = e.stream ?? e.streams?.[0];
-      if (!stream) return;
+      const incoming: MediaStream | undefined = e.stream ?? e.streams?.[0];
+      if (!incoming) return;
+
+      const merged = this.lastRemoteStream ?? new MediaStream();
+      if (!this.lastRemoteStream) {
+        this.lastRemoteStream = merged;
+      }
+
+      incoming.getTracks?.().forEach((track: MediaStreamTrack) => {
+        if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === track.id)) {
+          merged.addTrack(track);
+        }
+      });
+
       console.log('[Signal] flux distant reçu', {
-        trackCount: stream.getTracks?.().length ?? 0,
+        trackCount: merged.getTracks?.().length ?? 0,
         connectionState: pc.connectionState,
       });
       useCallStore.getState().setCallActive(true);
-      this.emitStream({ type: 'remote', stream });
+      this.emitStream({ type: 'remote', stream: merged });
     };
 
     pc.addEventListener('track', handleIncomingStream);
@@ -544,7 +556,13 @@ class SignalingService {
 
       if (pc.connectionState === 'disconnected') {
         // Souvent transitoire (perte réseau brève) — on laisse une chance de
-        // reprise avant de considérer l'appel comme terminé.
+        // reprise avant de considérer l'appel comme terminé, surtout si un
+        // flux distant est déjà présent.
+        if (this.lastRemoteStream?.getTracks().length) {
+          console.log('[Signal] ICE disconnected mais flux distant déjà présent, on garde l’appel actif');
+          this.emitStream({ type: 'reconnecting' });
+          return;
+        }
         if (this.iceGraceTimer) return; // grâce déjà en cours
         this.emitStream({ type: 'reconnecting' });
         if (typeof (pc as any).restartIce === 'function') {
@@ -562,6 +580,10 @@ class SignalingService {
       }
 
       if (pc.connectionState === 'failed') {
+        if (this.lastRemoteStream?.getTracks().length) {
+          console.log('[Signal] ICE failed mais flux distant déjà présent, on ne coupe pas l’appel');
+          return;
+        }
         // Échec définitif — pas de grâce
         if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
         this.endCallCleanup();

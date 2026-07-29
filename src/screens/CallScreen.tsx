@@ -129,6 +129,16 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
   const [connectionPhase, setConnectionPhase] = useState<'connecting' | 'reconnecting' | 'fallback' | 'connected' | 'paused'>(initialRemote ? 'connected' : 'connecting');
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const remoteStreamUrl = useMemo(() => {
+    if (!remoteStream) return null;
+    const streamUrl = (remoteStream as MediaStream & { toURL?: () => string }).toURL?.();
+    return streamUrl || (remoteStream as MediaStream & { id?: string }).id || null;
+  }, [remoteStream]);
+  const localStreamUrl = useMemo(() => {
+    if (!localStream) return null;
+    const streamUrl = (localStream as MediaStream & { toURL?: () => string }).toURL?.();
+    return streamUrl || (localStream as MediaStream & { id?: string }).id || null;
+  }, [localStream]);
   const callStartAt = useRef<number | null>(null);
   const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -337,14 +347,15 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
       <StatusBar hidden />
 
       {/* ── Vidéo distante plein écran ────────────────────────────────────── */}
-      {remoteStream ? (
+      {remoteStreamUrl ? (
         <Pressable style={s.remoteVideoContainer} onPress={showControls}>
           <RTCView
-            key={remoteStream.toURL()}
-            streamURL={remoteStream.toURL()}
+            key={remoteStreamUrl}
+            streamURL={remoteStreamUrl}
             style={s.remoteVideo}
             objectFit="contain"
             mirror={false}
+            zOrder={0}
           />
         </Pressable>
       ) : (
@@ -410,10 +421,10 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
       )}
 
       {/* ── PiP local ─────────────────────────────────────────────────────── */}
-      {localStream && (
+      {localStreamUrl && (
         <View style={s.pipWrap}>
           <RTCView
-            streamURL={localStream.toURL()}
+            streamURL={localStreamUrl}
             style={s.pip}
             objectFit="cover"
             mirror

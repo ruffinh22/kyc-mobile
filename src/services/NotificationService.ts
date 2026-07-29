@@ -90,6 +90,27 @@ class NotificationService {
     await this.requestNotificationPermission();
     await this.setupCallKeep();
     await this.setupFCM();
+    // Comme WhatsApp au premier lancement : on demande l'exemption Doze une
+    // fois pour toutes, en fire-and-forget pour ne jamais bloquer/retarder
+    // l'enregistrement FCM ci-dessus (voir avertissement en tête de
+    // index.js sur la criticité du chemin headless). Sans cette exemption,
+    // certains constructeurs (Samsung/Xiaomi/Oppo) peuvent retarder ou tuer
+    // le processus avant qu'un push d'appel entrant ne soit traité, même
+    // avec un foreground service et un FCM haute priorité corrects — c'est
+    // la cause n°1 des appels qui ne réveillent pas le téléphone verrouillé.
+    this.requestBatteryExemptionOnce().catch((e) =>
+      console.warn('[Notif] Demande exemption batterie (best-effort) échouée:', e)
+    );
+  }
+
+  // ── Ne redemander qu'une seule fois par installation, pas à chaque
+  // (re)lancement de l'app, pour ne pas harceler l'utilisateur avec la boîte
+  // système si celui-ci a déjà refusé une fois.
+  private async requestBatteryExemptionOnce (): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    const alreadyAsked = await AsyncStorage.getItem('battery_exemption_requested');
+    if (alreadyAsked) return;
+    await this.ensureBatteryOptimizationExemption();
   }
 
   // ── Exemption d'optimisation batterie (Doze) ─────────────────────────────

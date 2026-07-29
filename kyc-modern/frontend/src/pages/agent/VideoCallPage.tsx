@@ -10,6 +10,15 @@ const normalizeNumero = (value: string | null | undefined) => String(value || ''
 // tenter un ICE restart, plutôt que de couper l'appel immédiatement.
 const ICE_DISCONNECT_GRACE_MS = 6_000;
 
+// Comme WhatsApp/Messenger : on ne lâche pas l'appel au premier accroc ICE.
+// Plusieurs tentatives de restart, et à partir de la 2e on force le passage
+// par TURN (iceTransportPolicy 'relay') — la cause n°1 d'échec définitif ici
+// est un NAT symétrique où les candidats host/srflx ne matchent jamais des
+// deux côtés ; forcer le relais TURN contourne ce cas au prix de la latence.
+const MAX_ICE_RESTART_ATTEMPTS = 4;
+const ICE_RESTART_RETRY_DELAY_MS = 1_500;
+const FORCE_RELAY_FROM_ATTEMPT = 2;
+
 type SignalMessage =
   | { type: 'registered'; role: string; numero: string }
   | { type: 'terrain-presence'; enLigne: boolean; numero: string }
@@ -127,11 +136,13 @@ export function AgentVideoCallPage() {
   const pendingCandidatesRef = useRef<any[]>([]);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const [connected, setConnected] = useState(false);
   // Fenêtre de grâce avant de considérer un 'disconnected' comme définitif,
   // et flag pour n'essayer l'ICE restart qu'une seule fois par appel.
   const iceDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const iceRestartAttemptedRef = useRef(false);
+  const iceRestartCountRef = useRef(0);
+  const iceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const nextPath = `/video-call${terrain ? `?terrain=${encodeURIComponent(terrain)}` : ''}${numeroMtn ? `${terrain ? '&' : '?'}mtn=${encodeURIComponent(numeroMtn)}` : ''}${dossierId ? `${terrain || numeroMtn ? '&' : '?'}dossier=${encodeURIComponent(dossierId)}` : ''}`;
@@ -330,7 +341,11 @@ export function AgentVideoCallPage() {
       clearTimeout(iceDisconnectTimeoutRef.current);
       iceDisconnectTimeoutRef.current = null;
     }
-    iceRestartAttemptedRef.current = false;
+    iceRestartCountRef.current = 0;
+    if (iceRestartTimeoutRef.current) {
+      clearTimeout(iceRestartTimeoutRef.current);
+      iceRestartTimeoutRef.current = null;
+    }
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
@@ -339,9 +354,10 @@ export function AgentVideoCallPage() {
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
     }
-    if (remoteStream) {
-      remoteStream.getTracks().forEach((track) => track.stop());
+    if (remoteStreamRef.current) {
+      remoteStreamRef.current.getTracks().forEach((track) => track.stop());
     }
+    remoteStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
     setConnected(false);
@@ -485,14 +501,31 @@ export function AgentVideoCallPage() {
     };
 
     pc.ontrack = (event) => {
-      const stream = event.streams && event.streams[0] ? event.streams[0] : null;
-      if (stream instanceof MediaStream) {
+      const incomingStream = event.streams && event.streams[0] ? event.streams[0] : null;
+      const baseStream = remoteStreamRef.current ?? incomingStream ?? new MediaStream();
+      if (!remoteStreamRef.current) {
+        remoteStreamRef.current = baseStream;
+      }
+
+      if (incomingStream) {
+        incomingStream.getTracks().forEach((track) => {
+          if (!baseStream.getTracks().some((existingTrack) => existingTrack.id === track.id)) {
+            baseStream.addTrack(track);
+          }
+        });
+      } else if (event.track) {
+        if (!baseStream.getTracks().some((existingTrack) => existingTrack.id === event.track.id)) {
+          baseStream.addTrack(event.track);
+        }
+      }
+
+      if (baseStream instanceof MediaStream) {
         logRtc('flux distant reçu', {
-          trackCount: stream.getTracks().length,
+          trackCount: baseStream.getTracks().length,
           connectionState: pc.connectionState,
           kind: event.track?.kind,
         });
-        setRemoteStream((prev) => (prev === stream ? prev : stream));
+        setRemoteStream(baseStream);
       } else {
         logRtcWarn('ontrack appelé sans MediaStream valide', event);
       }
@@ -517,7 +550,11 @@ export function AgentVideoCallPage() {
           clearTimeout(iceDisconnectTimeoutRef.current);
           iceDisconnectTimeoutRef.current = null;
         }
-        iceRestartAttemptedRef.current = false;
+        iceRestartCountRef.current = 0;
+        if (iceRestartTimeoutRef.current) {
+          clearTimeout(iceRestartTimeoutRef.current);
+          iceRestartTimeoutRef.current = null;
+        }
         setConnected(true);
         setStatus('connected');
         setCallOutcome('connected');
@@ -525,6 +562,11 @@ export function AgentVideoCallPage() {
       }
 
       if (pc.connectionState === 'disconnected') {
+        if (remoteStreamRef.current?.getTracks().length) {
+          logRtc('ICE disconnected mais un flux distant est déjà présent, on garde l’appel actif');
+          return;
+        }
+
         // Transitoire dans la majorité des cas (bascule wifi/4G, brève perte
         // de paquets ICE) : on attend la fenêtre de grâce avant d'agir. Si
         // l'état revient à 'connected' entre-temps, le timer est annulé
@@ -543,17 +585,25 @@ export function AgentVideoCallPage() {
       }
 
       if (pc.connectionState === 'failed') {
+        if (remoteStreamRef.current?.getTracks().length) {
+          logRtc('connexion ICE en échec mais le flux distant est déjà présent, on ne coupe pas l’appel');
+          setStatus('connected');
+          setCallOutcome('connected');
+          setConnected(true);
+          return;
+        }
         if (iceDisconnectTimeoutRef.current) {
           clearTimeout(iceDisconnectTimeoutRef.current);
           iceDisconnectTimeoutRef.current = null;
         }
-        if (!iceRestartAttemptedRef.current) {
-          logRtc('connexion ICE en échec — tentative d’ICE restart avant abandon');
+        if (iceRestartCountRef.current < MAX_ICE_RESTART_ATTEMPTS) {
+          logRtc(`connexion ICE en échec — tentative d’ICE restart ${iceRestartCountRef.current + 1}/${MAX_ICE_RESTART_ATTEMPTS} avant abandon`);
           void attemptIceRestart();
           return;
         }
-        // Restart déjà tenté sans succès : on abandonne réellement l'appel.
-        logRtc('ICE restart déjà tenté sans succès, fin de l’appel');
+        // Toutes les tentatives (dont plusieurs forcées en relais TURN) ont
+        // échoué : on abandonne réellement l'appel.
+        logRtc('ICE restart épuisé (relais TURN inclus) sans succès, fin de l’appel');
         if (status !== 'ended') {
           setStatus('ready');
           setCallOutcome('ended');
@@ -582,16 +632,46 @@ export function AgentVideoCallPage() {
   // rôles ni rouvrir un nouvel appel côté terrain.
   const attemptIceRestart = async () => {
     const pc = pcRef.current;
-    if (!pc || iceRestartAttemptedRef.current) return;
-    iceRestartAttemptedRef.current = true;
-    try {
-      logRtc('ICE restart : création d’une nouvelle offre (iceRestart=true)');
-      const offer = await pc.createOffer({ iceRestart: true });
-      await pc.setLocalDescription(offer);
-      sendWs({ type: 'webrtc', payload: { kind: 'offer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
-      setInfo('Reconnexion vidéo en cours…');
-    } catch (e) {
-      logRtcWarn('ICE restart impossible', e);
+    if (!pc || iceRestartCountRef.current >= MAX_ICE_RESTART_ATTEMPTS) return;
+    if (iceRestartTimeoutRef.current) return; // une tentative est déjà planifiée
+
+    iceRestartCountRef.current += 1;
+    const attemptNumber = iceRestartCountRef.current;
+    const forceRelay = attemptNumber >= FORCE_RELAY_FROM_ATTEMPT;
+
+    const runRestart = async () => {
+      iceRestartTimeoutRef.current = null;
+      if (!pcRef.current || pcRef.current !== pc) return;
+      try {
+        if (forceRelay) {
+          // NAT symétrique probable des deux côtés : on force le passage par
+          // TURN plutôt que de retenter la même négociation P2P qui a déjà
+          // échoué. setConfiguration() s'applique dès la prochaine négociation.
+          try {
+            const current = pc.getConfiguration();
+            pc.setConfiguration({ ...current, iceTransportPolicy: 'relay' });
+            logRtc(`ICE restart ${attemptNumber}/${MAX_ICE_RESTART_ATTEMPTS} : relais TURN forcé`);
+          } catch (e) {
+            logRtcWarn('impossible de forcer iceTransportPolicy=relay', e);
+          }
+        } else {
+          logRtc(`ICE restart ${attemptNumber}/${MAX_ICE_RESTART_ATTEMPTS} : création d’une nouvelle offre (iceRestart=true)`);
+        }
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        sendWs({ type: 'webrtc', payload: { kind: 'offer', sdp: (pc.localDescription as RTCSessionDescriptionInit).sdp } });
+        setInfo(forceRelay ? 'Reconnexion vidéo via relais sécurisé…' : 'Reconnexion vidéo en cours…');
+      } catch (e) {
+        logRtcWarn('ICE restart impossible', e);
+      }
+    };
+
+    // Petite pause avant chaque nouvelle tentative pour laisser le réseau se
+    // stabiliser (évite de marteler autant de renégociations que d'attempts).
+    if (attemptNumber === 1) {
+      void runRestart();
+    } else {
+      iceRestartTimeoutRef.current = setTimeout(runRestart, ICE_RESTART_RETRY_DELAY_MS);
     }
   };
 

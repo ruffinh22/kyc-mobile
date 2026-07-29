@@ -266,10 +266,17 @@ class SignalingService {
       // ── Appel entrant : back-office appelle le terrain ─────────────────────
       case 'incoming-call':
         console.log('[Signal] incoming-call reçu', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
-        const currentCallUuid = store.callUuid || '';
-        const sameCallAlreadyHandled = !!currentCallUuid && currentCallUuid === (msg.callUuid || '');
-        if (sameCallAlreadyHandled && store.status === 'incoming') {
-          console.log('[Signal] doublon incoming-call ignoré', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
+        // IMPORTANT : le serveur génère un callUuid DIFFÉRENT à chaque tentative
+        // (redial back-office, retry réseau...) — comparer les callUuid pour
+        // dédupliquer est donc inefficace par construction (voir SERVER_SPEC.md /
+        // public-dossiers.ts, pendingCalls). La seule dédup fiable côté client
+        // est : "y a-t-il déjà un appel en cours de traitement, peu importe son
+        // uuid ?" Si oui, on ignore purement et simplement toute nouvelle
+        // notification tant que celui-ci n'est pas résolu (accepté/refusé/fini).
+        if (store.status !== 'idle') {
+          console.log('[Signal] appel déjà en cours de traitement, incoming-call ignoré', {
+            statut: store.status, numeroMtn: msg.numeroMtn, callUuid: msg.callUuid,
+          });
           break;
         }
         store.setIncomingCall(msg.numeroMtn, msg.callUuid);
@@ -454,6 +461,22 @@ class SignalingService {
   // ── Traitement de l'offer (reçu du back-office) ───────────────────────────
   private async handleOffer (sdp: string) {
     if (!this.pc) this.pc = await this.buildPeerConnection();
+
+    // Le back-office peut renvoyer un nouvel offer pour le même appel logique
+    // (redial, retry) alors que CE PeerConnection a déjà négocié avec succès.
+    // Réappliquer setRemoteDescription dans ce cas casse la négociation en
+    // cours ("order of m-lines doesn't match") et fait échouer en cascade des
+    // ICE candidates par ailleurs valides (voir logs). Si la connexion est
+    // déjà établie avec un flux distant présent, ce nouvel offer est un
+    // doublon tardif du storm de redial — on l'ignore, la connexion en cours
+    // reste la source de vérité.
+    const alreadyConnected =
+      this.pc.connectionState === 'connected' &&
+      !!this.lastRemoteStream?.getTracks().length;
+    if (alreadyConnected) {
+      console.log('[Signal] offer ignoré : connexion déjà établie pour cet appel');
+      return;
+    }
 
     try {
       // Attendre que le flux local (caméra/micro) soit prêt et ses tracks

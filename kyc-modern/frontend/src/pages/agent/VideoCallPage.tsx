@@ -832,6 +832,15 @@ export function AgentVideoCallPage() {
   };
 
   const restartCall = async () => {
+    // Avant de relancer, on informe le serveur que la tentative précédente
+    // est abandonnée (même si aucun appel n'est réellement en cours — un
+    // 'hangup' sans callUuid actif est un no-op côté serveur). Sans ça, le
+    // serveur gardait l'ancien callUuid dans pendingCalls, et un nouveau
+    // 'call' juste après créait un DEUXIÈME callUuid pour le même terrain :
+    // c'était la source de la tempête de doublons côté mobile.
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      sendWs({ type: 'hangup' });
+    }
     cleanupCallResources();
     setStatus('ready');
     setCallOutcome('idle');
@@ -1163,9 +1172,11 @@ export function AgentVideoCallPage() {
         )}
 
         <div className="kvc-dock">
-          <button className="kvc-dock-btn" onClick={restartCall} title="Recommencer">
-            <IconRotate />
-          </button>
+          {status !== 'calling' && status !== 'connected' && (
+            <button className="kvc-dock-btn" onClick={restartCall} title="Recommencer">
+              <IconRotate />
+            </button>
+          )}
           <button className={`kvc-dock-btn ${!micOn ? 'is-off' : ''}`} onClick={toggleMic} title={micOn ? 'Couper le micro' : 'Activer le micro'}>
             {micOn ? <IconMic /> : <IconMicOff />}
           </button>

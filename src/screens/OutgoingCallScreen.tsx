@@ -122,7 +122,8 @@ export function OutgoingCallScreen({ route, navigation }: any) {
           // du back-office arrivera (SignalingService.handleOffer).
           callStore.setConnecting();
           signalingService.acceptCall()
-            .then(() => navigation.replace('Call', { numeroMtn, callUuid: callStore.callUuid }))
+            // Pas de navigation ici : App.tsx force Call dès que
+            // callStore.status passe à 'connecting'/'active'.
             .catch(() => {
               setPhase('unavailable');
               setReason('Caméra/micro indisponible');

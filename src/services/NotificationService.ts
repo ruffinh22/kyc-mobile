@@ -75,6 +75,7 @@ class NotificationService {
   private activeCallUuid: string | null = null;
   private displayedCallUuid: string | null = null;
   private recentCallUuids = new Map<string, number>();
+  private pendingCallUuid: string | null = null;
   private fcmToken: string | null = null;
   private listenersBound = false;
   private initialized = false;
@@ -345,6 +346,17 @@ class NotificationService {
     // Utilise le callUuid fourni par le serveur, ou en génère un local
     const callUuid  = String(data.callUuid ?? `fcm-${Date.now()}`);
 
+    // Un appel est déjà affiché/en cours de traitement : le serveur génère un
+    // callUuid DIFFÉRENT à chaque tentative (redial back-office, retry...),
+    // donc comparer les uuid ne suffit pas — s'il y a déjà un activeCallUuid
+    // (quel qu'il soit), c'est presque toujours un doublon du même appel
+    // logique. On ignore avant même de toucher activeCallUuid, sinon on
+    // écrase la référence qui sert justement à détecter ce doublon.
+    if (this.activeCallUuid && this.activeCallUuid !== callUuid) {
+      console.log('[Notif] appel déjà actif, push ignoré', { active: this.activeCallUuid, incoming: callUuid });
+      return;
+    }
+
     const now = Date.now();
     const lastSeenAt = this.recentCallUuids.get(callUuid);
     if (lastSeenAt && now - lastSeenAt < 4_000) {
@@ -356,8 +368,11 @@ class NotificationService {
       if (now - seenAt > 30_000) this.recentCallUuids.delete(uuid);
     });
 
-    this.activeCallUuid = callUuid;
+    this.pendingCallUuid = callUuid;
     await this.persistPendingIncomingCall(callUuid, numeroMtn);
+    // showIncomingCall() est responsable de poser activeCallUuid/displayedCallUuid
+    // — c'est la seule fonction qui doit le faire, pour que son propre garde-fou
+    // (ligne "un autre appel est déjà affiché") reste efficace.
     this.showIncomingCall(callUuid, numeroMtn);
     setTimeout(() => {
       this.callbacks?.onIncomingCall(callUuid, numeroMtn);

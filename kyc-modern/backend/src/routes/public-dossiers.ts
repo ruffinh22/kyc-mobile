@@ -969,8 +969,27 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
         if (msg.type === 'call' && role === 'backoffice' && numero) {
           const target = normalizeNumero(msg.numero || numero);
-          const targetSocket = terrainSockets.get(target);
           const numeroMtn = String(msg.numeroMtn ?? '');
+
+          // Un appel est déjà en cours de sonnerie pour ce terrain (double-clic
+          // "Démarrer l'appel"/"Recommencer" côté back-office, onglet dupliqué,
+          // retry réseau...) : on NE crée SURTOUT PAS un nouveau callUuid ni un
+          // nouveau push. Le terrain ne doit jamais recevoir plusieurs
+          // 'incoming-call' pour ce qui est, de son point de vue, un seul et
+          // même appel logique — c'était la cause de la tempête de doublons
+          // observée côté mobile (uuid différent à chaque tentative, dédup
+          // client impossible). On ré-informe juste l'appelant de l'état déjà
+          // en cours, avec le MÊME callUuid.
+          const existingPending = pendingCalls.get(target);
+          if (existingPending) {
+            console.log('[SIGNAL] appel déjà en cours pour ce terrain, doublon "call" ignoré', {
+              target, callUuidExistant: existingPending.callUuid,
+            });
+            sendSocketPayload(socket, { type: 'call-delivered', numero: target, callUuid: existingPending.callUuid });
+            return;
+          }
+
+          const targetSocket = terrainSockets.get(target);
           const callUuid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const pushToken = terrainTokens.get(target);
 
@@ -983,8 +1002,6 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           if (pushToken) {
             void sendIncomingCallPush({ token: pushToken, numero: target, numeroMtn, callUuid });
           }
-
-          clearPendingCall(target);
 
           if (!targetSocket) {
             if (!pushToken) {
@@ -1188,6 +1205,22 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       if (role === 'backoffice' && numero) {
         if (backofficeSockets.get(numero) === socket) {
           backofficeSockets.delete(numero);
+        }
+        // Ce socket back-office peut avoir un appel en attente non résolu
+        // (page fermée/rechargée pendant que ça sonnait encore — ex. clic sur
+        // "Appeler l'agent terrain" qui fait un window.location.href complet).
+        // On le libère : sinon le dédoublonnage du handler 'call' ci-dessus
+        // bloquerait tout futur appel légitime vers ce terrain jusqu'au
+        // timeout de 45s, en pointant vers un boSocket déjà mort.
+        for (const [target, pending] of pendingCalls.entries()) {
+          if (pending.boSocket === socket) {
+            clearPendingCall(target);
+            const targetSocket = terrainSockets.get(target);
+            if (targetSocket) {
+              try { targetSocket.send(JSON.stringify({ type: 'hangup', numero: target })); } catch { /* fermé */ }
+            }
+            console.log('[SIGNAL] back-office déconnecté, appel en attente libéré', { target, callUuid: pending.callUuid });
+          }
         }
       }
     });

@@ -175,18 +175,22 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
           // que le push FCM utilisera pour cet appel, donc on ignore les doublons
           // si le même appel est déjà traité.
           const uuid = serverCallUuid || `ws-${Date.now()}`;
-          if (callStore.status === 'active' || callStore.status === 'connecting') {
-            console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { callUuid: uuid, numeroMtn });
-            return;
-          }
-          if (callStore.status === 'incoming' && callStore.callUuid === uuid) {
-            console.log('[Idle] doublon incoming-call ignoré', { callUuid: uuid, numeroMtn });
+          // Le serveur peut émettre plusieurs 'incoming-call' avec des uuid
+          // DIFFÉRENTS pour le même appel logique (redial back-office pendant
+          // que ça sonne déjà) — la seule dédup fiable est : un appel est-il
+          // déjà en cours de traitement, peu importe son uuid ?
+          if (callStore.status !== 'idle') {
+            console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { statut: callStore.status, callUuid: uuid, numeroMtn });
             return;
           }
           callStore.setIncomingCall(numeroMtn, uuid);
           void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
           notificationService.showIncomingCall(uuid, numeroMtn);
-          if (!cancelled) navigation.navigate('IncomingCall', { numeroMtn, callUuid: uuid });
+          // Pas de navigation.navigate ici : App.tsx observe callStore.status
+          // et force seul l'ouverture de IncomingCall/Call. Avant, ce handler
+          // ET App.tsx (chemin push/CallKeep) naviguaient chacun de leur
+          // côté pour le même appel — deux autorités concurrentes qui se
+          // marchaient dessus selon l'ordre d'arrivée des événements.
         },
         onCallEnded: () => { if (!cancelled) navigation.replace('Idle'); },
         onError:     (msg) => console.warn('[Signal]', msg),

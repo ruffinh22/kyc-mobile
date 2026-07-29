@@ -195,7 +195,10 @@ export function IncomingCallScreen({ route, navigation }: any) {
       // même si la négociation WebRTC se termine avant qu'il ne soit monté.
       await signalingService.acceptCall();
       void callHistoryService.upsert({ callUuid, numeroMtn, status: 'accepted' });
-      navigation.replace('Call', { callUuid, numeroMtn });
+      // Pas de navigation ici : App.tsx force déjà Call dès que
+      // callStore.status passe à 'connecting' (juste au-dessus), sans
+      // attendre que la caméra/micro finissent de s'ouvrir — c'est même plus
+      // réactif, et ça évite une 2e navigation concurrente avec App.tsx.
     } catch (e) {
       console.warn('[IncomingCall] acceptCall a échoué, repli sur refus :', e);
       notificationService.endNativeCall(callUuid);

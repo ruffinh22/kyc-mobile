@@ -31,6 +31,64 @@ export default function App() {
   const setAgent = useAgentStore(s => s.setAgent);
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
+  // ── Autorité UNIQUE de navigation d'appel ────────────────────────────────
+  // Principe : l'état pilote l'écran, jamais l'inverse. Avant, la navigation
+  // vers IncomingCall/Call était déclenchée depuis plusieurs endroits en
+  // réaction à des events précis (push FCM, message WS, tap "Accepter",
+  // action CallKeep native...). Si l'un de ces chemins était court-circuité
+  // par une course (deux navigateurs concurrents, event manqué pendant que
+  // le mauvais écran était monté), l'écran d'appel ne s'ouvrait tout
+  // simplement jamais — même si le PeerConnection, lui, devenait actif.
+  //
+  // Ici : un seul effet observe callStore.status et force l'écran
+  // correspondant, quel que soit l'écran actuellement affiché et quel que
+  // soit le nombre d'événements réseau redondants reçus. C'est cet effet,
+  // et lui seul, qui décide quand ouvrir IncomingCall ou Call.
+  const callStatus  = useCallStore(s => s.status);
+  const callUuid    = useCallStore(s => s.callUuid);
+  const callNumero  = useCallStore(s => (s as any).numeroMtn);
+
+  useEffect(() => {
+    const nav = navigationRef.current;
+    if (!nav || !nav.isReady()) return;
+
+    const currentRoute = nav.getCurrentRoute()?.name;
+
+    switch (callStatus) {
+      case 'incoming':
+        // Déjà sur l'écran attendu (ou plus loin, sur Call — ne recule pas) : rien à faire.
+        if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
+        console.log('[App] forçage navigation → IncomingCall', { callUuid, numeroMtn: callNumero, currentRoute });
+        nav.reset({ index: 0, routes: [{ name: 'IncomingCall', params: { numeroMtn: callNumero, callUuid } }] });
+        return;
+
+      case 'connecting':
+      case 'active':
+        // C'est LE fix du symptôme "ça ne force plus l'écran d'appel" : dès que
+        // la connexion démarre/aboutit, on force Call — peu importe qu'on soit
+        // resté bloqué sur Idle, sur un IncomingCall obsolète, ou ailleurs.
+        if (currentRoute === 'Call') return;
+        console.log('[App] forçage navigation → Call', { callUuid, numeroMtn: callNumero, currentRoute, status: callStatus });
+        nav.reset({ index: 0, routes: [{ name: 'Call', params: { numeroMtn: callNumero, callUuid } }] });
+        return;
+
+      case 'ended':
+        // États terminaux : si on est encore sur un écran d'appel alors que le
+        // store dit que c'est fini (raccroché), on ramène vers Idle plutôt que
+        // de laisser l'utilisateur bloqué sur un écran obsolète.
+        // On ne force PAS Idle depuis un autre écran (DossierList, Account...) —
+        // seulement depuis IncomingCall/Call, pour ne jamais interrompre une
+        // navigation sans rapport avec l'appel.
+        if (currentRoute !== 'IncomingCall' && currentRoute !== 'Call') return;
+        console.log('[App] forçage navigation → Idle (appel terminé)', { status: callStatus, currentRoute });
+        nav.reset({ index: 0, routes: [{ name: 'Idle' }] });
+        return;
+
+      default:
+        return;
+    }
+  }, [callStatus, callUuid, callNumero, initialRoute]);
+
   const registerFcmTokenWithBackend = async (serverUrl: string, numeroAgent: string, token: string) => {
     if (!serverUrl || !numeroAgent || !token) return;
 
@@ -53,31 +111,26 @@ export default function App() {
     }
   };
 
+  // Pose l'état d'appel entrant + le persiste pour la restauration (native/
+  // AsyncStorage). NE NAVIGUE PLUS ICI : c'est le rôle exclusif de l'effet
+  // `syncNavigationToCallState` ci-dessous, qui observe callStore.status.
+  // Avant, cette fonction ET IdleScreen.tsx naviguaient chacune de leur côté
+  // pour le même événement "appel entrant" (l'une pour le chemin push/CallKeep,
+  // l'autre pour le chemin WebSocket) — deux autorités de navigation
+  // concurrentes, source des courses observées dans les logs (navigations
+  // ignorées/écrasées selon l'ordre d'arrivée). Il n'y en a plus qu'une seule
+  // maintenant : l'état du call store.
   const openIncomingCallRoute = async (callUuid: string, numeroMtn: string) => {
     const callState = useCallStore.getState();
-    const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
 
-    if (callState.status === 'connecting' || callState.status === 'active') {
-      console.log('[App] appel déjà en cours, navigation IncomingCall ignorée', { callUuid, numeroMtn, status: callState.status });
-      return;
-    }
-    if (currentRoute === 'IncomingCall' || currentRoute === 'Call') {
-      console.log('[App] route déjà ouverte, navigation IncomingCall ignorée', { callUuid, numeroMtn, currentRoute });
+    if (callState.status !== 'idle') {
+      console.log('[App] appel déjà en cours de traitement, incoming-call ignoré', { callUuid, numeroMtn, status: callState.status });
       return;
     }
 
-    console.log('[App] ouverture IncomingCall', { callUuid, numeroMtn });
+    console.log('[App] appel entrant pris en compte', { callUuid, numeroMtn });
     callState.setIncomingCall(numeroMtn, callUuid);
     await AsyncStorage.setItem('pending_incoming_call', JSON.stringify({ callUuid, numeroMtn }));
-
-    try {
-      navigationRef.current?.reset({
-        index: 0,
-        routes: [{ name: 'IncomingCall', params: { numeroMtn, callUuid } }],
-      });
-    } catch (err) {
-      console.warn('[App] Impossible d’ouvrir IncomingCall route', err);
-    }
   };
 
   const restorePendingCallFromNative = async () => {
@@ -128,14 +181,12 @@ export default function App() {
 
     const handleAcceptedFromAppStart = async (uuid: string) => {
       if (cancelled) return;
-      const { numeroMtn } = useCallStore.getState();
       useCallStore.getState().setConnecting();
       try {
         await signalingService.acceptCall();
-        navigationRef.current?.reset({
-          index: 0,
-          routes: [{ name: 'Call', params: { callUuid: uuid, numeroMtn } }],
-        });
+        // Pas de navigation ici : dès que status passe à 'connecting'
+        // (ci-dessus) puis 'active', l'effet unique en tête du composant
+        // force déjà l'ouverture de Call.
       } catch {
         signalingService.refuseCall();
         useCallStore.getState().resetCall();
@@ -177,10 +228,7 @@ export default function App() {
         if (currentRoute === 'IncomingCall' || currentRoute === 'Call') return;
 
         useCallStore.getState().setIncomingCall(parsed.numeroMtn, parsed.callUuid);
-        navigationRef.current?.reset({
-          index: 0,
-          routes: [{ name: 'IncomingCall', params: { numeroMtn: parsed.numeroMtn, callUuid: parsed.callUuid } }],
-        });
+        // Navigation gérée par l'effet unique (status === 'incoming').
       } catch (err) {
         console.warn('[App] Pending call restore failed', err);
       }

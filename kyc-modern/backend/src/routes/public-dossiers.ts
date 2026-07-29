@@ -282,6 +282,13 @@ async function sendIncomingCallPush(params: {
 
   const payload = {
     to: params.token,
+    // IMPORTANT : payload data-only, SANS bloc top-level `notification`.
+    // Dès qu'un message FCM contient `notification`, Android l'affiche lui-même
+    // via le tiroir système quand l'app est fermée/en arrière-plan, sans
+    // garantie d'invoquer le handler JS (setBackgroundMessageHandler) qui
+    // déclenche KycForegroundCallService + CallKeep. En restant data-only,
+    // l'app garde le contrôle total de l'expérience d'appel entrant, quel
+    // que soit son état (voir NotificationService.ts, handlePushPayload).
     data: {
       type: 'incoming-call',
       numero: params.numero,
@@ -291,14 +298,6 @@ async function sendIncomingCallPush(params: {
     },
     android: {
       priority: 'high',
-      notification: {
-        title: 'Appel vidéo entrant',
-        body: `Appel de ${params.numeroMtn}`,
-      },
-    },
-    notification: {
-      title: 'Appel vidéo entrant',
-      body: `Appel de ${params.numeroMtn}`,
     },
   };
 
@@ -893,14 +892,30 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           const targetSocket = terrainSockets.get(target);
           const numeroMtn = String(msg.numeroMtn ?? '');
           const callUuid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const pushToken = terrainTokens.get(target);
+
+          // Push FCM TOUJOURS tenté en parallèle du WS, pas seulement en
+          // secours : c'est le seul canal qui survit à une app fermée ou une
+          // connexion WS coupée par l'OS en arrière-plan prolongé. Envoyer
+          // les deux à chaque fois (WS pour la réactivité immédiate si l'app
+          // tourne, push pour réveiller CallKeep/le service foreground sinon)
+          // est le comportement standard des apps VoIP professionnelles.
+          if (pushToken) {
+            void sendIncomingCallPush({ token: pushToken, numero: target, numeroMtn, callUuid });
+          }
 
           if (!targetSocket) {
-            send({ type: 'terrain-absent', numero: target });
+            send({ type: 'terrain-absent', numero: target, callUuid, pushAttempted: Boolean(pushToken) });
             return;
           }
 
           clearPendingCall(target);
-          sendSocketPayload(targetSocket, { type: 'incoming-call', numeroMtn, numero: target });
+          // callUuid désormais transmis au mobile : indispensable pour que le
+          // chemin WS et le chemin push (s'ils arrivent tous les deux)
+          // convergent vers le MÊME identifiant d'appel côté SignalingService/
+          // NotificationService, au lieu de générer chacun un uuid local et
+          // risquer un double écran d'appel entrant pour le même appel.
+          sendSocketPayload(targetSocket, { type: 'incoming-call', numeroMtn, numero: target, callUuid });
           send({ type: 'call-delivered', numero: target, callUuid });
 
           const timer = setTimeout(() => {

@@ -26,9 +26,10 @@ android {
         versionCode 1
         versionName "1.0.0"
 
-        ndk {
-            abiFilters "arm64-v8a", "armeabi-v7a"
-        }
+        // Ne garder que les langues réellement utilisées dans l'app pour
+        // éviter d'embarquer les traductions de toutes les libs tierces
+        // (Firebase, AndroidX, etc.) qui pèsent plusieurs Mo à elles seules.
+        resConfigs "fr", "en"
 
         missingDimensionStrategy 'react-native-firebase', 'release'
         missingDimensionStrategy 'react-native-camera', 'general'
@@ -55,8 +56,8 @@ android {
         }
         release {
             signingConfig signingConfigs.release
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled false
+            shrinkResources false
             debuggable false
             jniDebuggable false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
@@ -68,13 +69,34 @@ android {
             enable true
             reset()
             include "arm64-v8a", "armeabi-v7a"
-            universalApk false
+            // true : génère EN PLUS un APK universel (toutes ABIs), à côté
+            // des deux APKs allégés par architecture.
+            universalApk true
         }
     }
 
     packagingOptions {
         pickFirst 'lib/armeabi-v7a/libc++_shared.so'
         pickFirst 'lib/arm64-v8a/libc++_shared.so'
+    }
+}
+
+// ── Versioning et nommage par variante ─────────────────────────────────────
+// Google Play (et certains outils de distribution) exigent un versionCode
+// UNIQUE par APK quand on utilise les splits ABI. On dérive un versionCode
+// par architecture à partir du versionCode de base, et on renomme chaque
+// APK de sortie pour les distinguer facilement (ex: kyc-mobile-1.0.0-arm64-v8a.apk).
+project.ext.abiCodes = ["universal": 0, "armeabi-v7a": 1, "arm64-v8a": 2]
+
+android.applicationVariants.all { variant ->
+    variant.outputs.each { output ->
+        def abiName = output.getFilter(com.android.build.OutputFile.ABI) ?: "universal"
+        def abiCode = project.ext.abiCodes.get(abiName, 0)
+        output.versionCodeOverride = variant.versionCode * 10 + abiCode
+
+        def versionName = variant.versionName
+        def buildType = variant.buildType.name
+        output.outputFileName = "kyc-mobile-${versionName}-${buildType}-${abiName}.apk"
     }
 }
 

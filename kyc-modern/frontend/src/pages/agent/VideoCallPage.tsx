@@ -26,6 +26,12 @@ export function AgentVideoCallPage() {
   const [terrain, setTerrain] = useState(params.get('terrain') || '');
   const [numeroMtn, setNumeroMtn] = useState(params.get('mtn') || '');
   const [dossierId, setDossierId] = useState(params.get('dossier') || '');
+  // Déclenche l'appel automatiquement dès que la signalisation est prête,
+  // quand on arrive depuis le bouton "Appeler terrain" (DossierPages).
+  // useRef (pas useState) car on ne veut PAS re-render sur ce changement,
+  // juste empêcher un second appel automatique si le composant re-rend
+  // avant que le flag ne soit nettoyé de l'URL.
+  const autoCallRef = useRef(params.get('autocall') === '1');
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'ready' | 'calling' | 'connected' | 'ended'>('disconnected');
   const [presence, setPresence] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -469,6 +475,26 @@ export function AgentVideoCallPage() {
     setInfo('Lancement de l’appel vers le terrain...');
     sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
   };
+
+  // ── Auto-dial ────────────────────────────────────────────────────────────
+  // Déclenché uniquement quand on arrive depuis "Appeler terrain" (DossierPages),
+  // qui pose ?autocall=1 dans l'URL. Dès que le WS est enregistré (status
+  // passe à 'ready'), on lance l'appel automatiquement — l'agent back-office
+  // n'a qu'un seul clic à faire, depuis le dossier, jusqu'à voir l'appel
+  // sonner puis se connecter. Le flag est consommé une seule fois (retiré de
+  // l'URL juste après) pour qu'un rafraîchissement de la page ou un retour
+  // arrière ne relance pas un appel non désiré.
+  useEffect(() => {
+    if (status !== 'ready' || !autoCallRef.current) return;
+    autoCallRef.current = false;
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete('autocall');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+
+    void startCall();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   const hangUp = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

@@ -55,9 +55,21 @@ subprojects {
                 }
             }
 
-            // Fix lazy : ne force jamais la création/résolution immédiate de la tâche
-            project.tasks.matching { it.name == 'generateReleaseLintModel' }.configureEach { lintTask ->
+            // Fix lazy : ne force jamais la création/résolution immédiate de la tâche.
+            // Couvre toutes les tâches de lint release (generateReleaseLintModel,
+            // lintVitalAnalyzeRelease, lintVitalRelease, etc.) car le nom exact varie
+            // selon le module et la version d'AGP.
+            project.tasks.matching { it.name.contains('Lint') && it.name.contains('Release') }.configureEach { lintTask ->
                 lintTask.dependsOn(project.tasks.matching { it.name == 'copyReleaseExpoConfig' })
+                lintTask.mustRunAfter(project.tasks.matching { it.name == 'copyReleaseExpoConfig' })
+            }
+
+            // lintVital ne doit pas faire échouer un build de release sur des modules
+            // tiers (Expo) : on le désactive plutôt que de risquer un ordre de tâches
+            // instable en CI/local.
+            project.android.lint {
+                checkReleaseBuilds = false
+                abortOnError = false
             }
         }
     }

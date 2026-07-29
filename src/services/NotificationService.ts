@@ -305,8 +305,22 @@ class NotificationService {
     }
   }
 
+  // ── Lecture de l'appel actif (pour dédupliquer WS et push) ──────────────
+  getActiveCallUuid (): string | null {
+    return this.activeCallUuid;
+  }
+
   // ── Afficher l'écran d'appel natif ──────────────────────────────────────
+  // Idempotent : si le même callUuid est déjà affiché (ex. le WS et le push
+  // FCM arrivent tous les deux pour le même appel, ce qui est le comportement
+  // NORMAL et voulu — voir sendIncomingCallPush côté serveur, envoyé en
+  // parallèle du WS pour la fiabilité), on ignore le second déclenchement au
+  // lieu de relancer une 2e fois la sonnerie/CallKeep pour le même appel.
   showIncomingCall (callUuid: string, numeroMtn: string): void {
+    if (this.activeCallUuid === callUuid) {
+      console.log('[Notif] showIncomingCall ignoré (déjà actif) :', callUuid);
+      return;
+    }
     this.activeCallUuid = callUuid;
     callSessionService.startIncomingCallExperience();
 

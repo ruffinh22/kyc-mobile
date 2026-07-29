@@ -310,23 +310,27 @@ export function AgentFileAttente() {
   const motifPageCount = Math.max(1, Math.ceil((filteredMotifs.length + 1) / motifsPerPage));
   const motifPageItems = filteredMotifs.slice((motifPage - 1) * motifsPerPage, motifPage * motifsPerPage);
 
-  const handleCallTerrain = async (dossier: Dossier) => {
+  // Navigue vers la page d'appel vidéo et lui délègue tout le reste : c'est
+  // VideoCallPage qui se connecte au WS, s'enregistre en tant que back-office
+  // pour ce numéro terrain, PUIS lance réellement l'appel (?autocall=1) dès
+  // que la signalisation est prête. Avant cette correction, ce bouton
+  // appelait une route HTTP qui se contentait d'afficher un message de
+  // succès sans jamais ouvrir d'interface d'appel — la sonnerie côté terrain
+  // pouvait partir, mais personne côté web n'était en mesure de créer
+  // l'offre WebRTC ni de voir l'appel aboutir.
+  const handleCallTerrain = (dossier: Dossier) => {
     if (!dossier.wa_agent) {
       setSuccess(null);
       setErr('Numéro terrain introuvable pour ce dossier.');
       return;
     }
-    setErr(null);
-    setSuccess(null);
-    setBusy(true);
-    try {
-      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
-      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
-    } finally {
-      setBusy(false);
-    }
+    const qs = new URLSearchParams({
+      terrain: dossier.wa_agent,
+      mtn: dossier.numero_mtn || '',
+      dossier: dossier.id,
+      autocall: '1',
+    });
+    window.location.href = `/video-call?${qs.toString()}`;
   };
 
   useEffect(() => {
@@ -611,23 +615,22 @@ export function AgentMesDossiers() {
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ debut, fin, statut: statut||undefined, search: dSearch, limit: 300, scope: 'mine' }), [debut, fin, statut, dSearch]);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
 
-  const handleCallTerrain = async (dossier: Dossier) => {
+  // Même correction que sur l'écran file d'attente : on navigue vers la page
+  // d'appel plutôt que d'appeler une route HTTP qui n'ouvrait aucune
+  // interface d'appel côté web.
+  const handleCallTerrain = (dossier: Dossier) => {
     if (!dossier.wa_agent) {
       setSuccess(null);
       setErr('Numéro terrain introuvable pour ce dossier.');
       return;
     }
-    setErr(null);
-    setSuccess(null);
-    setBusy(true);
-    try {
-      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
-      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
-    } finally {
-      setBusy(false);
-    }
+    const qs = new URLSearchParams({
+      terrain: dossier.wa_agent,
+      mtn: dossier.numero_mtn || '',
+      dossier: dossier.id,
+      autocall: '1',
+    });
+    window.location.href = `/video-call?${qs.toString()}`;
   };
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => {

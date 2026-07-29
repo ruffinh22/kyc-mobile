@@ -166,8 +166,14 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
       signalingService.init(serverUrl, numeroAgent, fcmToken, {
         onConnected:    () => setConnected(true),
         onDisconnected: () => setConnected(false),
-        onIncomingCall: (numeroMtn) => {
-          const uuid = `ws-${Date.now()}`;
+        onIncomingCall: (numeroMtn, serverCallUuid) => {
+          // Réutilise le callUuid émis par le serveur quand il est présent
+          // (voir public-dossiers.ts) : c'est le MÊME identifiant que celui
+          // que le push FCM utilisera pour cet appel, donc showIncomingCall
+          // ci-dessous détecte correctement le doublon si les deux chemins
+          // arrivent. Le repli `ws-${Date.now()}` ne sert que si un ancien
+          // build serveur ne transmet pas encore callUuid.
+          const uuid = serverCallUuid || `ws-${Date.now()}`;
           callStore.setIncomingCall(numeroMtn, uuid);
           void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
           notificationService.showIncomingCall(uuid, numeroMtn);

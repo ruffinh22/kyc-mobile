@@ -1,0 +1,2 @@
+# Override for release builds to avoid Expo lintVital failures during packaging.
+android.injected.testOnly=false

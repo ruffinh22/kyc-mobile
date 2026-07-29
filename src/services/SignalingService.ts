@@ -20,8 +20,9 @@
  * NOTE : le serveur route par `numero` (pas de from/to dans les messages webrtc).
  *
  * ── EXTENSION APPEL SORTANT (terrain → back-office/numéro) ─────────────────
- * NON ENCORE IMPLÉMENTÉE CÔTÉ SERVEUR — voir SERVER_SPEC.md pour le contrat
- * exact à ajouter dans video-signal.js. Résumé :
+ * IMPLÉMENTÉE CÔTÉ SERVEUR (public-dossiers.ts) — ce commentaire indiquait
+ * auparavant le contraire, ce qui n'était plus à jour. Résumé du protocole
+ * réel :
  *   ENVOI   : call-request { numero: string }   // le terrain demande à joindre `numero`
  *   ENVOI   : call-cancel  {}                   // annule pendant la sonnerie sortante
  *
@@ -55,7 +56,7 @@ const STUN_SERVERS = [
 // ── Types protocole ──────────────────────────────────────────────────────────
 type SignalMsg =
   | { type: 'registered' }
-  | { type: 'incoming-call'; numeroMtn: string }
+  | { type: 'incoming-call'; numeroMtn: string; callUuid?: string }
   | { type: 'webrtc';        payload: WebRTCPayload }
   | { type: 'refus' }
   | { type: 'hangup' }
@@ -93,7 +94,10 @@ type StreamEvent =
 export type SignalingCallbacks = {
   onConnected:    () => void;
   onDisconnected: () => void;
-  onIncomingCall: (numeroMtn: string) => void;
+  // callUuid : identifiant réel émis par le serveur (voir public-dossiers.ts).
+  // Optionnel pour compat ascendante si un ancien build serveur ne l'envoie
+  // pas encore — dans ce cas l'appelant doit générer un uuid de secours.
+  onIncomingCall: (numeroMtn: string, callUuid?: string) => void;
   onCallEnded:    () => void;
   onError:        (msg: string) => void;
   onMediaError?:  (msg: string) => void;  // caméra/micro indisponible
@@ -261,8 +265,8 @@ class SignalingService {
 
       // ── Appel entrant : back-office appelle le terrain ─────────────────────
       case 'incoming-call':
-        store.setIncomingCall(msg.numeroMtn);
-        this.callbacks?.onIncomingCall(msg.numeroMtn);
+        store.setIncomingCall(msg.numeroMtn, msg.callUuid);
+        this.callbacks?.onIncomingCall(msg.numeroMtn, msg.callUuid);
         break;
 
       // ── Signalisation WebRTC (offer / answer / ice) ───────────────────────

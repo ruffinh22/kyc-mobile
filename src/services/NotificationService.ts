@@ -468,6 +468,7 @@ class NotificationService {
   // parallèle du WS pour la fiabilité), on ignore le second déclenchement au
   // lieu de relancer une 2e fois la sonnerie/CallKeep pour le même appel.
   showIncomingCall (callUuid: string, numeroMtn: string): void {
+    console.log('[Notif] showIncomingCall appelé', { callUuid, numeroMtn, activeCallUuid: this.activeCallUuid, displayedCallUuid: this.displayedCallUuid });
     if (this.activeCallUuid && this.activeCallUuid !== callUuid) {
       console.log('[Notif] un autre appel est déjà affiché, nouvel appel ignoré', { active: this.activeCallUuid, incoming: callUuid });
       return;

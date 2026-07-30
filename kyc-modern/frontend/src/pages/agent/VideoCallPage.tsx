@@ -118,6 +118,16 @@ export function AgentVideoCallPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
+  // BUG CORRIGÉ : ws.onmessage est assigné UNE SEULE FOIS dans connect()
+  // (au montage), et capture donc pour toujours la version de
+  // handleSignalMessage — et de son état fermé (`activeCallId`) — qui
+  // existait à ce moment-là (activeCallId === null). Le state React se met
+  // bien à jour pour l'UI, mais la closure figée dans ws.onmessage ne le
+  // relit jamais : le check `activeCallId === msg.callUuid` restait donc
+  // toujours faux, même après le premier 'call-delivered'. Une ref est un
+  // objet mutable partagé entre tous les rendus : peu importe quelle
+  // closure la lit, `.current` reflète toujours la dernière valeur écrite.
+  const activeCallIdRef = useRef<string | null>(null);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -387,6 +397,7 @@ export function AgentVideoCallPage() {
     setLocalStream(null);
     setRemoteStream(null);
     setConnected(false);
+    activeCallIdRef.current = null;
     setActiveCallId(null);
     setCallStartedAt(null);
     setCallElapsed(0);
@@ -438,6 +449,11 @@ export function AgentVideoCallPage() {
         addInfo(msg.enLigne ? 'Terrain en ligne' : 'Terrain hors ligne');
         break;
       case 'call-delivered':
+        if (activeCallIdRef.current === msg.callUuid) {
+          addInfo('call-delivered dupliqué ignoré');
+          break;
+        }
+        activeCallIdRef.current = msg.callUuid;
         setActiveCallId(msg.callUuid);
         setStatus('calling');
         setCallOutcome('ringing');

@@ -107,6 +107,39 @@ export type SignalingCallbacks = {
 class SignalingService {
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
+  // ── Garde-fou contre la double construction de PeerConnection ────────────
+  // Même classe de bug que celui déjà corrigé pour ensureLocalStreamPromise
+  // (voir son commentaire plus bas) : acceptCall() et handleOffer() peuvent
+  // s'exécuter en concurrence, et buildPeerConnection() est asynchrone
+  // (attend fetchIceServers()). Pendant cette attente, `this.pc` reste `null`
+  // — donc SANS ce garde-fou, un `if (!this.pc) this.pc = await
+  // buildPeerConnection()` exécuté depuis deux chemins en parallèle construit
+  // DEUX PeerConnection pour le même appel. Conséquence observée en prod :
+  // des candidats ICE destinés à la session SDP de l'un arrivent alors que
+  // `this.pc` pointe déjà vers l'autre → rejetés en masse ("Error processing
+  // ICE candidate") → l'ICE n'atteint jamais un état stable → la connexion
+  // bascule en 'failed'/'disconnected' → l'appel raccroche de lui-même.
+  private pcPromise: Promise<RTCPeerConnection> | null = null;
+
+  // Point d'entrée UNIQUE pour obtenir/créer le PeerConnection de l'appel en
+  // cours : à appeler partout où le code faisait auparavant
+  // `if (!this.pc) this.pc = await this.buildPeerConnection();`.
+  private ensurePeerConnection (): Promise<RTCPeerConnection> {
+    if (this.pc) return Promise.resolve(this.pc);
+    if (this.pcPromise) return this.pcPromise;
+
+    this.pcPromise = this.buildPeerConnection().then((pc) => {
+      this.pc = pc;
+      return pc;
+    }).catch((e) => {
+      // Échec de construction : on libère le verrou pour permettre une
+      // nouvelle tentative au prochain appel, sinon le call reste bloqué à
+      // vie sur une promesse rejetée mise en cache.
+      this.pcPromise = null;
+      throw e;
+    });
+    return this.pcPromise;
+  }
   private serverUrl     = '';
   private numeroAgent   = '';
   private fcmToken      = '';
@@ -133,9 +166,27 @@ class SignalingService {
   private iceGraceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_GRACE_MS = 10_000;
 
-  private pendingCandidates: Array<{ candidate?: string; sdpMid?: string | null; sdpMLineIndex?: number | null }> = [];
+  private pendingCandidates: Array<{ candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null }> = [];
+  private remoteDescriptionReady = false;
   private localStream: MediaStream | null = null;
   private facingMode: 'user' | 'environment' = 'environment'; // Caméra arrière par défaut (terrain)
+
+  private normalizeIceCandidate (candidate: any): { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null } | null {
+    if (!candidate || typeof candidate.candidate !== 'string' || !candidate.candidate.trim()) {
+      return null;
+    }
+
+    const normalized = {
+      candidate: candidate.candidate.trim(),
+      sdpMid: candidate.sdpMid != null ? String(candidate.sdpMid) : undefined,
+      sdpMLineIndex: candidate.sdpMLineIndex != null ? Number(candidate.sdpMLineIndex) : undefined,
+    };
+
+    if (normalized.sdpMid == null && typeof normalized.sdpMLineIndex !== 'number') {
+      return null;
+    }
+    return normalized;
+  }
 
   // ── État "rejouable" pour abonnés tardifs ────────────────────────────────
   // La négociation WebRTC (offer reçue, réponse, ICE) est pilotée par ce
@@ -195,6 +246,14 @@ class SignalingService {
   }
 
   // ── Connexion WebSocket ──────────────────────────────────────────────────────
+  private getHttpServerUrl () {
+    const base = this.serverUrl.replace(/\/$/, '');
+    if (base.startsWith('http://') || base.startsWith('https://')) {
+      return base;
+    }
+    return `https://${base}`;
+  }
+
   private connect () {
     if (this.destroyed) return;
     this.stopPing();
@@ -208,9 +267,8 @@ class SignalingService {
     // que l'agent n'est plus disponible.
     this.reconnectDelay = Math.min(this.reconnectDelay, 4000);
 
-    const base = this.serverUrl.replace(/\/$/, '');
-    const httpUrl = base.startsWith('http') ? base : `http://${base}`;
-    const wsUrl = httpUrl.replace(/^http/, 'ws') + '/api/signaling';
+    const httpUrl = this.getHttpServerUrl();
+    const wsUrl = httpUrl.replace(/^http/i, 'ws') + '/api/signaling';
 
     try {
       this.ws = new WebSocket(wsUrl);
@@ -355,46 +413,82 @@ class SignalingService {
   private async handleWebRTC (payload: WebRTCPayload) {
     switch (payload.kind) {
 
-      case 'offer':
+      case 'offer': {
+        console.log('[Signal] offer reçu', { sdpLength: payload.sdp?.length ?? 0, sdpType: typeof payload.sdp });
         await this.handleOffer(payload.sdp);
         break;
+      }
 
-      case 'answer':
-        if (this.pc) {
+      case 'answer': {
+        const pc = this.pc;
+        if (pc) {
           try {
             const { RTCSessionDescription } = getWebRTC();
-            await this.pc.setRemoteDescription(
+            await pc.setRemoteDescription(
               new RTCSessionDescription({ type: 'answer', sdp: payload.sdp })
             );
-            await this.flushPendingCandidates();
+            this.remoteDescriptionReady = true;
+            await this.flushPendingCandidates(pc);
           } catch (e) {
             console.warn('[Signal] setRemoteDescription answer:', e);
           }
         }
         break;
+      }
 
-      case 'ice':
-        if (this.pc?.remoteDescription) {
-          try {
-            const { RTCIceCandidate } = getWebRTC();
-            await this.pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
-          } catch (e) {
-            console.warn('[Signal] addIceCandidate a échoué (candidat ignoré) :', e);
+      case 'ice': {
+        const pc = this.pc;
+        const normalizedCandidate = this.normalizeIceCandidate(payload.candidate);
+        console.log('[Signal] ICE candidate reçu', {
+          hasPC: Boolean(pc),
+          signalingState: pc?.signalingState,
+          connectionState: pc?.connectionState,
+          hasRemoteDescription: Boolean(pc?.remoteDescription),
+          remoteDescriptionReady: this.remoteDescriptionReady,
+          candidate: normalizedCandidate ? {
+            sdpMid: normalizedCandidate.sdpMid,
+            sdpMLineIndex: normalizedCandidate.sdpMLineIndex,
+            candidate: normalizedCandidate.candidate.slice(0, 64),
+          } : null,
+          callStatus: useCallStore.getState().status,
+        });
+        if (!normalizedCandidate) {
+          console.warn('[Signal] ICE candidate invalide ignorée', {
+            candidate: payload.candidate,
+            candidateJson: JSON.stringify(payload.candidate),
+          });
+          break;
+        }
+        if (!pc || pc.connectionState === 'closed' || pc.iceConnectionState === 'closed') {
+          if (!this.remoteDescriptionReady) {
+            console.log('[Signal] ICE candidat reçu avant PeerConnection ou avant remoteDescription, mise en attente', {
+              candidate: normalizedCandidate,
+              hasPC: Boolean(pc),
+              signalingState: pc?.signalingState,
+            });
+            this.pendingCandidates.push(normalizedCandidate);
+            break;
           }
-        } else if (useCallStore.getState().status !== 'idle') {
-          // PC pas encore prêt mais un appel est bien en cours (négociation
-          // encore en cours) : on met en attente, flushPendingCandidates()
-          // les drainera une fois le PC/remoteDescription prêts.
-          this.pendingCandidates.push(payload.candidate);
-        } else {
-          // Aucun appel en cours : ce candidat est un résidu tardif d'un
-          // appel déjà terminé (message réseau en retard). Le mettre en
-          // attente ici le ferait fuiter dans le PROCHAIN appel via
-          // flushPendingCandidates(), provoquant des erreurs ICE sans
-          // rapport — on le jette.
-          console.log('[Signal] candidat ICE tardif ignoré (aucun appel en cours)');
+          console.warn('[Signal] ICE candidate ignorée : PeerConnection fermée ou absente', { candidate: normalizedCandidate });
+          break;
+        }
+        if (!this.remoteDescriptionReady) {
+          console.log('[Signal] ICE candidat mis en attente (remote description pas encore prête)', {
+            candidate: normalizedCandidate,
+            signalingState: pc.signalingState,
+          });
+          this.pendingCandidates.push(normalizedCandidate);
+          break;
+        }
+        try {
+          const { RTCIceCandidate } = getWebRTC();
+          await pc.addIceCandidate(new RTCIceCandidate(normalizedCandidate));
+          console.log('[Signal] addIceCandidate réussi');
+        } catch (e) {
+          console.warn('[Signal] addIceCandidate a échoué (candidat ignoré) :', e, { candidate: normalizedCandidate });
         }
         break;
+      }
     }
   }
 
@@ -419,9 +513,7 @@ class SignalingService {
     if (this.ensureLocalStreamPromise) return this.ensureLocalStreamPromise;
 
     this.ensureLocalStreamPromise = (async () => {
-      if (!this.pc) {
-        this.pc = await this.buildPeerConnection();
-      }
+      await this.ensurePeerConnection();
 
       const { mediaDevices } = getWebRTC();
       let stream: MediaStream;
@@ -483,43 +575,73 @@ class SignalingService {
       return;
     }
 
-    if (!this.pc) this.pc = await this.buildPeerConnection();
-
-    // Le back-office peut renvoyer un nouvel offer pour le même appel logique
-    // (redial, retry) alors que CE PeerConnection a déjà négocié avec succès.
-    // Réappliquer setRemoteDescription dans ce cas casse la négociation en
-    // cours ("order of m-lines doesn't match") et fait échouer en cascade des
-    // ICE candidates par ailleurs valides (voir logs). Si la connexion est
-    // déjà établie avec un flux distant présent, ce nouvel offer est un
-    // doublon tardif du storm de redial — on l'ignore, la connexion en cours
-    // reste la source de vérité.
-    const alreadyConnected =
-      this.pc.connectionState === 'connected' &&
-      !!this.lastRemoteStream?.getTracks().length;
-    if (alreadyConnected) {
-      console.log('[Signal] offer ignoré : connexion déjà établie pour cet appel');
-      return;
-    }
-
+    // BUG CORRIGÉ : le verrou était posé APRÈS un premier `await`
+    // (ensurePeerConnection(), qui va chercher les credentials TURN en
+    // réseau — potentiellement plusieurs centaines de ms). JS étant
+    // mono-thread mais async, une 2e offre arrivant PENDANT cette fenêtre
+    // passait le check `this.handlingOffer` (encore `false`) avant que la
+    // 1re exécution n'ait eu le temps de le mettre à `true`. Les deux
+    // négociations tournaient alors en parallèle sur le même
+    // RTCPeerConnection (2x setRemoteDescription, 2x createAnswer, 2x
+    // setLocalDescription quasi simultanés) → "Called in wrong state:
+    // stable" et échec ICE. En posant le verrou ICI, avant tout `await`,
+    // il n'y a plus aucun point de suspension entre le check et la prise
+    // du verrou : c'est atomique, une 2e offre concurrente est bloquée à
+    // coup sûr.
     this.handlingOffer = true;
+
     try {
-      // Attendre que le flux local (caméra/micro) soit prêt et ses tracks
-      // ajoutés au PC AVANT de créer l'answer, sinon l'answer part sans média.
+      if (!this.pc) await this.ensurePeerConnection();
+      if (!this.pc) {
+        console.warn('[Signal] handleOffer: PeerConnection absent après ensurePeerConnection');
+        return;
+      }
+
+      const pc = this.pc;
+      const alreadyConnected =
+        pc.connectionState === 'connected' &&
+        !!this.lastRemoteStream?.getTracks().length;
+      if (alreadyConnected) {
+        console.log('[Signal] offer ignoré : connexion déjà établie pour cet appel');
+        return;
+      }
+
+      this.remoteDescriptionReady = false;
       await this.ensureLocalStream();
+      if (!this.pc || this.pc !== pc) {
+        console.warn('[Signal] handleOffer: PeerConnection remplacé pendant l’init locale');
+        return;
+      }
+
+      if (!sdp || typeof sdp !== 'string') {
+        console.warn('[Signal] handleOffer: offre SDP invalide', { sdpLength: sdp?.length ?? 0, sdp });
+        return;
+      }
 
       const { RTCSessionDescription } = getWebRTC();
-      await this.pc.setRemoteDescription(
+      await pc.setRemoteDescription(
         new RTCSessionDescription({ type: 'offer', sdp })
       );
-      await this.flushPendingCandidates();
+      this.remoteDescriptionReady = true;
+      await this.flushPendingCandidates(pc);
 
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
+      const answer = await pc.createAnswer();
+      console.log('[Signal] createAnswer result', {
+        type: answer?.type,
+        sdpLength: (answer as any)?.sdp?.length ?? 0,
+      });
+      if (!answer || typeof (answer as any).sdp !== 'string') {
+        throw new Error('Answer SDP absent après createAnswer');
+      }
+      await pc.setLocalDescription(answer);
+
+      const localSdp = (pc.localDescription as any)?.sdp;
+      if (!localSdp) throw new Error('Local SDP absent après setLocalDescription');
 
       this.sendRaw({
         type: 'webrtc',
         numero: this.numeroAgent,
-        payload: { kind: 'answer', sdp: (this.pc.localDescription as any).sdp },
+        payload: { kind: 'answer', sdp: localSdp },
       });
     } catch (e) {
       console.warn('[Signal] handleOffer:', e);
@@ -529,14 +651,20 @@ class SignalingService {
   }
 
   // ── Drainer les candidats ICE mis en attente ──────────────────────────────
-  private async flushPendingCandidates () {
-    if (!this.pc) return;
+  private async flushPendingCandidates (pc?: RTCPeerConnection) {
+    const targetPc = pc ?? this.pc;
+    if (!targetPc) return;
     const { RTCIceCandidate } = getWebRTC();
     for (const c of this.pendingCandidates) {
+      if (!this.normalizeIceCandidate(c)) {
+        console.warn('[Signal] flushPendingCandidates: candidat invalide ignoré', { candidate: c });
+        continue;
+      }
       try {
-        await this.pc.addIceCandidate(new RTCIceCandidate(c));
+        await targetPc.addIceCandidate(new RTCIceCandidate(c));
+        console.log('[Signal] flushPendingCandidates: candidat accepté', { candidate: c });
       } catch (e) {
-        console.warn('[Signal] flushPendingCandidates: candidat en attente rejeté :', e);
+        console.warn('[Signal] flushPendingCandidates: candidat en attente rejeté :', e, { candidate: c });
       }
     }
     this.pendingCandidates = [];
@@ -544,8 +672,7 @@ class SignalingService {
 
   private async fetchIceServers (): Promise<any[]> {
     try {
-      const base = this.serverUrl.replace(/\/$/, '');
-      const apiBase = base.startsWith('http') ? base : `http://${base}`;
+      const apiBase = this.getHttpServerUrl();
       const res = await fetch(`${apiBase}/api/turn-credentials?numero=${this.numeroAgent}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -735,6 +862,7 @@ class SignalingService {
     if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
     this.stopPing();
     this.handlingOffer = false;
+    this.remoteDescriptionReady = false;
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
     this.ensureLocalStreamPromise = null;
@@ -742,6 +870,7 @@ class SignalingService {
       this.pc.close();
       this.pc = null;
     }
+    this.pcPromise = null;
     this.pendingCandidates = [];
     this.lastRemoteStream = null;
     this.lastConnectionPhase = 'idle';

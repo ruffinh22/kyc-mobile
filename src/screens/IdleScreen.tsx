@@ -170,6 +170,7 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
         onConnected:    () => setConnected(true),
         onDisconnected: () => setConnected(false),
         onIncomingCall: (numeroMtn, serverCallUuid) => {
+          console.log('[Idle] onIncomingCall callback reçu', { numeroMtn, serverCallUuid, status: callStore.status });
           // Réutilise le callUuid émis par le serveur quand il est présent
           // (voir public-dossiers.ts) : c'est le MÊME identifiant que celui
           // que le push FCM utilisera pour cet appel, donc on ignore les doublons
@@ -183,6 +184,7 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
             console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { statut: callStore.status, callUuid: uuid, numeroMtn });
             return;
           }
+          console.log('[Idle] traitement incoming-call : showIncomingCall', { callUuid: uuid, numeroMtn });
           callStore.setIncomingCall(numeroMtn, uuid);
           void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
           notificationService.showIncomingCall(uuid, numeroMtn);

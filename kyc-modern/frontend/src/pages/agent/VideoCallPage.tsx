@@ -928,18 +928,33 @@ export function AgentVideoCallPage() {
           --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
           font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
           color: var(--text);
-          max-width: 1080px;
+          max-width: clamp(360px, 94vw, 1560px);
           margin: 0 auto;
-          padding: 10px 4px 24px;
+          padding: clamp(8px, 1.4vw, 14px) clamp(4px, 1vw, 10px) clamp(18px, 3vw, 28px);
+          box-sizing: border-box;
         }
+        .kvc *, .kvc *::before, .kvc *::after { box-sizing: border-box; }
+
         .kvc-topbar {
           display: flex; align-items: center; justify-content: space-between;
-          gap: 12px; padding: 4px 2px 14px; flex-wrap: wrap;
+          gap: 14px; flex-wrap: wrap;
+          padding: clamp(9px, 1.4vw, 13px) clamp(12px, 2vw, 18px);
+          margin-bottom: clamp(9px, 1.4vw, 13px);
           color: #0F172A;
+          background: #fff;
+          border: 1px solid rgba(15,23,42,0.07);
+          border-radius: 16px;
+          box-shadow: 0 10px 26px -18px rgba(15,23,42,0.35);
         }
-        .kvc-topbar-left { display: flex; align-items: center; gap: 10px; }
+        .kvc-topbar-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
+        .kvc-brand-orb {
+          width: clamp(32px, 3.6vw, 38px); height: clamp(32px, 3.6vw, 38px); flex-shrink: 0;
+          border-radius: 11px; display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(145deg, #FFD633, var(--gold) 60%, #C99A00);
+          color: #1A1300; box-shadow: 0 6px 14px -6px rgba(255,204,0,0.55);
+        }
         .kvc-live-dot {
-          width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+          width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
           background: #CBD5E1;
           box-shadow: 0 0 0 3px rgba(15,23,42,0.06);
         }
@@ -947,45 +962,51 @@ export function AgentVideoCallPage() {
         .kvc-live-dot[data-state="gold"] { background: var(--gold); box-shadow: 0 0 0 3px var(--gold-dim); animation: kvc-pulse 1.5s ease-in-out infinite; }
         .kvc-live-dot[data-state="danger"] { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-dim); }
         @keyframes kvc-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+        .kvc-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
         .kvc-title {
-          font-size: 19px; font-weight: 800; letter-spacing: -0.3px; margin: 0; line-height: 1.2;
-          color: #0F172A;
+          font-size: clamp(15px, 1.6vw, 18px); font-weight: 800; letter-spacing: -0.2px; margin: 0; line-height: 1.2;
+          color: #0F172A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .kvc-sub {
-          font-size: 12.5px; color: #475569; margin: 2px 0 0;
+          font-size: clamp(11px, 1vw, 12px); color: #64748B; margin: 1px 0 0;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .kvc-topbar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+        .kvc-topbar-right { display: flex; gap: 7px; flex-wrap: wrap; }
         .kvc-chip {
-          font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
-          background: rgba(255,255,255,0.92); border: 1px solid rgba(15,23,42,0.14); color: #0F172A;
-          white-space: nowrap; box-shadow: 0 1px 2px rgba(15,23,42,0.06);
+          font-size: 11.5px; font-weight: 700; padding: 5px 11px; border-radius: 999px;
+          background: #F8FAFC; border: 1px solid rgba(15,23,42,0.10); color: #334155;
+          white-space: nowrap; letter-spacing: 0.1px;
         }
-        .kvc-chip--success { color: #166534; border-color: rgba(34,197,94,0.35); background: rgba(220,252,231,0.95); }
-        .kvc-chip--gold { color: #8A5A00; border-color: rgba(255,204,0,0.35); background: rgba(255,247,205,0.95); }
-        .kvc-chip--danger { color: #991B1B; border-color: rgba(239,68,68,0.35); background: rgba(254,226,226,0.95); }
+        .kvc-chip--success { color: #166534; border-color: rgba(34,197,94,0.30); background: rgba(220,252,231,0.85); }
+        .kvc-chip--gold { color: #8A5A00; border-color: rgba(255,204,0,0.35); background: rgba(255,247,205,0.9); }
+        .kvc-chip--danger { color: #991B1B; border-color: rgba(239,68,68,0.30); background: rgba(254,226,226,0.85); }
 
         .kvc-alerts { margin-bottom: 10px; }
 
         .kvc-config {
-          display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-          margin-bottom: 10px;
+          display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px;
+          padding: clamp(9px, 1.4vw, 12px);
+          margin-bottom: clamp(9px, 1.4vw, 13px);
+          background: #fff; border: 1px solid rgba(15,23,42,0.07); border-radius: 14px;
+          box-shadow: 0 10px 26px -20px rgba(15,23,42,0.3);
         }
-        .kvc-field { display: flex; flex-direction: column; gap: 4px; }
-        .kvc-field span { font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #64748B; }
+        .kvc-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .kvc-field span { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #94A3B8; }
         .kvc-field input {
-          background: #F8FAFC; border: 1px solid #E2E8F0; color: #0F172A;
-          border-radius: 10px; padding: 8px 11px; font-size: 13.5px; font-family: var(--mono);
-          outline: none; transition: border-color .15s ease;
+          background: #F8FAFC; border: 1px solid #E7EBF1; color: #0F172A;
+          border-radius: 10px; padding: 8px 11px; font-size: 13px; font-family: var(--mono);
+          outline: none; transition: border-color .15s ease, background .15s ease; width: 100%;
         }
-        .kvc-field input::placeholder { color: #94A3B8; }
-        .kvc-field input:focus { border-color: rgba(255,204,0,0.6); background: #fff; }
+        .kvc-field input::placeholder { color: #A6B0BE; }
+        .kvc-field input:focus { border-color: rgba(255,204,0,0.65); background: #fff; }
 
         .kvc-stage {
-          position: relative; border-radius: 22px; overflow: hidden;
+          position: relative; border-radius: clamp(16px, 2vw, 24px); overflow: hidden;
           background: linear-gradient(180deg, var(--ink-2) 0%, var(--ink) 100%);
           border: 1px solid var(--hairline);
-          aspect-ratio: 16 / 9.2;
-          box-shadow: 0 20px 50px -20px rgba(0,0,0,0.6);
+          width: 100%;
+          height: clamp(440px, 74vh, 880px);
+          box-shadow: 0 24px 60px -22px rgba(0,0,0,0.65);
         }
         .kvc-stage.is-focus {
           position: fixed; inset: 0; z-index: 60; border-radius: 0;
@@ -1014,13 +1035,13 @@ export function AgentVideoCallPage() {
         .kvc-remote:hover .kvc-expand-btn { opacity: 1; }
 
         .kvc-local {
-          position: absolute; right: 16px; bottom: 16px; z-index: 4;
-          width: 168px; aspect-ratio: 4/3; border-radius: 14px; overflow: hidden;
+          position: absolute; right: clamp(10px, 1.6vw, 18px); bottom: clamp(10px, 1.6vw, 18px); z-index: 4;
+          width: clamp(104px, 15vw, 190px); aspect-ratio: 4/3; border-radius: clamp(10px, 1.4vw, 16px); overflow: hidden;
           border: 1.5px solid rgba(255,255,255,0.18);
           box-shadow: 0 10px 30px -8px rgba(0,0,0,0.6);
           transition: width .2s ease, bottom .2s ease, right .2s ease;
         }
-        .kvc-local.is-mini { width: 96px; bottom: 96px; right: 16px; opacity: 0.92; }
+        .kvc-local.is-mini { width: clamp(72px, 9vw, 110px); bottom: clamp(84px, 11vw, 108px); right: clamp(10px, 1.6vw, 18px); opacity: 0.92; }
         .kvc-cam-off {
           position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
           background: #0D1526; color: var(--text-muted);
@@ -1086,17 +1107,30 @@ export function AgentVideoCallPage() {
 
         @media (max-width: 640px) {
           .kvc-config { grid-template-columns: 1fr; }
-          .kvc-local { width: 108px; }
-          .kvc-local.is-mini { width: 76px; bottom: 84px; }
-          .kvc-stage-caption { max-width: 70%; }
+          .kvc-stage { height: clamp(360px, 58vh, 520px); }
+          .kvc-stage-caption { max-width: 72%; }
+          .kvc-topbar { padding: 10px 12px; }
+          .kvc-sub { display: none; }
+        }
+        @media (min-width: 641px) and (max-width: 1024px) {
+          .kvc-config { grid-template-columns: repeat(3, 1fr); }
+          .kvc-stage { height: clamp(420px, 66vh, 620px); }
+        }
+        @media (min-width: 1600px) {
+          .kvc-stage { height: clamp(600px, 76vh, 920px); }
         }
       `}</style>
 
       <div className="kvc-topbar">
         <div className="kvc-topbar-left">
-          <span className="kvc-live-dot" data-state={statusTone} />
-          <div>
-            <h1 className="kvc-title">Appel vidéo terrain</h1>
+          <div className="kvc-brand-orb">
+            <IconPhoneCall size={18} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div className="kvc-title-row">
+              <span className="kvc-live-dot" data-state={statusTone} />
+              <h1 className="kvc-title">Appel vidéo terrain</h1>
+            </div>
             <p className="kvc-sub">Centre de certification KYC · MTN Congo</p>
           </div>
         </div>

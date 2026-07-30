@@ -77,7 +77,7 @@ class NotificationService {
   private recentCallUuids = new Map<string, number>();
   private pendingCallUuid: string | null = null;
   private fcmToken: string | null = null;
-  private readonly MAX_PUSH_AGE_MS = 60_000; // ignore delayed FCM pushes after the ring timeout
+  private readonly MAX_PUSH_AGE_MS = 10 * 60_000; // voir handlePushPayload : marge large pour tolérer un décalage d'horloge appareil/serveur
   private listenersBound = false;
   private initialized = false;
   private callKeepConfigured = false;
@@ -364,11 +364,33 @@ class NotificationService {
 
     const sentAtRaw = data.sentAt ?? data.sent_at ?? data.sent_at_ms ?? '';
     const sentAt = Number(sentAtRaw || 0);
+    // ── Filtre anti-push-obsolète — TOLÉRANT AU DÉCALAGE D'HORLOGE ─────────
+    // `sentAt` est estampillé par l'horloge du SERVEUR ; `Date.now()` ici est
+    // l'horloge du TÉLÉPHONE. Ce ne sont PAS la même horloge, et on ne peut
+    // pas garantir qu'elles sont synchronisées sur du matériel terrain (heure
+    // automatique/réseau désactivée, fuseau mal configuré, etc.) — un écart
+    // de plusieurs minutes est possible sans qu'aucun message ne soit
+    // réellement resté en attente ce temps-là.
+    //
+    // On distingue donc deux choses :
+    //   1. Un âge ÉNORME (> MAX_PUSH_AGE_MS, 10 min) → très probablement un
+    //      vrai push resté en attente pendant une longue mise en veille
+    //      Doze : on l'ignore, l'appel a de toute façon expiré côté serveur.
+    //   2. Un âge modéré mais suspect (négatif, ou incohérent) → signe d'un
+    //      décalage d'horloge, PAS d'un push périmé : on log un avertissement
+    //      exploitable (pour repérer les appareils mal réglés) mais on NE
+    //      BLOQUE PAS l'appel. Un faux "stale" ignoré à tort est bien pire
+    //      qu'un affichage redondant : c'est un appel qui ne sonne jamais.
     if (sentAt > 0) {
       const age = Date.now() - sentAt;
       if (age > this.MAX_PUSH_AGE_MS) {
         console.log('[Notif] incoming-call stale ignoré', { callUuid, age, maxAge: this.MAX_PUSH_AGE_MS });
         return;
+      }
+      if (age < -30_000 || age > 30_000) {
+        console.warn('[Notif] écart horloge appareil/serveur détecté (push traité quand même)', {
+          callUuid, age, hint: 'vérifier la date/heure automatique du téléphone',
+        });
       }
     }
 

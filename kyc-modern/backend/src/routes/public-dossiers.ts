@@ -50,12 +50,23 @@ const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket | nu
 const CALL_RING_TIMEOUT_MS = 45_000;
 const TERRAIN_PRESENCE_GRACE_MS = 20_000;
 
-const fcmServerKey = process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || '';
 const turnSecret = process.env.TURN_SHARED_SECRET || '';
 const turnHost = process.env.TURN_HOST || '41.85.184.155';
 const turnTtlSeconds = 600;
 const serviceAccountPath = path.resolve(process.cwd(), 'kyc-congo-399bc93f01c9.json');
 let cachedServiceAccount: any = null;
+
+// ── Cache du token OAuth FCM (API v1) ────────────────────────────────────────
+// Un token OAuth Google est valide ~1h. Le renégocier à CHAQUE push (comme le
+// faisait l'ancien code) ajoute ~300-500ms de latence réseau sur le chemin le
+// plus critique de l'app : celui qui doit faire sonner le téléphone. On le
+// met donc en cache jusqu'à peu avant son expiration.
+let cachedAccessToken: { token: string; expiresAt: number } | null = null;
+
+const FCM_FETCH_TIMEOUT_MS = 8_000;   // jamais un fetch bloqué plus de 8s
+const FCM_SEND_MAX_ATTEMPTS = 2;      // 1 retry en cas d'aléa réseau/token expiré
+const FCM_RETRY_DELAY_MS = 700;
+const FCM_TOKEN_EXPIRY_MARGIN_MS = 120_000; // renouvelle 2 min avant l'échéance réelle
 
 console.log('[FCM] service account path', serviceAccountPath);
 
@@ -107,7 +118,26 @@ function signJwt(serviceAccount: any): string | null {
   }
 }
 
-async function getFcmAccessToken(): Promise<string | null> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── fetch avec timeout dur ────────────────────────────────────────────────
+// Sans ça, un fetch qui ne répond jamais (réseau capricieux, proxy muet...)
+// peut bloquer l'envoi du push indéfiniment — inacceptable sur le chemin de
+// la sonnerie, qui a un budget total de 45s (CALL_RING_TIMEOUT_MS).
+function fetchWithTimeout(url: string, options: any, timeoutMs = FCM_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+async function getFcmAccessToken(forceRefresh = false): Promise<string | null> {
+  const now = Date.now();
+  if (!forceRefresh && cachedAccessToken && cachedAccessToken.expiresAt - now > FCM_TOKEN_EXPIRY_MARGIN_MS) {
+    return cachedAccessToken.token;
+  }
+
   const serviceAccount = loadServiceAccount();
   if (!serviceAccount) return null;
 
@@ -115,7 +145,7 @@ async function getFcmAccessToken(): Promise<string | null> {
   if (!assertion) return null;
 
   try {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
+    const response = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -125,78 +155,106 @@ async function getFcmAccessToken(): Promise<string | null> {
     });
 
     const result = await response.json() as any;
-    if (!response.ok) {
+    if (!response.ok || !result.access_token) {
       console.warn('[FCM] OAuth token error', response.status, result);
+      cachedAccessToken = null;
       return null;
     }
 
-    return result.access_token ?? null;
+    cachedAccessToken = {
+      token: result.access_token,
+      expiresAt: now + Number(result.expires_in ?? 3600) * 1000,
+    };
+    return cachedAccessToken.token;
   } catch (err) {
     console.warn('[FCM] Impossible de récupérer le token OAuth FCM', err);
+    cachedAccessToken = null;
     return null;
   }
 }
 
+// ── Envoi du push d'appel entrant — API HTTP v1 exclusivement ───────────────
+// L'ancienne API legacy (fcm.googleapis.com/fcm/send, clé "key=...") est
+// DÉFINITIVEMENT fermée par Google depuis juin 2024 : la tenter ajoutait un
+// aller-retour réseau garanti-perdant avant chaque push, sans aucun bénéfice.
+// On envoie donc uniquement via l'API v1 (compte de service + OAuth), avec :
+//   - un timeout dur sur chaque requête HTTP,
+//   - un retry (renouvellement de token inclus) sur aléa réseau ou token expiré,
+//   - un nettoyage automatique des tokens device invalides pour ne pas les
+//     retenter en boucle à chaque appel suivant.
 async function sendFcmHttp(payload: any): Promise<boolean> {
-  if (fcmServerKey) {
-    try {
-      const response = await fetch('https://fcm.googleapis.com/fcm/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `key=${fcmServerKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await response.text();
-      console.log('[FCM] legacy response', response.status, text);
-      if (response.ok) {
-        return true;
-      }
-      console.warn('[FCM] legacy push failed, falling back to v1 API');
-    } catch (err) {
-      console.warn('[FCM] legacy push exception', err);
-    }
-  }
-
   const serviceAccount = loadServiceAccount();
   if (!serviceAccount?.project_id) {
-    console.warn('[FCM] Aucun compte Firebase utilisable pour l’envoi du push');
+    console.warn('[FCM] Aucun compte de service Firebase disponible — vérifie', serviceAccountPath);
     return false;
   }
 
-  try {
-    const accessToken = await getFcmAccessToken();
+  const body = JSON.stringify({
+    message: {
+      token: payload.to,
+      data: payload.data,
+      android: payload.android,
+      apns: payload.apns,
+    },
+  });
+
+  for (let attempt = 1; attempt <= FCM_SEND_MAX_ATTEMPTS; attempt++) {
+    const accessToken = await getFcmAccessToken(attempt > 1);
     if (!accessToken) {
-      console.warn('[FCM] impossible d’obtenir un token OAuth pour le push');
+      console.warn(`[FCM] impossible d'obtenir un token OAuth (tentative ${attempt}/${FCM_SEND_MAX_ATTEMPTS})`);
+      if (attempt < FCM_SEND_MAX_ATTEMPTS) { await sleep(FCM_RETRY_DELAY_MS); continue; }
       return false;
     }
 
-    const response = await fetch(`https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: {
-          token: payload.to,
-          data: payload.data,
-          notification: payload.notification,
-          android: payload.android,
-          apns: payload.apns,
+    try {
+      const response = await fetchWithTimeout(
+        `https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body,
         },
-      }),
-    });
+      );
 
-    const text = await response.text();
-    console.log('[FCM] v1 response', response.status, text);
-    return response.ok;
-  } catch (err) {
-    console.warn('[FCM] v1 push exception', err);
-    return false;
+      const text = await response.text();
+
+      if (response.ok) {
+        console.log('[FCM] push envoyé avec succès', { callUuid: payload?.data?.callUuid, status: response.status });
+        return true;
+      }
+
+      // Token OAuth rejeté entre-temps par Google : on force un renouvellement
+      // et on retente une fois avant d'abandonner.
+      if (response.status === 401 && attempt < FCM_SEND_MAX_ATTEMPTS) {
+        console.warn('[FCM] token OAuth rejeté, renouvellement puis nouvelle tentative', text);
+        cachedAccessToken = null;
+        continue;
+      }
+
+      // Token FCM du device invalide/désinstallé/périmé : on le retire du
+      // cache mémoire pour ne plus le retenter en boucle sur les prochains
+      // appels tant que l'app ne s'est pas ré-enregistrée (voir persistFcmToken).
+      if (response.status === 404 || /UNREGISTERED|INVALID_ARGUMENT|NOT_FOUND/i.test(text)) {
+        console.warn('[FCM] token device invalide, retiré du cache mémoire', { tokenPreview: String(payload.to).slice(0, 20) });
+        for (const [numero, tok] of terrainTokens.entries()) {
+          if (tok === payload.to) terrainTokens.delete(numero);
+        }
+      }
+
+      console.warn('[FCM] push refusé par Google', response.status, text);
+      return false;
+    } catch (err: any) {
+      const isTimeout = err?.name === 'AbortError';
+      console.warn(`[FCM] échec envoi (tentative ${attempt}/${FCM_SEND_MAX_ATTEMPTS})`, isTimeout ? 'timeout réseau' : err);
+      if (attempt < FCM_SEND_MAX_ATTEMPTS) { await sleep(FCM_RETRY_DELAY_MS); continue; }
+      return false;
+    }
   }
+
+  return false;
 }
 
 function normalizeNumero(value: string | null | undefined): string {
@@ -313,14 +371,16 @@ async function sendIncomingCallPush(params: {
   });
 
   const payload = {
+    // `to` : lu par sendFcmHttp comme le token FCM cible (mappé sur
+    // `message.token` de l'API v1 — voir sendFcmHttp).
     to: params.token,
-    // IMPORTANT : payload data-only, SANS bloc top-level `notification`.
-    // Dès qu'un message FCM contient `notification`, Android l'affiche lui-même
-    // via le tiroir système quand l'app est fermée/en arrière-plan, sans
-    // garantie d'invoquer le handler JS (setBackgroundMessageHandler) qui
-    // déclenche KycForegroundCallService + CallKeep. En restant data-only,
-    // l'app garde le contrôle total de l'expérience d'appel entrant, quel
-    // que soit son état (voir NotificationService.ts, handlePushPayload).
+    // IMPORTANT : payload data-only, SANS bloc `notification`. Dès qu'un
+    // message FCM contient `notification`, Android l'affiche lui-même via le
+    // tiroir système quand l'app est fermée/en arrière-plan, sans garantie
+    // d'invoquer le handler JS (setBackgroundMessageHandler) qui déclenche
+    // KycForegroundCallService + CallKeep. En restant data-only, l'app garde
+    // le contrôle total de l'expérience d'appel entrant, quel que soit son
+    // état (voir NotificationService.ts, handlePushPayload).
     data: {
       type: 'incoming-call',
       numero: params.numero,
@@ -328,15 +388,13 @@ async function sendIncomingCallPush(params: {
       callUuid: params.callUuid,
       sentAt: String(Date.now()),
     },
-    // `priority` top-level : requis par l'API legacy (fcm.googleapis.com/fcm/send).
-    // Sans lui, la priorité par défaut est 'normal', et Android retarde la
-    // livraison tant que le téléphone est en Doze / l'app fermée — le message
-    // n'arrive alors qu'à la prochaine fenêtre de maintenance système, ou
-    // quand l'utilisateur rouvre l'app manuellement (ce qui sort du Doze).
-    // C'est très exactement le bug "ça ne sonne que si l'app est déjà ouverte".
-    priority: 'high',
-    // `android.priority` : équivalent requis par l'API v1 (compte de service),
-    // qui elle ignore le champ top-level ci-dessus et lit cette structure.
+    // `android.priority: 'high'` — requis par l'API v1 (seule utilisée
+    // désormais, voir sendFcmHttp). Sans lui, la priorité par défaut est
+    // 'normal' et Android retarde la livraison tant que le téléphone est en
+    // Doze / l'app fermée — le message n'arrive alors qu'à la prochaine
+    // fenêtre de maintenance système, ou quand l'utilisateur rouvre l'app
+    // manuellement (ce qui sort du Doze). C'est très exactement le bug
+    // "ça ne sonne que si l'app est déjà ouverte".
     android: {
       priority: 'high',
     },
@@ -874,7 +932,10 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
     const targetSocket = terrainSockets.get(numero);
     const pushToken = terrainTokens.get(numero);
-    const hasFcmServerKey = Boolean(process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || fs.existsSync(serviceAccountPath));
+    // Seul le compte de service (API v1) est utilisé pour l'envoi désormais —
+    // FCM_SERVER_KEY/FCM_API_KEY (API legacy) n'ont plus aucun effet, l'API
+    // correspondante ayant été fermée par Google en juin 2024.
+    const hasFcmServiceAccount = fs.existsSync(serviceAccountPath);
     const callUuid = `server-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     let wsDelivered = false;
@@ -914,11 +975,11 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
     const pushReason = !pushToken
       ? 'no_registered_token'
-      : !hasFcmServerKey
-        ? 'no_fcm_server_key'
+      : !hasFcmServiceAccount
+        ? 'no_fcm_service_account'
         : (pushDelivered ? 'sent' : 'delivery_failed');
-    const pushHint = !hasFcmServerKey
-      ? 'Ajoute FCM_SERVER_KEY ou FCM_API_KEY dans le .env du backend pour activer la livraison push hors app'
+    const pushHint = !hasFcmServiceAccount
+      ? `Fichier de compte de service Firebase introuvable (${serviceAccountPath}) — dépose-le à cet emplacement pour activer la livraison push hors app`
       : undefined;
 
     return reply.send({
@@ -927,7 +988,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       via: wsDelivered ? (pushDelivered ? 'ws+fcm' : 'ws') : (pushDelivered ? 'fcm' : 'none'),
       wsDelivered,
       pushDelivered,
-      pushConfigured: Boolean(pushToken && hasFcmServerKey),
+      pushConfigured: Boolean(pushToken && hasFcmServiceAccount),
       pushReason,
       pushHint,
       numero,

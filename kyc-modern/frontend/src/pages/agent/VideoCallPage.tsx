@@ -138,11 +138,15 @@ export function AgentVideoCallPage() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const [connected, setConnected] = useState(false);
+  const [isForceWakeActive, setIsForceWakeActive] = useState(false);
   // Fenêtre de grâce avant de considérer un 'disconnected' comme définitif,
   // et flag pour n'essayer l'ICE restart qu'une seule fois par appel.
   const iceDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iceRestartCountRef = useRef(0);
   const iceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const forceWakeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const forceWakeActiveRef = useRef(false);
+  const forceWakeAttemptsRef = useRef(0);
 
   useEffect(() => {
     const nextPath = `/video-call${terrain ? `?terrain=${encodeURIComponent(terrain)}` : ''}${numeroMtn ? `${terrain ? '&' : '?'}mtn=${encodeURIComponent(numeroMtn)}` : ''}${dossierId ? `${terrain || numeroMtn ? '&' : '?'}dossier=${encodeURIComponent(dossierId)}` : ''}`;
@@ -200,6 +204,17 @@ export function AgentVideoCallPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terrain]);
+
+  useEffect(() => {
+    if (!forceWakeActiveRef.current) return;
+    if (status === 'connected' || status === 'ended' || status === 'ready') {
+      clearForceWakeLoop();
+    }
+  }, [status]);
+
+  useEffect(() => () => {
+    clearForceWakeLoop();
+  }, []);
 
   useEffect(() => {
     if (status !== 'calling' && status !== 'connected') return;
@@ -336,7 +351,18 @@ export function AgentVideoCallPage() {
     cleanupCallResources();
   };
 
+  const clearForceWakeLoop = () => {
+    if (forceWakeIntervalRef.current) {
+      window.clearInterval(forceWakeIntervalRef.current);
+      forceWakeIntervalRef.current = null;
+    }
+    forceWakeActiveRef.current = false;
+    forceWakeAttemptsRef.current = 0;
+    setIsForceWakeActive(false);
+  };
+
   const cleanupCallResources = () => {
+    clearForceWakeLoop();
     if (iceDisconnectTimeoutRef.current) {
       clearTimeout(iceDisconnectTimeoutRef.current);
       iceDisconnectTimeoutRef.current = null;
@@ -789,6 +815,7 @@ export function AgentVideoCallPage() {
       setError('Signalisation non connectée.');
       return;
     }
+    clearForceWakeLoop();
     setError(null);
     setStatus('calling');
     setCallOutcome('connecting');
@@ -797,6 +824,46 @@ export function AgentVideoCallPage() {
     setInfo('Lancement de l’appel vers le terrain...');
     logRtc('début d’appel', { terrain: normalizeNumero(terrain), numeroMtn });
     sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
+  };
+
+  const forceWakeCall = () => {
+    if (!terrain) {
+      setError('Numéro terrain requis.');
+      return;
+    }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setError('Signalisation non connectée.');
+      return;
+    }
+
+    if (forceWakeActiveRef.current) {
+      clearForceWakeLoop();
+      setInfo('Relance forcée arrêtée.');
+      return;
+    }
+
+    clearForceWakeLoop();
+    forceWakeActiveRef.current = true;
+    forceWakeAttemptsRef.current = 0;
+    setIsForceWakeActive(true);
+    setError(null);
+    setStatus('calling');
+    setCallOutcome('connecting');
+    setCallStartedAt(Date.now());
+    setCallElapsed(0);
+    setInfo('Réveil forcé du téléphone en cours…');
+
+    const sendWakeAttempt = () => {
+      if (!forceWakeActiveRef.current) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      forceWakeAttemptsRef.current += 1;
+      logRtc('réveil forcé', { attempt: forceWakeAttemptsRef.current, terrain: normalizeNumero(terrain), numeroMtn });
+      sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
+      setInfo(`Réveil forcé • tentative ${forceWakeAttemptsRef.current}`);
+    };
+
+    sendWakeAttempt();
+    forceWakeIntervalRef.current = window.setInterval(sendWakeAttempt, 2_500);
   };
 
   // ── Auto-dial ────────────────────────────────────────────────────────────
@@ -928,23 +995,24 @@ export function AgentVideoCallPage() {
           --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
           font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
           color: var(--text);
-          max-width: clamp(360px, 94vw, 1560px);
+          width: 100%;
+          max-width: clamp(360px, 100%, 2200px);
           margin: 0 auto;
-          padding: clamp(8px, 1.4vw, 14px) clamp(4px, 1vw, 10px) clamp(18px, 3vw, 28px);
+          padding: clamp(8px, 1.4vw, 14px) clamp(8px, 2vw, 22px) clamp(18px, 3vw, 28px);
           box-sizing: border-box;
         }
         .kvc *, .kvc *::before, .kvc *::after { box-sizing: border-box; }
 
         .kvc-topbar {
           display: flex; align-items: center; justify-content: space-between;
-          gap: 14px; flex-wrap: wrap;
-          padding: clamp(9px, 1.4vw, 13px) clamp(12px, 2vw, 18px);
-          margin-bottom: clamp(9px, 1.4vw, 13px);
+          gap: 12px; flex-wrap: wrap;
+          padding: clamp(10px, 1.5vw, 13px) clamp(14px, 2.2vw, 18px);
+          margin-bottom: clamp(10px, 1.5vw, 13px);
           color: #0F172A;
-          background: #fff;
-          border: 1px solid rgba(15,23,42,0.07);
-          border-radius: 16px;
-          box-shadow: 0 10px 26px -18px rgba(15,23,42,0.35);
+          background: linear-gradient(135deg, #FFFFFF 0%, #F8FBFF 100%);
+          border: 1px solid rgba(148,163,184,0.22);
+          border-radius: 18px;
+          box-shadow: 0 20px 45px -28px rgba(15,23,42,0.38);
         }
         .kvc-topbar-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
         .kvc-brand-orb {
@@ -971,12 +1039,20 @@ export function AgentVideoCallPage() {
           font-size: clamp(11px, 1vw, 12px); color: #64748B; margin: 1px 0 0;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        .kvc-topbar-right { display: flex; gap: 7px; flex-wrap: wrap; }
+        .kvc-topbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .kvc-chip {
           font-size: 11.5px; font-weight: 700; padding: 5px 11px; border-radius: 999px;
           background: #F8FAFC; border: 1px solid rgba(15,23,42,0.10); color: #334155;
           white-space: nowrap; letter-spacing: 0.1px;
         }
+        .kvc-wake-btn {
+          border: none; border-radius: 999px; padding: 7px 12px; font-size: 11.5px; font-weight: 800;
+          color: #1A1300; background: linear-gradient(135deg, #FFD633 0%, #FFCC00 100%);
+          box-shadow: 0 10px 24px -14px rgba(255,204,0,0.6); cursor: pointer;
+          transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .kvc-wake-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 24px -12px rgba(255,204,0,0.7); }
+        .kvc-wake-btn:active { transform: translateY(0); }
         .kvc-chip--success { color: #166534; border-color: rgba(34,197,94,0.30); background: rgba(220,252,231,0.85); }
         .kvc-chip--gold { color: #8A5A00; border-color: rgba(255,204,0,0.35); background: rgba(255,247,205,0.9); }
         .kvc-chip--danger { color: #991B1B; border-color: rgba(239,68,68,0.30); background: rgba(254,226,226,0.85); }
@@ -1001,21 +1077,41 @@ export function AgentVideoCallPage() {
         .kvc-field input:focus { border-color: rgba(255,204,0,0.65); background: #fff; }
 
         .kvc-stage {
-          position: relative; border-radius: clamp(16px, 2vw, 24px); overflow: hidden;
-          background: linear-gradient(180deg, var(--ink-2) 0%, var(--ink) 100%);
-          border: 1px solid var(--hairline);
-          width: 100%;
-          height: clamp(440px, 74vh, 880px);
-          box-shadow: 0 24px 60px -22px rgba(0,0,0,0.65);
+          position: relative; border-radius: clamp(18px, 2.3vw, 28px); overflow: hidden;
+          background:
+            radial-gradient(circle at top left, rgba(255,204,0,0.16), transparent 32%),
+            radial-gradient(circle at 80% 10%, rgba(59,130,246,0.16), transparent 24%),
+            linear-gradient(140deg, #050816 0%, #0A1122 38%, #060A12 100%);
+          border: 1px solid rgba(255,255,255,0.10);
+          width: min(100%, 2200px);
+          height: clamp(520px, 76dvh, 960px);
+          max-height: min(92dvh, 1040px);
+          margin: 0 auto;
+          box-shadow: 0 36px 90px -32px rgba(2,6,23,0.92);
+          animation: kvc-scene-enter .42s cubic-bezier(.2,.8,.2,1);
+        }
+        @keyframes kvc-scene-enter {
+          0% { opacity: 0; transform: translateY(8px) scale(0.985); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
         }
         .kvc-stage.is-focus {
           position: fixed; inset: 0; z-index: 60; border-radius: 0;
-          aspect-ratio: unset; max-width: none;
+          aspect-ratio: unset; max-width: none; width: 100%; height: 100dvh;
+          background: radial-gradient(circle at top, rgba(255,204,0,0.16), transparent 30%), linear-gradient(180deg, var(--ink-2) 0%, var(--ink) 100%);
         }
         .kvc-remote {
           position: absolute; inset: 0; cursor: zoom-in;
         }
-        .kvc-stage.is-focus .kvc-remote { cursor: zoom-out; }
+        .kvc-stage.is-focus .kvc-remote {
+          cursor: zoom-out;
+          background: linear-gradient(180deg, rgba(2,6,23,0.15) 0%, rgba(2,6,23,0.35) 100%);
+        }
+        .kvc-stage.is-focus .kvc-remote::after {
+          content: '';
+          position: absolute; inset: 0;
+          background: linear-gradient(180deg, rgba(2,6,23,0.10) 0%, rgba(2,6,23,0.28) 100%);
+          pointer-events: none;
+        }
         .kvc-video { width: 100%; height: 100%; object-fit: cover; display: block; background: #060A12; }
         .kvc-placeholder {
           position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -1027,11 +1123,13 @@ export function AgentVideoCallPage() {
 
         .kvc-expand-btn {
           position: absolute; top: 14px; right: 14px; z-index: 3;
-          width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--hairline);
-          background: rgba(11,18,32,0.55); backdrop-filter: blur(6px); color: #fff;
+          width: 40px; height: 40px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.16);
+          background: rgba(2,6,23,0.68); backdrop-filter: blur(8px); color: #fff;
           display: flex; align-items: center; justify-content: center; cursor: pointer;
-          opacity: 0; transition: opacity .15s ease;
+          opacity: 0; transition: opacity .15s ease, transform .15s ease, background .15s ease;
+          box-shadow: 0 12px 24px -14px rgba(0,0,0,0.75);
         }
+        .kvc-expand-btn:hover { background: rgba(8,15,32,0.82); transform: translateY(-1px); }
         .kvc-remote:hover .kvc-expand-btn { opacity: 1; }
 
         .kvc-local {
@@ -1042,6 +1140,19 @@ export function AgentVideoCallPage() {
           transition: width .2s ease, bottom .2s ease, right .2s ease;
         }
         .kvc-local.is-mini { width: clamp(72px, 9vw, 110px); bottom: clamp(84px, 11vw, 108px); right: clamp(10px, 1.6vw, 18px); opacity: 0.92; }
+        .kvc-stage.is-focus .kvc-local {
+          width: clamp(140px, 16vw, 240px);
+          bottom: clamp(18px, 2.4vw, 28px);
+          right: clamp(18px, 2.4vw, 28px);
+          border-radius: clamp(14px, 1.8vw, 20px);
+          border-color: rgba(255,255,255,0.24);
+          box-shadow: 0 20px 44px -20px rgba(0,0,0,0.75);
+        }
+        .kvc-stage.is-focus .kvc-local.is-mini {
+          width: clamp(92px, 11vw, 132px);
+          bottom: clamp(96px, 12vw, 122px);
+          right: clamp(18px, 2.4vw, 28px);
+        }
         .kvc-cam-off {
           position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
           background: #0D1526; color: var(--text-muted);
@@ -1067,6 +1178,9 @@ export function AgentVideoCallPage() {
           position: absolute; left: 14px; bottom: 14px; z-index: 3;
           max-width: 46%; pointer-events: none;
         }
+        .kvc-stage.is-focus .kvc-stage-caption {
+          left: 18px; bottom: 18px; max-width: min(62%, 580px);
+        }
         .kvc-stage-caption p {
           margin: 0; font-size: 12.5px; color: var(--text-soft);
           background: rgba(6,10,18,0.5); backdrop-filter: blur(6px);
@@ -1081,11 +1195,24 @@ export function AgentVideoCallPage() {
           border: 1px solid rgba(255,255,255,0.10); border-radius: 999px;
           padding: 8px; box-shadow: 0 12px 30px -10px rgba(0,0,0,0.6);
         }
+        .kvc-stage.is-focus .kvc-dock {
+          bottom: 24px; padding: 10px; gap: 12px;
+          background: rgba(2,6,23,0.68);
+        }
         .kvc-dock-btn {
           width: 46px; height: 46px; border-radius: 50%; border: none;
           background: rgba(255,255,255,0.08); color: #fff;
           display: flex; align-items: center; justify-content: center;
           cursor: pointer; transition: background .15s ease, transform .1s ease;
+        }
+        .kvc-dock-btn--fullscreen {
+          width: 50px; height: 50px;
+          background: linear-gradient(135deg, rgba(255,204,0,0.26), rgba(255,255,255,0.14));
+          border: 1px solid rgba(255,255,255,0.14);
+          box-shadow: 0 10px 24px -14px rgba(0,0,0,0.8);
+        }
+        .kvc-dock-btn--fullscreen:hover {
+          background: linear-gradient(135deg, rgba(255,204,0,0.36), rgba(255,255,255,0.18));
         }
         .kvc-dock-btn:hover { background: rgba(255,255,255,0.15); }
         .kvc-dock-btn:active { transform: scale(0.94); }
@@ -1107,17 +1234,18 @@ export function AgentVideoCallPage() {
 
         @media (max-width: 640px) {
           .kvc-config { grid-template-columns: 1fr; }
-          .kvc-stage { height: clamp(360px, 58vh, 520px); }
-          .kvc-stage-caption { max-width: 72%; }
+          .kvc-stage { height: min(72dvh, 620px); }
+          .kvc-stage-caption { max-width: 74%; }
           .kvc-topbar { padding: 10px 12px; }
           .kvc-sub { display: none; }
+          .kvc-wake-btn { width: 100%; justify-content: center; }
         }
         @media (min-width: 641px) and (max-width: 1024px) {
           .kvc-config { grid-template-columns: repeat(3, 1fr); }
-          .kvc-stage { height: clamp(420px, 66vh, 620px); }
+          .kvc-stage { height: min(76dvh, 780px); }
         }
         @media (min-width: 1600px) {
-          .kvc-stage { height: clamp(600px, 76vh, 920px); }
+          .kvc-stage { height: min(80dvh, 960px); }
         }
       `}</style>
 
@@ -1139,6 +1267,9 @@ export function AgentVideoCallPage() {
             Terrain {presence ? 'en ligne' : 'hors ligne'}
           </span>
           <span className={`kvc-chip kvc-chip--${statusTone}`}>{statusLabel}</span>
+          <button className="kvc-wake-btn" onClick={forceWakeCall} title={isForceWakeActive ? 'Arrêter le réveil forcé' : 'Forcer l’appel jusqu’à réveiller le téléphone'}>
+            {isForceWakeActive ? 'Arrêter réveil' : 'Forcer l’appel'}
+          </button>
         </div>
       </div>
 
@@ -1228,7 +1359,7 @@ export function AgentVideoCallPage() {
           <button className={`kvc-dock-btn ${!camOn ? 'is-off' : ''}`} onClick={toggleCamera} title={camOn ? 'Couper la caméra' : 'Activer la caméra'}>
             {camOn ? <IconCam /> : <IconCamOff />}
           </button>
-          <button className="kvc-dock-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Quitter le plein écran' : 'Plein écran navigateur'}>
+          <button className="kvc-dock-btn kvc-dock-btn--fullscreen" onClick={toggleFullscreen} title={isFullscreen ? 'Quitter le plein écran' : 'Plein écran immersif'}>
             {isFullscreen ? <IconShrink /> : <IconExpand />}
           </button>
         </div>

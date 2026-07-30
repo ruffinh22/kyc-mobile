@@ -445,8 +445,10 @@ export function AgentVideoCallPage() {
         addInfo('Back-office enregistré');
         break;
       case 'terrain-presence':
+        // Affiché uniquement via le badge du bandeau du haut (kvc-topbar-right,
+        // juste en dessous) — plus de doublon en tant que ligne d'alerte
+        // séparée (kvc-alerts), qui redisait la même info sur une 2e ligne.
         setPresence(msg.enLigne);
-        addInfo(msg.enLigne ? 'Terrain en ligne' : 'Terrain hors ligne');
         break;
       case 'call-delivered':
         if (activeCallIdRef.current === msg.callUuid) {
@@ -1279,8 +1281,8 @@ export function AgentVideoCallPage() {
           </div>
         </div>
         <div className="kvc-topbar-right">
-          <span className={`kvc-chip ${presence ? 'kvc-chip--success' : ''}`}>
-            Terrain {presence ? 'en ligne' : 'hors ligne'}
+          <span className={`kvc-chip ${presence ? 'kvc-chip--success' : 'kvc-chip--danger'}`}>
+            Terrain {presence ? 'connecté' : 'non disponible'}
           </span>
           <span className={`kvc-chip kvc-chip--${statusTone}`}>{statusLabel}</span>
           <button className="kvc-wake-btn" onClick={forceWakeCall} title={isForceWakeActive ? 'Arrêter le réveil forcé' : 'Forcer l’appel jusqu’à réveiller le téléphone'}>

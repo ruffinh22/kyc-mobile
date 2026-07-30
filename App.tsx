@@ -23,6 +23,7 @@ import { AccountScreen }           from './src/screens/AccountScreen';
 import { useAgentStore, useCallStore } from './src/store/callStore';
 import { notificationService } from './src/services/NotificationService';
 import { signalingService } from './src/services/SignalingService';
+import { ensureHttpBase } from './src/utils/serverUrl';
 
 const Stack = createStackNavigator();
 
@@ -92,8 +93,7 @@ export default function App() {
   const registerFcmTokenWithBackend = async (serverUrl: string, numeroAgent: string, token: string) => {
     if (!serverUrl || !numeroAgent || !token) return;
 
-    const base = serverUrl.replace(/\/$/, '');
-    const apiBase = base.startsWith('http') ? base : `http://${base}`;
+    const apiBase = ensureHttpBase(serverUrl || '');
 
     try {
       const res = await fetch(`${apiBase}/api/device/register-fcm`, {

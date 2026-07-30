@@ -11,6 +11,7 @@ import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView } from 'react-native';
 import WebView from 'react-native-webview';
 import { useAgentStore } from '../store/callStore';
+import { ensureHttpBase } from '../utils/serverUrl';
 import { C, T } from '../theme/tokens';
 
 export function AcquisitionWebScreen() {
@@ -28,8 +29,7 @@ export function AcquisitionWebScreen() {
     );
   }
 
-  const base = serverUrl.replace(/\/$/, '');
-  const acquisitionUrl = `${base.startsWith('http') ? base : `http://${base}`}/acquisition`;
+  const acquisitionUrl = `${ensureHttpBase(serverUrl)}/acquisition`;
 
   return (
     <SafeAreaView style={styles.container}>

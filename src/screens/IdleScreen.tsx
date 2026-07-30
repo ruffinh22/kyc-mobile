@@ -42,6 +42,7 @@ import { callHistoryService } from '../services/CallHistoryService';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 import { BottomTabBar } from '../components/BottomTabBar';
+import { ensureHttpBase } from '../utils/serverUrl';
 
 type IdleScreenProps = {
   navigation: {
@@ -140,8 +141,7 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
   const registerFcmTokenWithBackend = useCallback(async (token: string) => {
     if (!serverUrl || !numeroAgent || !token) return;
 
-    const base = serverUrl.replace(/\/$/, '');
-    const apiBase = base.startsWith('http') ? base : `http://${base}`;
+    const apiBase = ensureHttpBase(serverUrl || '');
 
     try {
       const res = await fetch(`${apiBase}/api/device/register-fcm`, {

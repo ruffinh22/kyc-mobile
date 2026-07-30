@@ -354,6 +354,14 @@ class SignalingService {
       // ── Raccrochage ou refus distant ──────────────────────────────────────
       case 'refus':
       case 'hangup':
+        // Ce cas ne loggait rien avant de fermer le PeerConnection : un appel
+        // qui se coupait à cause d'un hangup légitime envoyé par le serveur
+        // (ex. le back-office web ferme son socket pendant que pendingCalls
+        // le tient encore comme "en cours" — voir public-dossiers.ts,
+        // socket.on('close')) apparaissait dans les logs comme une coupure
+        // sans raison. Ce log permet de trancher immédiatement : coupure
+        // distante confirmée vs. échec ICE local.
+        console.log('[Signal] hangup/refus reçu du serveur — fin d’appel', { type: msg.type });
         this.endCallCleanup();
         this.emitStream({ type: 'ended' });
         this.callbacks?.onCallEnded();

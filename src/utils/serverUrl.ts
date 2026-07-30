@@ -11,3 +11,10 @@ export function normalizeServerUrl(input: string): string {
 
   return withoutTrailingSlash;
 }
+
+export function ensureHttpBase(input: string): string {
+  const normalized = normalizeServerUrl(input);
+  if (!normalized) return '';
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  return `https://${normalized}`;
+}

@@ -45,7 +45,7 @@ const backofficeSockets = new Map<string, WsSocket>();
 // tokens déjà connus.
 const terrainTokens = new Map<string, string>();
 const terrainPresenceTimers = new Map<string, NodeJS.Timeout>();
-const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket; numeroMtn: string; timer: NodeJS.Timeout }>();
+const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket | null; numeroMtn: string; timer: NodeJS.Timeout | null; connected: boolean }>();
 
 const CALL_RING_TIMEOUT_MS = 45_000;
 const TERRAIN_PRESENCE_GRACE_MS = 20_000;
@@ -212,11 +212,32 @@ function sendSocketPayload(socket: WsSocket | null | undefined, payload: unknown
   }
 }
 
+// Fin RÉELLE de l'appel (raccroché, refusé, annulé, no-answer) : libère le
+// terrain pour un futur appel. C'est la SEULE fonction qui doit supprimer
+// l'entrée pendingCalls.
 function clearPendingCall(numero: string) {
   const pending = pendingCalls.get(numero);
   if (pending) {
-    clearTimeout(pending.timer);
+    if (pending.timer) clearTimeout(pending.timer);
     pendingCalls.delete(numero);
+  }
+}
+
+// La négociation WebRTC démarre (première offer/answer/ICE relayée, ou
+// accepté explicitement) : on arrête le timeout de sonnerie (l'appel n'est
+// plus "en train de sonner"), MAIS ON GARDE l'entrée pendingCalls. Sans ça,
+// le dédoublonnage du handler 'call' redevenait inefficace dès le premier
+// message webrtc relayé (offer ou même un simple candidat ICE) — un second
+// 'call' pouvait alors créer un tout nouveau callUuid EN PLEINE négociation,
+// voire après une connexion ICE déjà réussie. L'entrée n'est retirée que par
+// clearPendingCall(), appelée uniquement sur une vraie fin d'appel
+// (hangup/refus/call-reject/call-cancel/no-answer).
+function markCallConnected(numero: string) {
+  const pending = pendingCalls.get(numero);
+  if (pending && pending.timer) {
+    clearTimeout(pending.timer);
+    pending.timer = null;
+    pending.connected = true;
   }
 }
 
@@ -834,6 +855,23 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       return reply.code(400).send({ success: false, error: 'numero requis' });
     }
 
+    // Cet endpoint de test contournait entièrement le dédoublonnage du
+    // handler WS 'call' — deux appels tests (ou un test + un vrai appel back-
+    // office) sur le même terrain pouvaient tourner en parallèle et
+    // reproduire exactement la tempête de doublons déjà corrigée côté WS.
+    // Même check ici, avant toute action.
+    const existingPending = pendingCalls.get(numero);
+    if (existingPending) {
+      return reply.send({
+        success: true,
+        delivered: false,
+        duplicate: true,
+        message: 'un appel est déjà en cours pour ce terrain',
+        numero, numeroMtn,
+        callUuid: existingPending.callUuid,
+      });
+    }
+
     const targetSocket = terrainSockets.get(numero);
     const pushToken = terrainTokens.get(numero);
     const hasFcmServerKey = Boolean(process.env.FCM_SERVER_KEY || process.env.FCM_API_KEY || fs.existsSync(serviceAccountPath));
@@ -861,6 +899,17 @@ export async function publicDossierRoutes(app: any): Promise<void> {
     let pushDelivered = false;
     if (pushToken) {
       pushDelivered = await sendIncomingCallPush({ token: pushToken, numero, numeroMtn, callUuid });
+    }
+
+    // Enregistre ce test comme un vrai appel en attente, avec le même
+    // timeout que le flux normal : sinon un 'call' WS légitime lancé juste
+    // après ce test ne serait pas non plus déduplifié dans l'autre sens.
+    if (wsDelivered || pushDelivered) {
+      const testTimer = setTimeout(() => {
+        pendingCalls.delete(numero);
+        console.log('[SIGNAL] /api/call/test — no-answer timeout', { numero, callUuid });
+      }, CALL_RING_TIMEOUT_MS);
+      pendingCalls.set(numero, { callUuid, boSocket: backofficeSocket ?? null, numeroMtn, timer: testTimer, connected: false });
     }
 
     const pushReason = !pushToken
@@ -951,8 +1000,16 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             // fraîchement ouvert, ET on prévient le web qu'il peut enfin
             // créer son offre SDP — jusque-là il n'y avait aucun socket
             // terrain vivant pour la relayer.
+            //
+            // IMPORTANT : pendingCalls reste peuplé pendant toute la durée
+            // d'un appel connecté (voir markCallConnected), pas seulement
+            // pendant la sonnerie. Sans le check `!pending.connected`
+            // ci-dessous, une simple coupure réseau brève PENDANT un appel
+            // déjà en cours (reco WS après un aller-retour de quelques
+            // secondes) renverrait un faux 'incoming-call' en pleine
+            // conversation.
             const pending = pendingCalls.get(numero);
-            if (pending) {
+            if (pending && !pending.connected) {
               sendSocketPayload(socket, {
                 type: 'incoming-call', numeroMtn: pending.numeroMtn, numero, callUuid: pending.callUuid,
               });
@@ -1026,7 +1083,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
               console.log('[SIGNAL] no-answer timeout (push seul, jamais reconnecté)', { target, callUuid });
             }, CALL_RING_TIMEOUT_MS);
 
-            pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer: pushTimer });
+            pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer: pushTimer, connected: false });
             return;
           }
           // callUuid désormais transmis au mobile : indispensable pour que le
@@ -1044,7 +1101,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             console.log('[SIGNAL] no-answer timeout', { target, callUuid });
           }, CALL_RING_TIMEOUT_MS);
 
-          pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer });
+          pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer, connected: false });
           return;
         }
 
@@ -1116,7 +1173,11 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           if (terrainSocket) {
             try { terrainSocket.send(JSON.stringify({ type: 'call-accepted' })); } catch { /* fermé */ }
           }
-          clearPendingCall(target);
+          // Accepté = la négociation WebRTC démarre, pas une fin d'appel :
+          // on garde le verrou pendingCalls (voir markCallConnected) pour
+          // que le dédoublonnage reste actif pendant toute la durée réelle
+          // de l'appel, pas seulement pendant la sonnerie.
+          markCallConnected(target);
           return;
         }
 
@@ -1126,7 +1187,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           if (boSocket) {
             try { boSocket.send(JSON.stringify({ type: 'call-accepted' })); } catch { /* fermé */ }
           }
-          clearPendingCall(target);
+          markCallConnected(target);
           return;
         }
 
@@ -1157,7 +1218,15 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           const relayTarget = explicitTarget || (role === 'backoffice' ? numero : undefined);
           const pendingKey = role === 'terrain' ? numero : (relayTarget || numero);
           console.log('[SIGNAL] relay webrtc', { role, numero, explicitTarget, relayTarget, pendingForTerrain: Boolean(pendingForTerrain), kind: payload?.kind, hasPayload: Boolean(msg.payload) });
-          clearPendingCall(pendingKey);
+          // La négociation WebRTC est en cours (ou déjà réussie) : on arrête
+          // le timeout de sonnerie SANS lever le verrou pendingCalls (voir
+          // markCallConnected). C'était le vrai trou : avant, ce relay
+          // appelait clearPendingCall() sur CHAQUE message webrtc (offer,
+          // answer, et chaque candidat ICE — donc des dizaines de fois par
+          // appel), ce qui libérait le terrain dès le premier message et
+          // permettait à un 'call' concurrent de créer un second callUuid
+          // EN PLEINE négociation, voire après une connexion ICE réussie.
+          markCallConnected(pendingKey);
           if (role === 'terrain') {
             const boSocket = pendingForTerrain?.boSocket ?? (explicitTarget ? backofficeSockets.get(explicitTarget) : null);
             if (boSocket) {

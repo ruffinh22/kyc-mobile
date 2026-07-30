@@ -27,8 +27,9 @@ public class MainApplication extends Application implements ReactApplication {
             @Override
             protected List<ReactPackage> getPackages() {
                 List<ReactPackage> packages = new PackageList(this).getPackages();
-                // ── Ajout du module natif KYC ─────────────────────────────────
+                // ── Ajout des modules natifs KYC ──────────────────────────────
                 packages.add(new KycCallPackage());
+                packages.add(new CameraPackage());
                 return packages;
             }
 

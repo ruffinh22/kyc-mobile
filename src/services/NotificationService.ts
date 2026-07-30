@@ -78,11 +78,23 @@ class NotificationService {
   private pendingCallUuid: string | null = null;
   private fcmToken: string | null = null;
   private readonly MAX_PUSH_AGE_MS = 60_000; // ignore delayed FCM pushes after the ring timeout
-  private readonly MAX_PUSH_AGE_MS = 48_000; // ignore delayed call pushes after the ring window
   private listenersBound = false;
   private initialized = false;
   private callKeepConfigured = false;
   private fcmConfigured = false;
+
+  // ── Filet de sécurité contre un verrou d'appel qui resterait bloqué ──────
+  // activeCallUuid est le verrou central qui empêche un doublon d'écraser un
+  // appel en cours (voir showIncomingCall/handlePushPayload). Son revers :
+  // s'il n'est JAMAIS nettoyé (un appelant oublie d'appeler endNativeCall()
+  // sur un des multiples chemins de fin d'appel — raccroché in-app, refusé,
+  // distant a raccroché, timeout, CallKeep natif...), TOUS les appels
+  // suivants sont silencieusement ignorés pour toujours. Ce watchdog est un
+  // filet de sécurité qui force le nettoyage si personne ne l'a fait, sans
+  // dépendre d'un seul chemin d'appel externe pour rester fiable.
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly RING_WATCHDOG_MS = 65_000;              // légèrement > le timeout serveur de 45s
+  private readonly MAX_CALL_DURATION_MS = 3 * 60 * 60 * 1000; // filet de sécurité ultime une fois décroché
 
   // ── Initialisation ──────────────────────────────────────────────────────────
   async init (cbs: NotifCallbacks): Promise<void> {
@@ -234,6 +246,8 @@ class NotificationService {
       // n'était pas encore actif (le SignalingService applique la bonne action).
       this.callbacks?.onCallDeclined(id);
       if (id === this.activeCallUuid) this.activeCallUuid = null;
+      if (id === this.displayedCallUuid) this.displayedCallUuid = null;
+      if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
     });
 
     CallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted }: { muted: boolean }) => {
@@ -412,6 +426,19 @@ class NotificationService {
     return this.activeCallUuid;
   }
 
+  // ── Watchdog : force le nettoyage si personne n'a explicitement terminé
+  // l'appel dans le délai attendu (voir commentaire sur watchdogTimer plus haut).
+  private armWatchdog (callUuid: string, delayMs: number): void {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null;
+      if (this.activeCallUuid === callUuid) {
+        console.warn('[Notif] watchdog : appel jamais nettoyé explicitement, forçage endNativeCall', { callUuid, delayMs });
+        this.endNativeCall(callUuid);
+      }
+    }, delayMs);
+  }
+
   // ── Afficher l'écran d'appel natif ──────────────────────────────────────
   // Idempotent : si le même callUuid est déjà affiché (ex. le WS et le push
   // FCM arrivent tous les deux pour le même appel, ce qui est le comportement
@@ -431,6 +458,11 @@ class NotificationService {
     this.activeCallUuid = callUuid;
     this.displayedCallUuid = callUuid;
     callSessionService.startIncomingCallExperience();
+    // Filet de sécurité "sonnerie jamais résolue" : si rien (ni acceptation,
+    // ni refus, ni timeout ailleurs dans l'app) ne libère ce verrou avant
+    // RING_WATCHDOG_MS, on le force nous-même — sans ça un seul chemin de fin
+    // d'appel oublié bloquerait tous les appels suivants indéfiniment.
+    this.armWatchdog(callUuid, this.RING_WATCHDOG_MS);
 
     try {
       const nativeCallModule = KycCallModule();
@@ -464,6 +496,12 @@ class NotificationService {
     const id = callUuid ?? this.activeCallUuid;
     if (id) {
       CallKeep.setCurrentCallActive(id);
+      // On décroche : le watchdog "sonnerie non résolue" (65s) n'a plus lieu
+      // d'être. On le remplace par un filet de sécurité beaucoup plus long
+      // (durée max d'appel raisonnable), qui ne gênera jamais un appel KYC
+      // normal mais empêchera quand même un verrou bloqué à vie si aucun
+      // chemin de fin d'appel n'est jamais rappelé explicitement.
+      this.armWatchdog(id, this.MAX_CALL_DURATION_MS);
     }
     this.displayedCallUuid = null;
     await this.clearPendingIncomingCall();
@@ -483,6 +521,7 @@ class NotificationService {
     }
     this.displayedCallUuid = null;
     this.pendingCallUuid = null;
+    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
     await this.clearPendingIncomingCall();
 
     callSessionService.stopIncomingCallExperience();
@@ -505,6 +544,7 @@ class NotificationService {
     CallKeep.removeEventListener('endCall');
     CallKeep.removeEventListener('didPerformSetMutedCallAction');
     CallKeep.removeEventListener('didActivateAudioSession');
+    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
     this.listenersBound = false;
     this.initialized = false;
   }

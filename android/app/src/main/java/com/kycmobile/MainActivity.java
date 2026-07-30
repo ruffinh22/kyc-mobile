@@ -30,8 +30,22 @@ public class MainActivity extends ReactActivity {
             }
         }
 
-        // ── Allume l'écran et affiche par-dessus le keyguard ──────────────
-        // Nécessaire pour l'écran d'appel entrant sur Android 8+
+        applyLockScreenWakeFlags();
+    }
+
+    // ── Allume l'écran et affiche par-dessus le keyguard ──────────────────
+    // Nécessaire pour l'écran d'appel entrant sur Android 8+.
+    //
+    // IMPORTANT : appelé depuis onCreate() ET onNewIntent(). L'Activity est
+    // déclarée launchMode="singleTask" (voir AndroidManifest.xml) : si le
+    // process de l'app est déjà vivant (app en arrière-plan, pas tuée) quand
+    // un appel arrive, Android réutilise l'Activity existante et déclenche
+    // onNewIntent() SANS jamais rappeler onCreate(). Avant ce correctif, les
+    // flags de réveil n'étaient posés que dans onCreate() — un appel entrant
+    // dans ce scénario (app déjà en arrière-plan + écran verrouillé) ne
+    // réveillait donc pas l'écran, alors que le cas "app totalement tuée"
+    // fonctionnait (onCreate() y est bien appelé).
+    private void applyLockScreenWakeFlags() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
@@ -60,6 +74,7 @@ public class MainActivity extends ReactActivity {
                 KycCallModule.setPendingIncomingCall(callUuid, numeroMtn);
             }
         }
+        applyLockScreenWakeFlags();
     }
 
     @Override

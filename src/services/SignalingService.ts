@@ -381,8 +381,18 @@ class SignalingService {
           } catch (e) {
             console.warn('[Signal] addIceCandidate a échoué (candidat ignoré) :', e);
           }
-        } else {
+        } else if (useCallStore.getState().status !== 'idle') {
+          // PC pas encore prêt mais un appel est bien en cours (négociation
+          // encore en cours) : on met en attente, flushPendingCandidates()
+          // les drainera une fois le PC/remoteDescription prêts.
           this.pendingCandidates.push(payload.candidate);
+        } else {
+          // Aucun appel en cours : ce candidat est un résidu tardif d'un
+          // appel déjà terminé (message réseau en retard). Le mettre en
+          // attente ici le ferait fuiter dans le PROCHAIN appel via
+          // flushPendingCandidates(), provoquant des erreurs ICE sans
+          // rapport — on le jette.
+          console.log('[Signal] candidat ICE tardif ignoré (aucun appel en cours)');
         }
         break;
     }
@@ -458,8 +468,21 @@ class SignalingService {
     return this.ensureLocalStream();
   }
 
+  // Empêche deux négociations de tourner en parallèle sur le même PC : sans
+  // ça, un doublon de redial arrivant PENDANT la fenêtre d'ouverture caméra
+  // (~3s, voir ensureLocalStream) passait à travers le contrôle
+  // "alreadyConnected" ci-dessous (rien n'est encore connecté à ce stade) et
+  // lançait un 2e setRemoteDescription sur le même PC avant que le premier
+  // n'ait fini — c'est la vraie cause du "order of m-lines doesn't match".
+  private handlingOffer = false;
+
   // ── Traitement de l'offer (reçu du back-office) ───────────────────────────
   private async handleOffer (sdp: string) {
+    if (this.handlingOffer) {
+      console.log('[Signal] offer ignoré : une négociation est déjà en cours pour cet appel');
+      return;
+    }
+
     if (!this.pc) this.pc = await this.buildPeerConnection();
 
     // Le back-office peut renvoyer un nouvel offer pour le même appel logique
@@ -478,6 +501,7 @@ class SignalingService {
       return;
     }
 
+    this.handlingOffer = true;
     try {
       // Attendre que le flux local (caméra/micro) soit prêt et ses tracks
       // ajoutés au PC AVANT de créer l'answer, sinon l'answer part sans média.
@@ -499,6 +523,8 @@ class SignalingService {
       });
     } catch (e) {
       console.warn('[Signal] handleOffer:', e);
+    } finally {
+      this.handlingOffer = false;
     }
   }
 
@@ -708,6 +734,7 @@ class SignalingService {
   private endCallCleanup () {
     if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
     this.stopPing();
+    this.handlingOffer = false;
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
     this.ensureLocalStreamPromise = null;

@@ -362,9 +362,10 @@ function generateTurnCredentials(identity: string) {
 
   // Ajouté seulement si un serveur TURN TLS réel est déclaré (voir commentaire
   // sur turnTlsHost plus haut) — c'est le chemin qui survit aux réseaux qui ne
-  // laissent sortir que 443.
+  // laissent sortir que 443/5349.
   if (turnTlsHost) {
     uris.push(`turns:${turnTlsHost}:${turnTlsPort}?transport=tcp`);
+    uris.push(`turns:${turnTlsHost}:${turnTlsPort}?transport=udp`);
   }
 
   return {

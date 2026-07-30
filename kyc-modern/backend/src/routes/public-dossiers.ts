@@ -53,6 +53,20 @@ const TERRAIN_PRESENCE_GRACE_MS = 20_000;
 const turnSecret = process.env.TURN_SHARED_SECRET || '';
 const turnHost = process.env.TURN_HOST || '41.85.184.155';
 const turnTtlSeconds = 600;
+// ── TURN via TLS sur 443 (optionnel) ─────────────────────────────────────────
+// Beaucoup de réseaux mobiles/entreprises (Congo notamment) ne laissent
+// sortir que 80/443 : 3478/udp et parfois 3478/tcp sont filtrés. En local
+// (même Wi-Fi) l'ICE passe en direct (host/srflx), donc ça "marche" — mais
+// hors réseau, sans TURN accessible, l'ICE reste bloqué en checking/failed
+// et l'appel sonne sans jamais se connecter (voir handleWebRTC/onicecandidate
+// côté client — le signal fonctionne, seul le média échoue à traverser).
+//
+// Tant que TURN_TLS_HOST n'est pas configuré (donc pas de coturn TLS
+// écoutant réellement sur ce port/host), on NE renvoie PAS cette URI :
+// annoncer un serveur turns: qui n'écoute pas ferait juste échouer l'ICE
+// autrement (candidat relay jamais obtenu), sans rien gagner.
+const turnTlsHost = process.env.TURN_TLS_HOST || '';
+const turnTlsPort = process.env.TURN_TLS_PORT || '443';
 const serviceAccountPath = path.resolve(process.cwd(), 'kyc-congo-399bc93f01c9.json');
 let cachedServiceAccount: any = null;
 
@@ -341,14 +355,23 @@ function generateTurnCredentials(identity: string) {
   hmac.update(username);
   const password = hmac.digest('base64');
 
+  const uris = [
+    `turn:${turnHost}:3478?transport=udp`,
+    `turn:${turnHost}:3478?transport=tcp`,
+  ];
+
+  // Ajouté seulement si un serveur TURN TLS réel est déclaré (voir commentaire
+  // sur turnTlsHost plus haut) — c'est le chemin qui survit aux réseaux qui ne
+  // laissent sortir que 443.
+  if (turnTlsHost) {
+    uris.push(`turns:${turnTlsHost}:${turnTlsPort}?transport=tcp`);
+  }
+
   return {
     username,
     password,
     ttl: turnTtlSeconds,
-    uris: [
-      `turn:${turnHost}:3478?transport=udp`,
-      `turn:${turnHost}:3478?transport=tcp`,
-    ],
+    uris,
   };
 }
 

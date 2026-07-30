@@ -168,6 +168,26 @@ class SignalingService {
 
   private pendingCandidates: Array<{ candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null }> = [];
   private remoteDescriptionReady = false;
+
+  // ── Offer reçue avant acceptation utilisateur ────────────────────────────
+  // GARDE-FOU : avant, l'offer WebRTC était traitée (setRemoteDescription +
+  // createAnswer + ouverture caméra/micro + envoi de l'answer) dès sa
+  // réception WebSocket, AVANT que l'utilisateur n'ait tapé "Accepter" sur
+  // IncomingCallScreen. Conséquence en prod : l'appel devenait 'connected'
+  // tout seul quelques secondes après l'affichage de la sonnerie, sans
+  // aucune action de l'agent — puis CallKeep/le timeout coupait cet appel
+  // "accepté par erreur" en local, donnant l'impression d'un appel qui se
+  // termine tout seul après ~3s.
+  //
+  // Correctif : si l'offer arrive pendant que le store est encore 'incoming'
+  // (l'utilisateur n'a pas encore répondu), on la RETIENT ici sans toucher
+  // ni au PeerConnection ni à la caméra/micro. Elle n'est rejouée que
+  // lorsque acceptCall() est réellement invoqué (tap sur "Accepter",
+  // acceptation native CallKeep, ou flux d'appel sortant où l'acceptation a
+  // déjà eu lieu côté agent). Si l'appel est refusé/terminé avant que
+  // l'utilisateur ait tranché, endCallCleanup() vide ce champ : l'offer
+  // en attente est alors simplement jetée, jamais traitée.
+  private pendingOfferSdp: string | null = null;
   private localStream: MediaStream | null = null;
   private facingMode: 'user' | 'environment' = 'environment'; // Caméra arrière par défaut (terrain)
 
@@ -362,7 +382,7 @@ class SignalingService {
         // sans raison. Ce log permet de trancher immédiatement : coupure
         // distante confirmée vs. échec ICE local.
         console.log('[Signal] hangup/refus reçu du serveur — fin d’appel', { type: msg.type });
-        this.endCallCleanup();
+        this.endCallCleanup('remote-hangup');
         this.emitStream({ type: 'ended' });
         this.callbacks?.onCallEnded();
         break;
@@ -423,7 +443,31 @@ class SignalingService {
 
       case 'offer': {
         console.log('[Signal] offer reçu', { sdpLength: payload.sdp?.length ?? 0, sdpType: typeof payload.sdp });
-        await this.handleOffer(payload.sdp);
+
+        const status = useCallStore.getState().status;
+
+        // L'utilisateur n'a pas encore répondu à l'appel entrant : on ne
+        // touche à rien (pas de SDP, pas de caméra/micro), on retient
+        // l'offer pour la rejouer si/quand acceptCall() est appelé.
+        if (status === 'incoming') {
+          console.log('[Signal] offer reçue avant acceptation utilisateur, mise en attente (aucune answer envoyée)');
+          this.pendingOfferSdp = payload.sdp;
+          break;
+        }
+
+        // 'connecting' (l'utilisateur/le flux sortant a déjà accepté) ou
+        // 'active' (redial/renégociation sur un appel déjà en cours) :
+        // traitement immédiat, comportement inchangé.
+        if (status === 'connecting' || status === 'active') {
+          await this.handleOffer(payload.sdp);
+          break;
+        }
+
+        // 'idle' / 'declined' / 'failed' / 'ended' / etc. : cette offer
+        // concerne un appel déjà refusé/terminé côté client (race avec le
+        // serveur). On ne répond surtout pas — sinon on rouvre une caméra
+        // et on accepte un appel que l'utilisateur a explicitement refusé.
+        console.warn('[Signal] offer reçue hors contexte d’appel actif, ignorée', { status });
         break;
       }
 
@@ -525,7 +569,7 @@ class SignalingService {
 
       const { mediaDevices } = getWebRTC();
       let stream: MediaStream;
-      try {
+        try {
         stream = await mediaDevices.getUserMedia({
           audio: true,
           video: { facingMode: this.facingMode, width: 640, height: 480, frameRate: 24 },
@@ -540,7 +584,7 @@ class SignalingService {
             ? 'Permission caméra/micro refusée'
             : 'Caméra ou micro indisponible';
           this.callbacks?.onMediaError?.(msg);
-          this.endCallCleanup();
+          this.endCallCleanup('media-error');
           this.ensureLocalStreamPromise = null;
           throw audioErr;
         }
@@ -565,7 +609,20 @@ class SignalingService {
   // ou si handleOffer a déjà déclenché l'acquisition), on renvoie le flux
   // existant/en cours au lieu de rouvrir la caméra une 2e fois.
   async acceptCall (): Promise<MediaStream> {
-    return this.ensureLocalStream();
+    const stream = await this.ensureLocalStream();
+
+    // Si une offer était arrivée pendant que l'appel sonnait encore
+    // (statut 'incoming'), c'est SEULEMENT maintenant — l'utilisateur ayant
+    // réellement accepté — qu'on la traite : setRemoteDescription,
+    // createAnswer, envoi de l'answer. Avant ce point, aucune answer n'a
+    // jamais été envoyée au serveur pour cet appel.
+    if (this.pendingOfferSdp) {
+      const sdp = this.pendingOfferSdp;
+      this.pendingOfferSdp = null;
+      await this.handleOffer(sdp);
+    }
+
+    return stream;
   }
 
   // Empêche deux négociations de tourner en parallèle sur le même PC : sans
@@ -784,7 +841,7 @@ class SignalingService {
         this.iceGraceTimer = setTimeout(() => {
           this.iceGraceTimer = null;
           if (pc.connectionState !== 'connected') {
-            this.endCallCleanup();
+            this.endCallCleanup('ice-grace-timeout');
             this.emitStream({ type: 'ended' });
             this.callbacks?.onCallEnded();
           }
@@ -799,7 +856,7 @@ class SignalingService {
         }
         // Échec définitif — pas de grâce
         if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
-        this.endCallCleanup();
+        this.endCallCleanup('ice-failed');
         this.emitStream({ type: 'ended' });
         this.callbacks?.onCallEnded();
       }
@@ -817,7 +874,7 @@ class SignalingService {
   // ── Refuser l'appel ──────────────────────────────────────────────────────
   refuseCall () {
     this.sendRaw({ type: 'refus' });
-    this.endCallCleanup();
+    this.endCallCleanup('local-refuse');
     this.emitStream({ type: 'ended' });
     this.callbacks?.onCallEnded();
   }
@@ -825,7 +882,7 @@ class SignalingService {
   // ── Raccrocher ───────────────────────────────────────────────────────────
   hangUp () {
     this.sendRaw({ type: 'hangup' });
-    this.endCallCleanup();
+    this.endCallCleanup('local-hangup');
     this.emitStream({ type: 'ended' });
     this.callbacks?.onCallEnded();
   }
@@ -866,10 +923,23 @@ class SignalingService {
   getRemoteStream (): MediaStream | null { return this.lastRemoteStream; }
 
   // ── Nettoyage fin d'appel ─────────────────────────────────────────────────
-  private endCallCleanup () {
+  private endCallCleanup (reason?: string) {
     if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
+    try {
+      console.log('[Signal] endCallCleanup invoked', {
+        reason: reason || 'unspecified',
+        callUuid: useCallStore.getState().callUuid,
+        remoteDescriptionReady: this.remoteDescriptionReady,
+        pendingCandidates: this.pendingCandidates.length,
+        hasPC: Boolean(this.pc),
+      });
+      console.trace();
+    } catch (e) {
+      console.warn('[Signal] endCallCleanup: unable to log diagnostics', e);
+    }
     this.stopPing();
     this.handlingOffer = false;
+    this.pendingOfferSdp = null;
     this.remoteDescriptionReady = false;
     this.localStream?.getTracks().forEach((t: MediaStreamTrack) => t.stop());
     this.localStream = null;
@@ -969,7 +1039,7 @@ class SignalingService {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.endCallCleanup();
+    this.endCallCleanup('destroy');
     this.streamListeners = [];
     this.ws?.close();
     this.ws = null;

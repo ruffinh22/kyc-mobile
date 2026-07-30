@@ -199,7 +199,12 @@ export default function App() {
       onCallAccepted: handleAcceptedFromAppStart,
       onCallDeclined: () => signalingService.refuseCall(),
       onCallEnded: () => {
-        signalingService.hangUp();
+        const status = useCallStore.getState().status;
+        if (status === 'active' || status === 'connecting') {
+          signalingService.hangUp();
+        } else {
+          signalingService.refuseCall();
+        }
         navigationRef.current?.reset({ index: 0, routes: [{ name: 'Idle' }] });
       },
       onTokenRefresh: async (newToken) => {

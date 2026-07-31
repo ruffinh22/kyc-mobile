@@ -145,9 +145,16 @@
     </receiver>
 
     <!-- ── ConnectionService Android (CallKeep) ───────────────────────── -->
+    <!-- foregroundServiceType="phoneCall" ajouté explicitement : la lib RNCallKeep
+         ne déclare aucun type sur son propre service en interne, ce qu'Android 14+
+         (API 34) refuse désormais catégoriquement (MissingForegroundServiceTypeException).
+         Cette entrée surcharge/complète celle fusionnée depuis le manifest de la
+         librairie au moment du build (le manifest de l'app a priorité sur celui
+         d'une lib pour un même composant). -->
     <service
         android:name="io.wazo.callkeep.VoiceConnectionService"
         android:label="@string/app_name"
+        android:foregroundServiceType="phoneCall"
         android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
         android:exported="true">
       <intent-filter>

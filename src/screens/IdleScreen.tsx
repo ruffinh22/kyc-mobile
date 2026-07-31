@@ -184,10 +184,9 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
             console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { statut: callStore.status, callUuid: uuid, numeroMtn });
             return;
           }
-          console.log('[Idle] traitement incoming-call : showIncomingCall', { callUuid: uuid, numeroMtn });
-          callStore.setIncomingCall(numeroMtn, uuid);
+          console.log('[Idle] traitement incoming-call : registerIncomingCall', { callUuid: uuid, numeroMtn });
           void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
-          notificationService.showIncomingCall(uuid, numeroMtn);
+          notificationService.registerIncomingCall(uuid, numeroMtn);
           // Pas de navigation.navigate ici : App.tsx observe callStore.status
           // et force seul l'ouverture de IncomingCall/Call. Avant, ce handler
           // ET App.tsx (chemin push/CallKeep) naviguaient chacun de leur

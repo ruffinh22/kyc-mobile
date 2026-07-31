@@ -94,6 +94,7 @@ public class KycCallModule extends ReactContextBaseJavaModule {
         constants.put("STATE_CONNECTING", STATE_CONNECTING);
         constants.put("STATE_CONNECTED", STATE_CONNECTED);
         constants.put("STATE_ENDED", STATE_ENDED);
+        constants.put("MANUFACTURER", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase());
         return constants;
     }
 
@@ -169,6 +170,77 @@ public class KycCallModule extends ReactContextBaseJavaModule {
         }
     }
 
+    /**
+     * Ouvre l'écran constructeur de gestion du démarrage automatique / de
+     * l'agressivité batterie propre à certains OEM (Xiaomi, Oppo, Vivo,
+     * Huawei...). L'exemption Doze standard Android (ci-dessus) NE SUFFIT
+     * PAS sur ces marques : elles ont leur propre gestionnaire de batterie
+     * en plus de celui d'Android, qui peut quand même tuer le process avant
+     * qu'un push FCM ne soit traité. C'est la cause n°1 des appels qui ne
+     * sonnent jamais app fermée sur le parc Android bas/moyen de gamme
+     * courant en Afrique/Asie.
+     *
+     * Chaque constructeur a son propre écran non-standard (pas d'API Android
+     * officielle) : on tente les intents connus dans l'ordre, on s'arrête au
+     * premier qui réussit à démarrer une Activity, et on se rabat sur l'écran
+     * de détails de l'app si aucun n'est reconnu ou disponible sur ce build.
+     */
+    @ReactMethod
+    public void openAutoStartSettings() {
+        String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase();
+        String pkg = getReactApplicationContext().getPackageName();
+
+        String[][] candidates;
+        if (manufacturer.contains("xiaomi")) {
+            candidates = new String[][]{
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.miui.securitycenter", "com.miui.securitycenter.permission.AutoStartManagementActivity"},
+            };
+        } else if (manufacturer.contains("oppo")) {
+            candidates = new String[][]{
+                {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"},
+                {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"},
+            };
+        } else if (manufacturer.contains("vivo")) {
+            candidates = new String[][]{
+                {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+                {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"},
+            };
+        } else if (manufacturer.contains("huawei") || manufacturer.contains("honor")) {
+            candidates = new String[][]{
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
+            };
+        } else {
+            candidates = new String[0][];
+        }
+
+        for (String[] c : candidates) {
+            try {
+                Intent intent = new Intent();
+                intent.setClassName(c[0], c[1]);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getReactApplicationContext().startActivity(intent);
+                Log.i(TAG, "Écran autostart ouvert: " + c[0] + "/" + c[1]);
+                return;
+            } catch (Exception e) {
+                Log.d(TAG, "Écran autostart indisponible (" + c[0] + "), tentative suivante", e);
+            }
+        }
+
+        // Aucun écran constructeur reconnu/disponible : repli standard.
+        try {
+            Intent fallback = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            fallback.setData(Uri.parse("package:" + pkg));
+            fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getReactApplicationContext().startActivity(fallback);
+            Log.i(TAG, "Aucun écran autostart constructeur reconnu — repli app details settings");
+        } catch (Exception e) {
+            Log.e(TAG, "Impossible d'ouvrir un écran de paramètres pour l'autostart", e);
+        }
+    }
+
     @ReactMethod(isBlockingSynchronousMethod = true)
     public boolean canUseFullScreenIntent() {
         try {
@@ -213,8 +285,31 @@ public class KycCallModule extends ReactContextBaseJavaModule {
             Log.d(TAG, "answerCall called — arrêt sonnerie, service maintenu");
             KycForegroundCallService.answer(getReactApplicationContext());
             currentCallState = STATE_CONNECTING;
+            // Filet de sécurité : answerCall() peut être déclenché par plusieurs
+            // chemins — bouton "Accepter" de notre IncomingCallScreen (app déjà
+            // visible, no-op ici), mais AUSSI par l'UI Telecom native de CallKeep
+            // (écran verrouillé, ou bandeau système) sans que notre propre écran
+            // n'ait jamais été affiché. Dans ce second cas, décrocher ne servait à
+            // rien à l'utilisateur : l'appel passait "connecting/active" côté JS,
+            // mais rien à l'écran ne changeait puisque l'Activity n'était pas au
+            // premier plan. On la ramène explicitement ici dans tous les cas —
+            // singleTask + SINGLE_TOP|CLEAR_TOP rend l'opération sans danger si
+            // elle est déjà visible (onNewIntent, pas de recréation).
+            bringMainActivityToForeground();
         } catch (Exception e) {
             Log.e(TAG, "Error answering call natively", e);
+        }
+    }
+
+    private void bringMainActivityToForeground() {
+        try {
+            Intent intent = new Intent(getReactApplicationContext(), MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            getReactApplicationContext().startActivity(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "Impossible de ramener MainActivity au premier plan après answerCall", e);
         }
     }
 

@@ -20,6 +20,7 @@ import { callSessionService } from './CallSessionService';
 interface KycCallNativeModule {
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestIgnoreBatteryOptimizations?: () => void;
+  openAutoStartSettings?: () => void;
   canUseFullScreenIntent?: () => boolean;
   requestFullScreenIntentPermission?: () => void;
   startForegroundWithCallData?: (numeroMtn: string, callUuid: string) => void;
@@ -29,6 +30,20 @@ interface KycCallNativeModule {
 }
 const KycCallModule = (): KycCallNativeModule | undefined =>
   (NativeModules as unknown as { KycCallModule?: KycCallNativeModule }).KycCallModule;
+
+// Constructeurs connus pour tuer agressivement les apps en arrière-plan
+// au-delà de la simple gestion Doze standard d'Android (voir openAutoStartSettings
+// côté natif). Sans leur écran "autostart" propre, un appel peut ne jamais
+// sonner sur ces marques même avec l'exemption Doze acceptée.
+const AGGRESSIVE_OEMS = ['xiaomi', 'redmi', 'poco', 'oppo', 'oneplus', 'realme', 'vivo', 'iqoo', 'huawei', 'honor'];
+const getManufacturer = (): string => {
+  try {
+    const raw = (NativeModules as unknown as { KycCallModule?: { MANUFACTURER?: string } }).KycCallModule?.MANUFACTURER;
+    return (raw ?? '').toLowerCase();
+  } catch {
+    return '';
+  }
+};
 
 // ── Config CallKeep ──────────────────────────────────────────────────────────
 const CALLKEEP_OPTIONS = {
@@ -110,42 +125,83 @@ class NotificationService {
     await this.requestNotificationPermission();
     await this.setupCallKeep();
     await this.setupFCM();
-    // Comme WhatsApp au premier lancement : on demande l'exemption Doze une
-    // fois pour toutes, en fire-and-forget pour ne jamais bloquer/retarder
-    // l'enregistrement FCM ci-dessus (voir avertissement en tête de
-    // index.js sur la criticité du chemin headless). Sans cette exemption,
-    // certains constructeurs (Samsung/Xiaomi/Oppo) peuvent retarder ou tuer
-    // le processus avant qu'un push d'appel entrant ne soit traité, même
-    // avec un foreground service et un FCM haute priorité corrects — c'est
-    // la cause n°1 des appels qui ne réveillent pas le téléphone verrouillé.
-    this.requestBatteryExemptionOnce().catch((e) =>
-      console.warn('[Notif] Demande exemption batterie (best-effort) échouée:', e)
+    // Comme WhatsApp : on vérifie l'exemption Doze à CHAQUE lancement, en
+    // fire-and-forget pour ne jamais bloquer/retarder l'enregistrement FCM
+    // ci-dessus. Sans cette exemption, certains constructeurs (Samsung/
+    // Xiaomi/Oppo) peuvent retarder ou tuer le processus avant qu'un push
+    // d'appel entrant ne soit traité — c'est la cause n°1 des appels qui ne
+    // réveillent pas le téléphone verrouillé.
+    //
+    // CORRECTIF IMPORTANT : l'ancienne version posait un flag AsyncStorage
+    // permanent dès la PREMIÈRE tentative, qu'elle ait abouti ou non — un
+    // agent qui refusait (ou fermait) la boîte système une seule fois ne se
+    // voyait alors PLUS JAMAIS reproposer l'exemption, pour toute la durée
+    // de vie de l'app. Concrètement : appels silencieux à vie sur ce
+    // téléphone, sans aucun moyen de rattraper l'erreur autrement qu'en
+    // réinstallant l'app. On vérifie maintenant l'état RÉEL de la permission
+    // à chaque lancement (isIgnoringBatteryOptimizations), et on ne
+    // considère jamais qu'une demande passée = un problème résolu.
+    this.ensureCallReliabilityPermissions().catch((e) =>
+      console.warn('[Notif] Vérification fiabilité appels (best-effort) échouée:', e)
     );
   }
 
-  // ── Ne redemander qu'une seule fois par installation, pas à chaque
-  // (re)lancement de l'app, pour ne pas harceler l'utilisateur avec la boîte
-  // système si celui-ci a déjà refusé une fois.
-  private async requestBatteryExemptionOnce (): Promise<void> {
+  // ── Fiabilité maximale : Doze + autostart constructeur ──────────────────
+  // Regroupe les deux vérifications dont dépend la réception d'un appel app
+  // fermée. Rappel à chaque lancement tant que ce n'est pas acquis — on
+  // n'accepte pas un simple "refusé une fois" comme état final, car un appel
+  // manqué en KYC terrain a un coût métier direct.
+  private async ensureCallReliabilityPermissions (): Promise<void> {
     if (Platform.OS !== 'android') return;
-    const alreadyAsked = await AsyncStorage.getItem('battery_exemption_requested');
-    if (alreadyAsked) return;
-    await this.ensureBatteryOptimizationExemption();
+
+    const batteryOk = await this.ensureBatteryOptimizationExemption();
+
+    // L'écran autostart constructeur est plus intrusif (sort de l'app vers un
+    // écran système propriétaire) : on le limite aux marques connues pour
+    // tuer agressivement les process en arrière-plan, et on espace les
+    // relances (24h) pour ne pas harceler l'agent à chaque ouverture une fois
+    // qu'il l'a déjà vu — mais on ne l'abandonne JAMAIS tant que ce n'est pas
+    // confirmé résolu, contrairement à l'ancien comportement sur la batterie.
+    const manufacturer = getManufacturer();
+    const isAggressiveOem = AGGRESSIVE_OEMS.some((m) => manufacturer.includes(m));
+    if (!isAggressiveOem) return;
+
+    const lastPromptRaw = await AsyncStorage.getItem('autostart_last_prompt_at');
+    const lastPrompt = lastPromptRaw ? Number(lastPromptRaw) : 0;
+    const dayMs = 24 * 60 * 60 * 1000;
+    if (Date.now() - lastPrompt < dayMs) return;
+
+    // Pas de vérification d'état fiable possible ici (pas d'API standard pour
+    // lire si l'autostart est déjà autorisé sur ces OEM) — on se contente
+    // d'espacer les relances dans le temps. batteryOk sert uniquement à ne
+    // pas empiler deux boîtes de dialogue système d'un coup : si la boîte
+    // Doze vient de s'ouvrir, on attend le prochain lancement pour proposer
+    // l'autostart plutôt que d'enchaîner deux écrans immédiatement.
+    if (!batteryOk) return;
+
+    await AsyncStorage.setItem('autostart_last_prompt_at', String(Date.now()));
+    try {
+      KycCallModule()?.openAutoStartSettings?.();
+    } catch (e) {
+      console.warn('[Notif] Ouverture écran autostart échouée:', e);
+    }
   }
 
   // ── Exemption d'optimisation batterie (Doze) ─────────────────────────────
   // C'est LA cause n°1 des appels manqués app-fermée sur Samsung/Xiaomi/Oppo :
   // même avec un foreground service et un FCM haute priorité correctement
   // configurés, le système peut retarder de plusieurs minutes (voire tuer)
-  // le processus si l'app n'est pas exemptée de Doze. WhatsApp demande cette
-  // exemption au premier lancement — on fait pareil ici, une seule fois.
+  // le processus si l'app n'est pas exemptée de Doze.
+  //
+  // Vérifie l'état RÉEL à chaque appel (pas de flag "déjà demandé" qui
+  // bloquerait les tentatives suivantes) — voir ensureCallReliabilityPermissions
+  // ci-dessus pour le contexte du correctif.
   async ensureBatteryOptimizationExemption (): Promise<boolean> {
     if (Platform.OS !== 'android') return true;
     try {
       const isIgnoring = await KycCallModule()?.isIgnoringBatteryOptimizations?.();
       if (isIgnoring) return true;
 
-      await AsyncStorage.setItem('battery_exemption_requested', '1');
       KycCallModule()?.requestIgnoreBatteryOptimizations?.();
       return false; // la demande est lancée, l'utilisateur doit valider dans la boîte système
     } catch (e) {
@@ -353,6 +409,50 @@ class NotificationService {
     return AsyncStorage.getItem('fcm_token');
   }
 
+  // ── Point d'entrée UNIQUE pour un appel entrant, quel que soit le canal ──
+  // (push FCM OU message WebSocket). AVANT : IdleScreen.tsx (canal WS)
+  // touchait callStore.setIncomingCall() directement et n'alimentait jamais
+  // recentCallUuids/activeCallUuid — ce dédup ne vivait que dans
+  // handlePushPayload (canal FCM). Résultat observé en prod : quand le
+  // serveur envoie le même appel sur WS ET FCM en parallèle (comportement
+  // voulu, pour la fiabilité — voir SignalingService.ts), le second canal à
+  // arriver ne voyait AUCUNE trace du premier et redéclenchait sonnerie/
+  // affichage natif pour le même appel (2x startForegroundWithCallData dans
+  // les logs). Maintenant : IdleScreen.tsx (WS) appelle CETTE méthode au lieu
+  // de toucher callStore/showIncomingCall lui-même — un seul chemin peut
+  // enregistrer un appel entrant, peu importe le canal qui l'a livré en premier.
+  registerIncomingCall (callUuid: string, numeroMtn: string): void {
+    if (this.activeCallUuid && this.activeCallUuid !== callUuid) {
+      console.log('[Notif] appel déjà actif, incoming-call ignoré', { active: this.activeCallUuid, incoming: callUuid });
+      return;
+    }
+
+    const now = Date.now();
+    const lastSeenAt = this.recentCallUuids.get(callUuid);
+    if (lastSeenAt && now - lastSeenAt < 4_000) {
+      console.log('[Notif] doublon incoming-call ignoré (canal croisé WS/FCM)', callUuid);
+      return;
+    }
+    this.recentCallUuids.set(callUuid, now);
+    this.recentCallUuids.forEach((seenAt, uuid) => {
+      if (now - seenAt > 30_000) this.recentCallUuids.delete(uuid);
+    });
+
+    this.pendingCallUuid = callUuid;
+    void this.persistPendingIncomingCall(callUuid, numeroMtn);
+    // showIncomingCall() est responsable de poser activeCallUuid/displayedCallUuid
+    // — c'est la seule fonction qui doit le faire, pour que son propre garde-fou
+    // (ligne "un autre appel est déjà affiché") reste efficace.
+    this.showIncomingCall(callUuid, numeroMtn);
+    // callbacks.onIncomingCall (câblé dans App.tsx) pose callStore.setIncomingCall
+    // via openIncomingCallRoute — qui a lui-même son propre garde-fou
+    // (status !== 'idle') — c'est donc bien la SEULE fonction qui touche le
+    // store, quel que soit le canal d'origine (WS ou FCM).
+    setTimeout(() => {
+      this.callbacks?.onIncomingCall(callUuid, numeroMtn);
+    }, 100);
+  }
+
   // ── Traitement payload FCM ──────────────────────────────────────────────
   private async handlePushPayload (msg: FirebaseMessagingTypes.RemoteMessage): Promise<void> {
     const data = msg.data;
@@ -394,37 +494,9 @@ class NotificationService {
       }
     }
 
-    // Un appel est déjà affiché/en cours de traitement : le serveur génère un
-    // callUuid DIFFÉRENT à chaque tentative (redial back-office, retry...),
-    // donc comparer les uuid ne suffit pas — s'il y a déjà un activeCallUuid
-    // (quel qu'il soit), c'est presque toujours un doublon du même appel
-    // logique. On ignore avant même de toucher activeCallUuid, sinon on
-    // écrase la référence qui sert justement à détecter ce doublon.
-    if (this.activeCallUuid && this.activeCallUuid !== callUuid) {
-      console.log('[Notif] appel déjà actif, push ignoré', { active: this.activeCallUuid, incoming: callUuid });
-      return;
-    }
-
-    const now = Date.now();
-    const lastSeenAt = this.recentCallUuids.get(callUuid);
-    if (lastSeenAt && now - lastSeenAt < 4_000) {
-      console.log('[Notif] doublon incoming-call ignoré', callUuid);
-      return;
-    }
-    this.recentCallUuids.set(callUuid, now);
-    this.recentCallUuids.forEach((seenAt, uuid) => {
-      if (now - seenAt > 30_000) this.recentCallUuids.delete(uuid);
-    });
-
-    this.pendingCallUuid = callUuid;
-    await this.persistPendingIncomingCall(callUuid, numeroMtn);
-    // showIncomingCall() est responsable de poser activeCallUuid/displayedCallUuid
-    // — c'est la seule fonction qui doit le faire, pour que son propre garde-fou
-    // (ligne "un autre appel est déjà affiché") reste efficace.
-    this.showIncomingCall(callUuid, numeroMtn);
-    setTimeout(() => {
-      this.callbacks?.onIncomingCall(callUuid, numeroMtn);
-    }, 100);
+    // Dédup + affichage : voir registerIncomingCall() ci-dessus, désormais
+    // partagé avec le canal WS (IdleScreen.tsx).
+    this.registerIncomingCall(callUuid, numeroMtn);
   }
 
   private async persistPendingIncomingCall (callUuid: string, numeroMtn: string): Promise<void> {

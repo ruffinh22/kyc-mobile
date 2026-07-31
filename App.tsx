@@ -29,6 +29,7 @@ const Stack = createStackNavigator();
 
 export default function App() {
   const [initialRoute, setInitialRoute] = useState<string | null>(null);
+  const [isNavReady, setIsNavReady] = useState(false);
   const setAgent = useAgentStore(s => s.setAgent);
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
@@ -51,7 +52,7 @@ export default function App() {
 
   useEffect(() => {
     const nav = navigationRef.current;
-    if (!nav || !nav.isReady()) return;
+    if (!nav || !nav.isReady() || !isNavReady) return;
 
     const currentRoute = nav.getCurrentRoute()?.name;
 
@@ -88,7 +89,7 @@ export default function App() {
       default:
         return;
     }
-  }, [callStatus, callUuid, callNumero, initialRoute]);
+  }, [callStatus, callUuid, callNumero, initialRoute, isNavReady]);
 
   const registerFcmTokenWithBackend = async (serverUrl: string, numeroAgent: string, token: string) => {
     if (!serverUrl || !numeroAgent || !token) return;
@@ -262,7 +263,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-        <NavigationContainer ref={navigationRef}>
+        <NavigationContainer ref={navigationRef} onReady={() => setIsNavReady(true)}>
           <Stack.Navigator
             initialRouteName={initialRoute}
             screenOptions={{

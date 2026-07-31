@@ -193,6 +193,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
+      <AppHeader title="Connexion" subtitle="Profil agent" />
 
       {/* ── Orbes décoratives ── */}
       <View style={s.orb1} pointerEvents="none" />
@@ -330,8 +331,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg0 },
   kav:  { flex: 1 },
   scroll: {
-    flexGrow: 1, justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 18, paddingVertical: 32,
+    flexGrow: 1, justifyContent: 'flex-start', alignItems: 'center',
+    paddingHorizontal: 18, paddingTop: 8, paddingBottom: 28,
   },
 
   orb1: {
@@ -350,40 +351,40 @@ const s = StyleSheet.create({
   },
 
   // ── Hero ──
-  hero: { alignItems: 'center', marginBottom: 24, width: '100%', maxWidth: 420 },
+  hero: { alignItems: 'center', marginBottom: 18, width: '100%', maxWidth: 420 },
 
   mtnBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: 'rgba(255,255,255,0.86)',
     borderWidth: 1, borderColor: 'rgba(0,48,135,0.16)',
-    borderRadius: R.lg, paddingVertical: 10, paddingHorizontal: 16,
-    marginBottom: 24,
+    borderRadius: R.lg, paddingVertical: 8, paddingHorizontal: 14,
+    marginBottom: 18,
     alignSelf: 'flex-start',
     shadowColor: '#0F1720', shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 8 },
     elevation: 4,
   },
   mtnBadgeInner: {
     backgroundColor: C.blue, borderRadius: R.sm,
-    paddingVertical: 4, paddingHorizontal: 10,
+    paddingVertical: 3, paddingHorizontal: 8,
   },
   mtnBadgeMeta: { flexDirection: 'column', justifyContent: 'center' },
-  mtnBadgeTxt:   { fontSize: T.md, fontWeight: '900', color: C.yellow, letterSpacing: -0.5 },
+  mtnBadgeTxt:   { fontSize: T.sm, fontWeight: '900', color: C.yellow, letterSpacing: -0.5 },
   mtnBadgeLabel: { fontSize: T.base, fontWeight: '800', color: C.ink, letterSpacing: -0.2 },
   mtnBadgeSub:   { fontSize: T.xs, color: C.ink3, marginTop: 1 },
 
-  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   eyebrowDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.yellow },
   eyebrow: {
     fontSize: T.xs, fontWeight: '700', color: C.blue,
     letterSpacing: 2, textTransform: 'uppercase',
   },
   title: {
-    fontSize: T['3xl'], fontWeight: '900', color: C.ink,
-    letterSpacing: -0.9, textAlign: 'center',
+    fontSize: T['2xl'], fontWeight: '900', color: C.ink,
+    letterSpacing: -0.7, textAlign: 'center', lineHeight: 36,
   },
   subtitle: {
-    fontSize: T.sm, color: C.ink2, textAlign: 'center',
-    marginTop: 10, lineHeight: 20,
+    fontSize: T.base, color: C.ink2, textAlign: 'center',
+    marginTop: 8, lineHeight: 22,
   },
 
   // ── Card ──
@@ -418,9 +419,9 @@ const s = StyleSheet.create({
     backgroundColor: C.bg2,
     borderWidth: 1, borderColor: C.bgBorder,
     borderRadius: R.md,
-    paddingVertical: 14, paddingHorizontal: 16,
-    fontSize: T.lg, fontWeight: '700', color: C.ink,
-    letterSpacing: 2, fontVariant: ['tabular-nums'],
+    paddingVertical: 12, paddingHorizontal: 14,
+    fontSize: T.md, fontWeight: '700', color: C.ink,
+    letterSpacing: 1, fontVariant: ['tabular-nums'],
   },
   validDot: { position: 'absolute', right: 14, width: 8, height: 8, borderRadius: 4 },
   hint: { fontSize: T.xs, marginTop: 6, fontWeight: '600' },

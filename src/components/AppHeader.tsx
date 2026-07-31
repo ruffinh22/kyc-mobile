@@ -6,16 +6,26 @@ import { C, R, T } from '../theme/tokens';
 interface AppHeaderProps {
   title: string;
   subtitle?: string;
+  leftIcon?: string;
+  onLeftPress?: () => void;
   rightIcon?: string;
   onRightPress?: () => void;
 }
 
-export function AppHeader({ title, subtitle, rightIcon, onRightPress }: AppHeaderProps) {
+export function AppHeader({ title, subtitle, leftIcon, onLeftPress, rightIcon, onRightPress }: AppHeaderProps) {
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[s.container, { paddingTop: insets.top + 12 }]}>
+    <View style={[s.container, { paddingTop: insets.top + 12 }]}> 
       <View style={s.left}>
+        {onLeftPress ? (
+          <TouchableOpacity style={[s.actionBtn, s.leftActionBtn]} onPress={onLeftPress} activeOpacity={0.8}>
+            <View style={s.iconCenter}>
+              <Text style={s.actionIcon}>{leftIcon ?? '←'}</Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
+
         <View style={s.logoWrap}>
           <View style={s.logoInner}>
             <Text style={s.logoText} numberOfLines={1} allowFontScaling={false}>MTN</Text>
@@ -35,7 +45,9 @@ export function AppHeader({ title, subtitle, rightIcon, onRightPress }: AppHeade
 
       {onRightPress ? (
         <TouchableOpacity style={s.actionBtn} onPress={onRightPress} activeOpacity={0.8}>
-          <Text style={s.actionIcon}>{rightIcon ?? '⚙️'}</Text>
+          <View style={s.iconCenter}>
+            <Text style={s.actionIcon}>{rightIcon ?? '⚙️'}</Text>
+          </View>
         </TouchableOpacity>
       ) : (
         <View style={s.actionBtnPlaceholder} />
@@ -49,16 +61,14 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingTop: 10,
     paddingBottom: 10,
-    // Fond gris-bleu discret, professionnel — distingue le header du
-    // contenu sans créer de contraste dur.
     backgroundColor: '#EEF2F7',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(15,23,42,0.07)',
   },
-  left: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  left: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
   logoWrap: {
     width: 42,
     height: 42,
@@ -90,15 +100,33 @@ const s = StyleSheet.create({
     height: 38,
     borderRadius: 19,
     backgroundColor: C.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
     borderWidth: 2,
     borderColor: C.yellow,
     shadowColor: C.blue,
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 3,
+    // Le bouton lui-même ne centre plus directement le Text : il centre
+    // le wrapper iconCenter, qui à son tour centre le glyphe. Ce double
+    // conteneur neutre absorbe les différences de boîte entre une flèche
+    // Unicode et un emoji coloré, sans réglage au cas par cas.
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  actionIcon: { fontSize: T.base, color: '#fff', fontWeight: '800' },
+  leftActionBtn: { marginRight: 12 },
+  // Conteneur neutre, sans dimension forcée : il se dimensionne sur son
+  // contenu réel et le flexbox parent le centre pixel pour pixel, peu
+  // importe le glyphe utilisé.
+  iconCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionIcon: {
+    fontSize: T.base,
+    color: '#fff',
+    fontWeight: '800',
+    includeFontPadding: false,
+    textAlign: 'center',
+  },
   actionBtnPlaceholder: { width: 38, height: 38 },
 });

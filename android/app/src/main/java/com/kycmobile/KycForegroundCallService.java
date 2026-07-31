@@ -74,6 +74,10 @@ public class KycForegroundCallService extends Service {
     private Vibrator vibrator;
     private String currentNumero = "…";
     private String currentCallUuid = null;
+    // Anti-doublon pour launchIncomingCallActivity (voir onStartCommand/ACTION_RING) :
+    // évite de relancer l'Activity deux fois pour le même appel si WS et FCM
+    // déclenchent chacun un RING pour le même callUuid.
+    private String lastLaunchedCallUuid = null;
 
     // ── Démarrage du service ──────────────────────────────────────────────
     @Override
@@ -92,10 +96,24 @@ public class KycForegroundCallService extends Service {
             acquireWakeLock();
             startNativeRingtone();
             startNativeVibration();
-            // Ne forcer plus la création de l'Activity ici : l'app React Native
-            // gère elle-même l'ouverture de l'écran d'appel entrant depuis JS.
-            // Forcer launchIncomingCallActivity ici provoquait parfois un relancement
-            // brutal de l'Activity et des fermetures inattendues sur certains Android.
+            // RÉACTIVÉ (voir discussion) : le full-screen intent de la notification
+            // ne ramène l'Activity au premier plan de façon fiable QUE quand l'écran
+            // est verrouillé. App juste en arrière-plan (écran allumé, utilisateur
+            // sur une autre app/l'accueil) : Android ne relance pas l'Activity tout
+            // seul, et changer l'état de navigation React (App.tsx) ne fait rien
+            // voir à l'écran si l'Activity elle-même n'est pas au premier plan.
+            // C'était la cause du symptôme "ça sonne mais l'écran ne s'affiche pas".
+            //
+            // Garde-fou anti-doublon (lastLaunchedCallUuid) : le launchMode
+            // singleTask + FLAG_ACTIVITY_SINGLE_TOP|CLEAR_TOP rend cet appel sans
+            // danger même si l'Activity est déjà au premier plan (Android appelle
+            // juste onNewIntent(), pas de recréation) — mais on évite quand même de
+            // le déclencher deux fois pour le MÊME appel (WS + FCM peuvent tous les
+            // deux déclencher un RING pour le même callUuid, comme observé en prod).
+            if (!java.util.Objects.equals(lastLaunchedCallUuid, currentCallUuid)) {
+                lastLaunchedCallUuid = currentCallUuid;
+                launchIncomingCallActivity(currentNumero, currentCallUuid);
+            }
             return START_STICKY;
 
         } else if (ACTION_ANSWER.equals(action)) {
@@ -104,6 +122,11 @@ public class KycForegroundCallService extends Service {
             // recrée jamais le service, on met juste à jour la notification.
             stopNativeRingtone();
             stopNativeVibration();
+            // À ce stade, MainActivity vient d'être affichée (full-screen intent /
+            // tap répondre) : l'app est dans un état "visible", ce qui satisfait
+            // l'exemption Android 14+ pour démarrer un FGS de type camera/microphone.
+            // C'est pour ça qu'on ne demande CE type qu'ICI, jamais à la sonnerie.
+            upgradeForegroundToMediaCapture();
             NotificationManager mgr = getSystemService(NotificationManager.class);
             if (mgr != null) mgr.notify(NOTIF_ID, buildActiveCallNotification(currentNumero));
             return START_STICKY;
@@ -112,6 +135,7 @@ public class KycForegroundCallService extends Service {
             stopNativeRingtone();
             stopNativeVibration();
             releaseWakeLock();
+            lastLaunchedCallUuid = null;
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
             stopSelf();
         }
@@ -212,48 +236,61 @@ public class KycForegroundCallService extends Service {
         }
     }
 
-    // ── Démarrage foreground avec le bon type de service ──────────────────
-    // Le type runtime doit être un sous-ensemble de celui déclaré dans le
-    // manifest. On n'inclut CAMERA/MICROPHONE que si la permission correspondante
-    // est réellement accordée à cet instant (sinon SecurityException garantie
-    // sur API 34+) ; PHONE_CALL reste toujours inclus car c'est le rôle premier
-    // de ce service (maintenir l'appel actif en arrière-plan).
+    // ── Démarrage foreground à la sonnerie ─────────────────────────────────
+    // IMPORTANT (Android 14 / API 34+) : les types camera/microphone/location
+    // ne peuvent PAS être demandés tant que l'app n'a pas d'Activity visible.
+    // Ici, le service démarre depuis un push FCM en arrière-plan (pas d'écran
+    // affiché) — seul PHONE_CALL est donc autorisé à ce stade. Camera/micro
+    // ne sont de toute façon pas encore utilisés puisque WebRTC ne capture
+    // rien avant que l'appel soit décroché (voir upgradeForegroundToMediaCapture).
     private void startForegroundCompat(Notification notif) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIF_ID, notif, resolveForegroundServiceType());
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL);
             } else {
                 startForeground(NOTIF_ID, notif);
             }
         } catch (Exception e) {
-            Log.e(TAG, "startForeground avec type a échoué, repli minimal", e);
-            try {
-                startForeground(NOTIF_ID, notif);
-            } catch (Exception fatal) {
-                Log.e(TAG, "Repli startForeground impossible — arrêt du service", fatal);
-                stopSelf();
-            }
+            // Un échec ici n'est plus censé arriver (phoneCall n'est pas soumis à la
+            // restriction background camera/micro/location) — on ne retente donc
+            // plus un startForeground() sans type, qui échouerait pour la même
+            // raison à cause des types déclarés dans le manifest (camera|microphone).
+            Log.e(TAG, "startForeground (phoneCall) a échoué — arrêt du service", e);
+            stopSelf();
         }
     }
 
-    private int resolveForegroundServiceType() {
-        int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL;
+    // ── Promotion du type foreground à la réponse ──────────────────────────
+    // Appelé uniquement depuis ACTION_ANSWER, donc une fois que MainActivity
+    // est affichée (état "visible" qui lève la restriction Android 14+ sur
+    // camera/microphone). N'inclut ces types que si la permission runtime
+    // correspondante est réellement accordée (sinon SecurityException garantie).
+    private void upgradeForegroundToMediaCapture() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                boolean hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED;
+                boolean hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            boolean hasCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED;
-            boolean hasMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED;
+                if (hasCamera) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
+                if (hasMic)    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
 
-            if (hasCamera) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
-            if (hasMic)    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
-
-            if (!hasCamera || !hasMic) {
-                Log.w(TAG, "Permission caméra/micro manquante au démarrage du service "
-                    + "— type foreground réduit à phoneCall (caméra=" + hasCamera + ", micro=" + hasMic + ")");
+                if (!hasCamera || !hasMic) {
+                    Log.w(TAG, "Permission caméra/micro manquante à la réponse — "
+                        + "type foreground reste limité à phoneCall (caméra=" + hasCamera + ", micro=" + hasMic + ")");
+                }
             }
+            startForeground(NOTIF_ID, buildActiveCallNotification(currentNumero), type);
+        } catch (Exception e) {
+            // On ne fait pas stopSelf() ici : l'appel (audio/vidéo WebRTC) peut
+            // continuer même si la promotion du type échoue ; seul le risque
+            // (rare) est que le système soit plus agressif pour tuer le process
+            // en arrière-plan prolongé. Mieux vaut un appel dégradé qu'un appel coupé.
+            Log.e(TAG, "Impossible de promouvoir le type foreground vers camera/microphone", e);
         }
-        return type;
     }
 
     private void launchIncomingCallActivity(String numeroMtn, String callUuid) {

@@ -344,20 +344,17 @@ class SignalingService {
       // ── Appel entrant : back-office appelle le terrain ─────────────────────
       case 'incoming-call':
         console.log('[Signal] incoming-call reçu', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
-        // IMPORTANT : le serveur génère un callUuid DIFFÉRENT à chaque tentative
-        // (redial back-office, retry réseau...) — comparer les callUuid pour
-        // dédupliquer est donc inefficace par construction (voir SERVER_SPEC.md /
-        // public-dossiers.ts, pendingCalls). La seule dédup fiable côté client
-        // est : "y a-t-il déjà un appel en cours de traitement, peu importe son
-        // uuid ?" Si oui, on ignore purement et simplement toute nouvelle
-        // notification tant que celui-ci n'est pas résolu (accepté/refusé/fini).
+        // IMPORTANT : on ne doit pas mettre à jour le callStore directement ici
+        // car ce chemin est un canal de livraison parmi d'autres (WS vs FCM).
+        // La centralisation de la déduplication et de l'affichage natif doit se
+        // faire dans NotificationService.registerIncomingCall() afin que le
+        // même comportement s'applique à tous les canaux.
         if (store.status !== 'idle') {
           console.log('[Signal] appel déjà en cours de traitement, incoming-call ignoré', {
             statut: store.status, numeroMtn: msg.numeroMtn, callUuid: msg.callUuid,
           });
           break;
         }
-        store.setIncomingCall(msg.numeroMtn, msg.callUuid);
         if (this.callbacks?.onIncomingCall) {
           setTimeout(() => {
             console.log('[Signal] déclenche onIncomingCall', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });

@@ -687,7 +687,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
 
-      <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="⬅️" onRightPress={() => navigation.goBack()} />
+      <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" leftIcon="←" onLeftPress={() => navigation.goBack()} />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>

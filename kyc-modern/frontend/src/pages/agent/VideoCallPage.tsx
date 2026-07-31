@@ -154,7 +154,7 @@ export function AgentVideoCallPage() {
   const iceDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iceRestartCountRef = useRef(0);
   const iceRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const forceWakeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const forceWakeIntervalRef = useRef<number | null>(null);
   const forceWakeActiveRef = useRef(false);
   const forceWakeAttemptsRef = useRef(0);
 
@@ -1075,7 +1075,19 @@ export function AgentVideoCallPage() {
         .kvc-chip--gold { color: #8A5A00; border-color: rgba(255,204,0,0.35); background: rgba(255,247,205,0.9); }
         .kvc-chip--danger { color: #991B1B; border-color: rgba(239,68,68,0.30); background: rgba(254,226,226,0.85); }
 
-        .kvc-alerts { margin-bottom: 10px; }
+        .kvc-alerts {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin: 10px 0 0;
+        }
+
+        .kvc-alerts .alert {
+          margin: 0;
+          border-radius: 12px;
+          padding: 8px 12px;
+          font-size: 13px;
+        }
 
         .kvc-config {
           display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px;
@@ -1278,6 +1290,12 @@ export function AgentVideoCallPage() {
               <h1 className="kvc-title">Appel vidéo terrain</h1>
             </div>
             <p className="kvc-sub">Centre de certification KYC · MTN Congo</p>
+            {(error || info) && (
+              <div className="kvc-alerts">
+                {error && <Alert kind="error">{error}</Alert>}
+                {info && <Alert kind="success">{info}</Alert>}
+              </div>
+            )}
           </div>
         </div>
         <div className="kvc-topbar-right">
@@ -1290,13 +1308,6 @@ export function AgentVideoCallPage() {
           </button>
         </div>
       </div>
-
-      {(error || info) && (
-        <div className="kvc-alerts">
-          {error && <Alert kind="error">{error}</Alert>}
-          {info && <Alert kind="success">{info}</Alert>}
-        </div>
-      )}
 
       {!focusTerrain && (
         <div className="kvc-config">

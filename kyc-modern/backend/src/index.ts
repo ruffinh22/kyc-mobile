@@ -89,6 +89,37 @@ async function main(): Promise<void> {
     await app.register(staticPlugin, { root: uploadsDir, prefix: '/uploads/', decorateReply: false });
   } catch { app.log.warn('[STATIC] uploads dir non trouvé, ignoré'); }
 
+  // Fichiers statiques pour APK release (si généré)
+  const apkReleaseDir = path.resolve(process.cwd(), '../../android/app/build/outputs/apk/release');
+  if (fs.existsSync(apkReleaseDir)) {
+    try {
+      await app.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', decorateReply: false });
+      app.log.info('[STATIC] APK release servie depuis', apkReleaseDir);
+
+      const apkAlias = path.join(apkReleaseDir, 'app-release.apk');
+      if (!fs.existsSync(apkAlias)) {
+        const apkFiles = fs.readdirSync(apkReleaseDir).filter(name => name.toLowerCase().endsWith('.apk'));
+        if (apkFiles.length > 0) {
+          const chosenApk = apkFiles[0];
+          app.get('/apk/app-release.apk', async (_req, reply) => {
+            const filePath = path.join(apkReleaseDir, chosenApk);
+            const stream = fs.createReadStream(filePath);
+            reply
+              .header('Content-Type', 'application/vnd.android.package-archive')
+              .header('Content-Disposition', `attachment; filename="app-release.apk"`)
+              .send(stream);
+            return reply;
+          });
+          app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk ->', chosenApk);
+        }
+      }
+    } catch (err) {
+      app.log.warn('[STATIC] impossible de servir APK release', err instanceof Error ? err.message : String(err));
+    }
+  } else {
+    app.log.info('[STATIC] APK release non trouvé à', apkReleaseDir);
+  }
+
   // Serve frontend build si disponible (doit être généré via `cd ../frontend && npm run build`)
   const frontendDist = path.join(process.cwd(), '../frontend/dist');
   if (fs.existsSync(frontendDist)) {

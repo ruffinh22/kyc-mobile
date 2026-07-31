@@ -7,10 +7,10 @@
 }
 
 .agent-dossier-card {
-  background: linear-gradient(135deg, rgba(255,255,255,0.99), rgba(248,250,252,0.96));
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 1px 2px rgba(13,27,62,.05);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -19,9 +19,9 @@
 }
 
 .agent-dossier-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(250, 204, 21, 0.34);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+  border-color: var(--border-2);
+  box-shadow: 0 6px 16px rgba(13,27,62,.08);
 }
 
 .agent-dossier-meta {
@@ -177,9 +177,9 @@
 
 .photo-action-chip:hover {
   transform: translateY(-1px);
-  border-color: var(--mtn-yellow);
-  box-shadow: 0 6px 12px rgba(15, 23, 42, 0.08);
-  background: linear-gradient(180deg, #fffef2, #fff8d8);
+  border-color: rgba(0, 87, 168, .22);
+  box-shadow: 0 4px 10px rgba(13, 27, 62, .07);
+  background: var(--mtn-blue-light);
 }
 
 .photo-chip-letter {

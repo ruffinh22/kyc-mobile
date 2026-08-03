@@ -244,7 +244,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
             </Text>
 
             <Text style={s.subtitle}>
-              Ces informations sont saisies une seule fois. Ensuite, chaque dossier ne demandera que le numéro MTN et les photos.
+              Ces informations sont saisies une fois. 
             </Text>
 
             <View style={s.timeChip}>

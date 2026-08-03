@@ -22,15 +22,6 @@ function resolveApiBase(): string {
 const BASE = resolveApiBase();
 let _token: string | null = null;
 
-function getStoredToken(): string | null {
-  if (typeof document === 'undefined') return null;
-  const cookieToken = (document.cookie || '').split(';').map(s => s.trim()).find((c) => c.startsWith('kyc_token='));
-  if (cookieToken) {
-    return decodeURIComponent(cookieToken.split('=')[1] || '');
-  }
-  return localStorage.getItem('kyc4-token');
-}
-
 export function setToken(t: string | null) {
   _token = t;
   if (typeof document !== 'undefined') {
@@ -41,14 +32,7 @@ export function setToken(t: string | null) {
     }
   }
 }
-export function getToken() {
-  if (_token) return _token;
-  const stored = getStoredToken();
-  if (stored) {
-    _token = stored;
-  }
-  return _token;
-}
+export function getToken() { return _token; }
 
 export class ApiError extends Error {
   constructor(public message: string, public status: number, public details?: string[]) {
@@ -59,14 +43,11 @@ export class ApiError extends Error {
 export async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = opts;
   const isForm = rest.body instanceof FormData;
-  const headers: Record<string, string> = {
-    ...(rest.headers as Record<string, string> || {}),
-  };
+  const headers: Record<string, string> = {};
   if (json !== undefined && !isForm) headers['Content-Type'] = 'application/json';
-  const token = getToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-    console.log('[apiFetch] Token présent, longueur:', token.length);
+  if (_token) {
+    headers['Authorization'] = `Bearer ${_token}`;
+    console.log('[apiFetch] Token présent, longueur:', _token.length);
   } else {
     console.warn('[apiFetch] Aucun token disponible');
   }
@@ -229,8 +210,6 @@ export async function getPresenceResume() { return apiFetch<PresenceResume & { s
 // ── Config ────────────────────────────────────────────────────────────────────
 export async function getDistributionMode() { return apiFetch<{ success: boolean; mode: string }>('/api/config/distribution-mode'); }
 export async function setDistributionMode(mode: string) { return apiFetch<{ success: boolean }>('/api/config/distribution-mode', { method: 'PUT', json: { mode } }); }
-export async function getDistributionTiming() { return apiFetch<{ success: boolean; interval_ms: number; abandon_sec: number }>('/api/config/distribution-timing'); }
-export async function setDistributionTiming(data: { interval_ms: number; abandon_sec: number }) { return apiFetch<{ success: boolean; interval_ms: number; abandon_sec: number }>('/api/config/distribution-timing', { method: 'PUT', json: data }); }
 export async function getRejectionMotifs() { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs'); }
 export async function setRejectionMotifs(motifs: string[]) { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs', { method: 'PUT', json: { motifs } }); }
 export async function getSeuilAlerte() { return apiFetch<{ success: boolean; seuil: number }>('/api/config/seuil-alerte'); }

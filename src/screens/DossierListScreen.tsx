@@ -130,7 +130,15 @@ export function DossierListScreen({ navigation }: any) {
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || 'Impossible de relancer la vérification faciale');
       }
-      await fetchDossiers(true);
+      // Le backend a bien réinitialisé le dossier côté serveur, mais ça ne
+      // suffit pas : il faut effectivement ramener l'agent sur l'écran
+      // caméra/liveness pour qu'il refasse le scan facial.
+      navigation.navigate('FaceVerifyScreen', {
+        dossierId: item.id,
+        serverUrl,
+        numeroMtn: item.numero_mtn,
+        waAgent: agentWa,
+      });
     } catch (err: any) {
       setError(err?.message || 'Erreur de reprise');
     } finally {
@@ -196,6 +204,17 @@ export function DossierListScreen({ navigation }: any) {
   useEffect(() => {
     fetchDossiers();
   }, [agentWa, baseUrl]);
+
+  // Rafraîchit la liste quand on revient sur cet écran (ex: retour depuis
+  // FaceVerifyScreen après une reprise de vérification faciale), plutôt que
+  // juste après l'appel POST — sinon la liste se met à jour avant même que
+  // l'agent ait terminé le scan.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener?.('focus', () => {
+      fetchDossiers(true);
+    });
+    return unsubscribe;
+  }, [navigation, agentWa, baseUrl]);
 
   const filteredDossiers = useMemo(() => {
     const normalizedFilter = statusFilter;
@@ -508,7 +527,14 @@ export function DossierListScreen({ navigation }: any) {
             </View>
 
             {selectedDossier ? (
-              <View style={s.modalBody}>
+              <ScrollView
+                style={s.modalScroll}
+                contentContainerStyle={s.modalBody}
+                showsVerticalScrollIndicator
+                bounces={false}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
                 <View style={s.detailRow}>
                   <Text style={s.detailLabel}>Nom / ID</Text>
                   <Text style={s.detailValue}>{selectedDossier.id}</Text>
@@ -573,7 +599,7 @@ export function DossierListScreen({ navigation }: any) {
                     <Text style={s.detailValue}>{selectedDossier.raison_rejet}</Text>
                   </View>
                 ) : null}
-              </View>
+              </ScrollView>
             ) : null}
           </Animated.View>
         </View>
@@ -744,13 +770,18 @@ const s = StyleSheet.create({
   },
   clearButtonText: { color: C.ink3, fontSize: 11, fontWeight: '700' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
+  // maxHeight borne la carte, mais c'est modalScroll (flexible, en dessous
+  // du header fixe) qui rend le contenu réellement défilable — sans lui,
+  // sur Android le borderRadius clippe silencieusement les champs qui
+  // dépassent au lieu de les laisser accessibles au scroll.
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '85%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  modalScroll: { flexGrow: 0 },
   modalTitle: { color: C.ink, fontSize: 16, fontWeight: '800' },
   modalSubtitle: { color: C.ink3, fontSize: 12, marginTop: 2 },
   closeBtnModal: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.bg2, alignItems: 'center', justifyContent: 'center' },
   closeBtnText: { color: C.ink, fontWeight: '800' },
-  modalBody: { gap: 8 },
+  modalBody: { gap: 8, paddingBottom: 4 },
   detailRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(15,23,42,0.06)' },
   detailLabel: { color: C.ink3, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4 },
   detailValue: { color: C.ink, fontSize: 13, fontWeight: '700', marginTop: 2 },

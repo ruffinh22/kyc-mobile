@@ -37,38 +37,49 @@ function getRoute(): string {
   return p;
 }
 
+const PAGE_PATHS: Record<string, string> = {
+  dashboard: '/',
+  'gsm-saisie': '/gsm-saisie',
+  'gsm-tableau': '/gsm-tableau',
+  'gsm-historique': '/gsm-historique',
+  'gsm-perfs': '/gsm-perfs',
+  'file-attente': '/file-attente',
+  'mes-dossiers': '/mes-dossiers',
+  'video-call': '/video-call',
+  planning: '/planning',
+  qualite: '/qualite',
+  acquisition: '/acquisition',
+  historique: '/historique',
+  presence: '/presence',
+  performance: '/performance',
+  distribution: '/distribution',
+  'donnees-heures': '/donnees-heures',
+  flux: '/flux',
+  'compilation-gsm': '/compilation-gsm',
+  'notes-qualite': '/notes-qualite',
+  'planning-managers': '/planning-managers',
+  captures: '/captures',
+  reporting: '/reporting',
+  comptes: '/comptes',
+  sessions: '/sessions',
+  audit: '/audit',
+  habilitations: '/habilitations',
+  referentiels: '/referentiels',
+  stockage: '/stockage',
+  purge: '/purge',
+  parametres: '/parametres',
+};
+
 function getPageForRoute(pathname: string): string | null {
   const route = pathname.replace(/\/$/, '') || '/';
-  const pageMap: Record<string, string> = {
-    '/gsm-saisie': 'gsm-saisie',
-    '/gsm-tableau': 'gsm-tableau',
-    '/gsm-historique': 'gsm-historique',
-    '/gsm-perfs': 'gsm-perfs',
-    '/file-attente': 'file-attente',
-    '/mes-dossiers': 'mes-dossiers',
-    '/video-call': 'video-call',
-    '/planning': 'planning',
-    '/qualite': 'qualite',
-    '/acquisition': 'acquisition',
-  };
-  return pageMap[route] ?? null;
+  if (route === '/') return 'dashboard';
+
+  const page = Object.entries(PAGE_PATHS).find(([, path]) => path === route)?.[0];
+  return page ?? null;
 }
 
 function getPathForPage(page: string): string {
-  switch (page) {
-    case 'gsm-saisie': return '/gsm-saisie';
-    case 'gsm-tableau': return '/gsm-tableau';
-    case 'gsm-historique': return '/gsm-historique';
-    case 'gsm-perfs': return '/gsm-perfs';
-    case 'file-attente': return '/file-attente';
-    case 'mes-dossiers': return '/mes-dossiers';
-    case 'video-call': return '/video-call';
-    case 'planning': return '/planning';
-    case 'qualite': return '/qualite';
-    case 'acquisition': return '/acquisition';
-    case 'dashboard':
-    default: return '/';
-  }
+  return PAGE_PATHS[page] ?? '/';
 }
 
 function PublicRouter() {

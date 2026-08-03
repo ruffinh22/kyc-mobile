@@ -5,7 +5,7 @@
 // FIFO strict, max 1 push auto par agent
 // ============================================================================
 
-import { query, exec, nowSec } from '../db';
+import { query, exec, nowSec, getConfig } from '../db';
 import { RowDataPacket } from 'mysql2';
 
 interface ConfigRow {
@@ -19,11 +19,14 @@ export async function distribuerMaintenant(): Promise<void> {
     if (!configs.length || configs[0].valeur !== 'auto') return;
 
     const maintenant = nowSec();
-    const limite = maintenant - 60; // ping récent (60s)
-    const seuilAbandon = maintenant - 90; // filet de sécurité (90s)
+    const intervalMs = parseInt((await getConfig('distribution_interval_ms')) ?? '2000', 10);
+    const abandonSec = parseInt((await getConfig('distribution_abandon_sec')) ?? '120', 10);
+    const limite = maintenant - Math.max(30, Math.floor(abandonSec / 2));
+    const seuilAbandon = maintenant - Math.max(30, abandonSec);
+    const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
     // ---- FILET DE SÉCURITÉ ----
-    // Récupérer les dossiers en_cours dont l'agent n'a pas ping depuis 90s
+    // Récupérer les dossiers en_cours dont l'agent n'a pas ping depuis le délai d'abandon configuré
     const orphelins = await query<{ id: string } & RowDataPacket>(
       `SELECT d.id FROM dossiers d 
        WHERE d.statut='en_cours' AND d.agent_saisie IS NOT NULL
@@ -54,6 +57,14 @@ export async function distribuerMaintenant(): Promise<void> {
        )`,
       [maintenant, limite]
     );
+
+    // Le worker ne relance pas la distribution plus vite que l'intervalle configuré.
+    if (intervalSec > 1) {
+      await exec(
+        `UPDATE dossiers SET updated_at=? WHERE statut='en_attente' AND updated_at < ?`,
+        [maintenant, maintenant - intervalSec]
+      );
+    }
 
     // Effacer dispo_depuis pour les non éligibles
     await exec(

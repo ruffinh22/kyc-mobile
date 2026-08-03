@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react';
 export function AdminParametresPage() {
   const [seuilAlerte, setSeuilAlerte] = useState(5);
   const [distributionMode, setDistributionMode] = useState('manuel');
+  const [intervalMs, setIntervalMs] = useState(2000);
+  const [abandonSec, setAbandonSec] = useState(120);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -11,14 +13,20 @@ export function AdminParametresPage() {
 
   const fetchConfig = async () => {
     try {
-      const [seuilRes, modeRes] = await Promise.all([
+      const [seuilRes, modeRes, timingRes] = await Promise.all([
         fetch('/api/config/seuil-alerte'),
-        fetch('/api/config/distribution-mode')
+        fetch('/api/config/distribution-mode'),
+        fetch('/api/config/distribution-timing')
       ]);
       const seuilData = await seuilRes.json();
       const modeData = await modeRes.json();
+      const timingData = await timingRes.json();
       if (seuilData.success) setSeuilAlerte(seuilData.seuil);
       if (modeData.success) setDistributionMode(modeData.mode);
+      if (timingData.success) {
+        setIntervalMs(timingData.interval_ms ?? 2000);
+        setAbandonSec(timingData.abandon_sec ?? 120);
+      }
     } catch (err) {
       console.error('Error fetching config:', err);
     }
@@ -58,6 +66,26 @@ export function AdminParametresPage() {
       }
     } catch (err) {
       console.error('Error saving mode:', err);
+      alert('Erreur lors de la mise à jour');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveTiming = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/config/distribution-timing', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval_ms: intervalMs, abandon_sec: abandonSec })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Timing de distribution mis à jour');
+      }
+    } catch (err) {
+      console.error('Error saving timing:', err);
       alert('Erreur lors de la mise à jour');
     } finally {
       setLoading(false);
@@ -110,6 +138,46 @@ export function AdminParametresPage() {
             </select>
             <button
               onClick={saveMode}
+              disabled={loading}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              Enregistrer
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-lg font-semibold mb-4">Timing de Redistribution Automatique</h2>
+          <p className="text-gray-600 mb-4">
+            Définissez la fréquence du cycle et le délai avant qu’un dossier soit considéré abandonné et réattribué.
+          </p>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Intervalle de vérification (ms)</label>
+              <input
+                type="number"
+                min="1000"
+                max="60000"
+                value={intervalMs}
+                onChange={(e) => setIntervalMs(parseInt(e.target.value))}
+                className="w-full border rounded px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Délai d’abandon avant redistribution (s)</label>
+              <input
+                type="number"
+                min="30"
+                max="1800"
+                value={abandonSec}
+                onChange={(e) => setAbandonSec(parseInt(e.target.value))}
+                className="w-full border rounded px-3 py-2"
+              />
+            </div>
+          </div>
+          <div className="mt-4">
+            <button
+              onClick={saveTiming}
               disabled={loading}
               className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
             >

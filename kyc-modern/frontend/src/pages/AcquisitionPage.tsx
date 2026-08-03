@@ -34,6 +34,19 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createWorker, OEM, PSM } from 'tesseract.js';
 import { getPublicDossiers } from '../services/api';
 
+const API_BASE = (() => {
+  const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  const runtimeOrigin = window.location.origin;
+  if (!envUrl) return runtimeOrigin;
+  if (envUrl.startsWith('http://localhost') || envUrl.startsWith('https://localhost')) {
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') {
+      return runtimeOrigin;
+    }
+  }
+  return envUrl;
+})();
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface PhotoState { file: Blob; preview: string }
@@ -1016,7 +1029,7 @@ export function AcquisitionPage() {
         }
       };
       xhr.onerror = () => { setLoading(false); setErreur('Erreur réseau — vérifiez votre connexion'); };
-      xhr.open('POST', '/api/public/dossiers');
+      xhr.open('POST', `${API_BASE}/api/public/dossiers`);
       xhr.send(fd);
     } catch (e: unknown) {
       setLoading(false);

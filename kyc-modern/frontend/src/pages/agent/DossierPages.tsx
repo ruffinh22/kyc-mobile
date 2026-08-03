@@ -1,4 +1,5 @@
 import { useMemo, useState, FormEvent, useEffect, useRef } from 'react';
+import { getToken } from '../../services/api';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -288,7 +289,48 @@ export function AgentFileAttente() {
   const [motifPage, setMotifPage] = useState(1);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200, scope: 'queue' }), []);
+  const refreshQueueSilently = () => {
+    if (!document.hidden) {
+      void refetch();
+    }
+  };
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token || user?.role !== 'agent') return;
+
+    const refreshQueue = () => {
+      refreshQueueSilently();
+    };
+
+    const url = `${window.location.origin.replace(/\/$/, '')}/api/dossiers/flux?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+
+    const handleEvent = () => {
+      refreshQueue();
+      window.setTimeout(refreshQueue, 350);
+      window.setTimeout(refreshQueue, 900);
+    };
+
+    es.addEventListener('nouveau-dossier', handleEvent);
+    es.addEventListener('connecte', handleEvent);
+
+    es.onerror = () => {
+      handleEvent();
+      es.close();
+    };
+
+    const timer = window.setInterval(refreshQueue, 15000);
+    document.addEventListener('visibilitychange', refreshQueue);
+
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshQueue);
+      es.close();
+    };
+  }, [refetch, user?.role]);
 
   const dossiers = data?.dossiers ?? [];
   const stats = useMemo(() => ({

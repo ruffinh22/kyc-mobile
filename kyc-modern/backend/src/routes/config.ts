@@ -53,6 +53,33 @@ export async function configRoutes(app: any): Promise<void> {
     return reply.send({ success: true, seuil: isNaN(seuil) ? 5 : seuil });
   });
 
+  // GET /api/config/distribution-timing
+  app.get('/api/config/distribution-timing', async (_req, reply) => {
+    const intervalMs = parseInt((await db.getConfig('distribution_interval_ms')) ?? '2000', 10);
+    const abandonSec = parseInt((await db.getConfig('distribution_abandon_sec')) ?? '120', 10);
+    return reply.send({ success: true, interval_ms: Number.isNaN(intervalMs) ? 2000 : intervalMs, abandon_sec: Number.isNaN(abandonSec) ? 120 : abandonSec });
+  });
+
+  // PUT /api/config/distribution-timing (admin)
+  app.put('/api/config/distribution-timing',
+    { preHandler: requireRole(['admin']) },
+    async (req, reply) => {
+      const body = req.body as { interval_ms?: number; abandon_sec?: number } | null;
+      const intervalMs = parseInt(String(body?.interval_ms ?? ''), 10);
+      const abandonSec = parseInt(String(body?.abandon_sec ?? ''), 10);
+      if (isNaN(intervalMs) || intervalMs < 1000 || intervalMs > 60000) {
+        return reply.code(400).send({ error: 'interval_ms invalide (1000-60000 ms)' });
+      }
+      if (isNaN(abandonSec) || abandonSec < 30 || abandonSec > 1800) {
+        return reply.code(400).send({ error: 'abandon_sec invalide (30-1800 s)' });
+      }
+      await db.setConfig('distribution_interval_ms', String(intervalMs));
+      await db.setConfig('distribution_abandon_sec', String(abandonSec));
+      db.audit(req.user.matricule, 'CONFIG_DISTRIBUTION_TIMING', `interval_ms=${intervalMs} abandon_sec=${abandonSec}`, req.ip);
+      return reply.send({ success: true, interval_ms: intervalMs, abandon_sec: abandonSec });
+    }
+  );
+
   // PUT /api/config/seuil-alerte (admin)
   app.put('/api/config/seuil-alerte',
     { preHandler: requireRole(['admin']) },

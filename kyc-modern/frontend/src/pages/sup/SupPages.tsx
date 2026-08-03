@@ -80,7 +80,23 @@ export function SupFileAttente() {
     () => api.getSupFileAttente(date), [date]
   );
 
-  const filtered = (data?.dossiers ?? []).filter(d => !statut || d.statut === statut);
+  const dossiers = data?.dossiers ?? [];
+  const filtered = dossiers.filter(d => !statut || d.statut === statut);
+
+  const alertThreshold = 10;
+  const waitingCount = filtered.filter(d => d.statut === 'en_attente').length;
+  const inProgressCount = filtered.filter(d => d.statut === 'en_cours').length;
+  const longRunning = filtered.filter(d => d.statut === 'en_cours' && d.assigne_le && d.assigne_le > 0).sort((a, b) => {
+    const aTime = (a.assigne_le ?? 0) * 1000;
+    const bTime = (b.assigne_le ?? 0) * 1000;
+    return aTime - bTime;
+  }).slice(0, 5);
+  const alertLevel = waitingCount >= alertThreshold ? 'danger' : waitingCount >= Math.ceil(alertThreshold / 2) ? 'warning' : 'info';
+  const alertText = waitingCount >= alertThreshold
+    ? 'File très chargée : intervention prioritaire requise.'
+    : waitingCount >= Math.ceil(alertThreshold / 2)
+      ? 'Attention : la file commence à s’allonger.'
+      : 'Charge normale : la file reste sous contrôle.';
 
   const doTransfert = async () => {
     if (!transfertTarget || !cible.trim()) return;
@@ -108,7 +124,7 @@ export function SupFileAttente() {
       {error && <Alert kind="error">{error}</Alert>}
       {err   && <Alert kind="error">{err}</Alert>}
 
-      <div className="card">
+      <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
         <div className="filter-bar">
           <div className="field"><label>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
           <div className="field"><label>Statut</label>
@@ -119,10 +135,55 @@ export function SupFileAttente() {
         </div>
       </div>
 
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'1rem', marginBottom:'1rem' }}>
+        <div className="card" style={{ borderLeft:'4px solid var(--info)', background:'var(--surface-1)' }}>
+          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.25rem' }}>En attente</div>
+          <div style={{ fontSize:28, fontWeight:700, color:'var(--info)' }}>{waitingCount}</div>
+          <div style={{ fontSize:12, color:'var(--ink-3)' }}>Dossiers à traiter</div>
+        </div>
+        <div className="card" style={{ borderLeft:'4px solid var(--warning)', background:'var(--surface-1)' }}>
+          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.25rem' }}>En cours</div>
+          <div style={{ fontSize:28, fontWeight:700, color:'var(--warning)' }}>{inProgressCount}</div>
+          <div style={{ fontSize:12, color:'var(--ink-3)' }}>Traitements actifs</div>
+        </div>
+        <div className="card" style={{ borderLeft:'4px solid ' + (alertLevel === 'danger' ? 'var(--danger)' : alertLevel === 'warning' ? 'var(--warning)' : 'var(--success)'), background:'var(--surface-1)' }}>
+          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.25rem' }}>Niveau d’alerte</div>
+          <div style={{ fontSize:20, fontWeight:700, color: alertLevel === 'danger' ? 'var(--danger)' : alertLevel === 'warning' ? 'var(--warning)' : 'var(--success)' }}>{alertLevel === 'danger' ? 'Critique' : alertLevel === 'warning' ? 'Attention' : 'Normal'}</div>
+          <div style={{ fontSize:12, color:'var(--ink-3)' }}>{alertText}</div>
+        </div>
+      </div>
+
       {loading ? <LoadingCenter /> : (
-        <div className="card">
-          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{filtered.length} dossier(s)</div>
-          <DossiersTable dossiers={filtered} onSelect={setSel} />
+        <div style={{ display:'grid', gridTemplateColumns:'1.6fr 0.8fr', gap:'1rem', alignItems:'start' }}>
+          <div className="card">
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.75rem' }}>
+              <div>
+                <p className="card-title" style={{ margin:0 }}>File active</p>
+                <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>{filtered.length} dossier(s) affiché(s)</p>
+              </div>
+              <span className="badge b-info">Vue supervision</span>
+            </div>
+            <DossiersTable dossiers={filtered} onSelect={setSel} />
+          </div>
+
+          <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+            <p className="card-title" style={{ marginBottom:'.75rem' }}>Priorités rapides</p>
+            {longRunning.length === 0 ? (
+              <EmptyState icon="✅" title="Aucune priorité" body="Aucun dossier en cours ne nécessite d’attention particulière." />
+            ) : (
+              <div style={{ display:'grid', gap:'.75rem' }}>
+                {longRunning.map(d => (
+                  <div key={d.id} style={{ padding:'.75rem', borderRadius:'var(--r-md)', border:'1px solid var(--border)', background:'var(--surface-1)' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', gap:'.5rem', marginBottom:'.25rem' }}>
+                      <strong style={{ fontSize:13 }}>{d.id}</strong>
+                      <span className="badge b-warning">À surveiller</span>
+                    </div>
+                    <div style={{ fontSize:12, color:'var(--ink-3)' }}>{d.agent_saisie || '—'} • {d.numero_mtn || '—'}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

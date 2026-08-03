@@ -115,6 +115,56 @@ export async function adminRoutes(app: any): Promise<void> {
     return reply.send({ success: true, total, count: rows.length, logs: rows });
   });
 
+  // ── Reporting admin ─────────────────────────────────────────────────────
+
+  app.get('/api/admin/reporting', async (req, reply) => {
+    const q = req.query as Record<string, string | undefined>;
+    const params = {
+      debut: q.debut || undefined,
+      fin: q.fin || undefined,
+      statut: q.statut || undefined,
+      agent: q.agent || undefined,
+      search: q.search || undefined,
+      limit: 5000,
+      offset: 0,
+    };
+
+    const { rows, total } = await db.getDossiers(params);
+
+    const stats = rows.reduce((acc, dossier) => {
+      const status = dossier.statut || 'inconnu';
+      if (status in acc) acc[status as keyof typeof acc] += 1;
+      return acc;
+    }, { en_attente: 0, en_cours: 0, accepte: 0, rejete: 0, total: 0 } as Record<string, number>);
+
+    stats.total = rows.length;
+
+    const byAgent = Object.entries(
+      rows.reduce<Record<string, { total: number; accepte: number; rejete: number; en_cours: number }>>((acc, dossier) => {
+        const key = (dossier.agent_saisie || dossier.username_agent || 'inconnu').trim() || 'inconnu';
+        if (!acc[key]) {
+          acc[key] = { total: 0, accepte: 0, rejete: 0, en_cours: 0 };
+        }
+        acc[key].total += 1;
+        if (dossier.statut === 'accepte') acc[key].accepte += 1;
+        if (dossier.statut === 'rejete') acc[key].rejete += 1;
+        if (dossier.statut === 'en_cours') acc[key].en_cours += 1;
+        return acc;
+      }, {})
+    )
+      .map(([agent, values]) => ({ agent, ...values }))
+      .sort((a, b) => b.total - a.total);
+
+    return reply.send({
+      success: true,
+      total,
+      count: rows.length,
+      dossiers: rows,
+      stats,
+      byAgent,
+    });
+  });
+
   // ── Stats globales ────────────────────────────────────────────────────────
 
   app.get('/api/admin/stats', async (_req, reply) => {

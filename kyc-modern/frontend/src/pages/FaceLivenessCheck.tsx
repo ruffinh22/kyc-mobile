@@ -135,9 +135,15 @@ export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClos
     setPhase('analyzing');
     try {
       const res = await fetch(`${API_BASE}/api/public/dossiers/${encodeURIComponent(dossierId)}/liveness-session/${encodeURIComponent(sessionId)}/result`);
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Erreur résultat (${res.status})`);
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { success: false, error: text || `Erreur résultat (${res.status})` };
+      }
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || data?.message || `Erreur résultat (${res.status})`);
       }
       const successMessage = data.message || 'Vérification terminée';
       setResultMsg(successMessage);

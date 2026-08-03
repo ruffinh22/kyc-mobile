@@ -66,7 +66,8 @@ export const migration = {
     try {
       await pool.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
     } catch (error: any) {
-      if (!['42000', '23000', '1068'].includes(error?.code)) {
+      const code = error?.code;
+      if (!['42000', '23000', '1068', 'ER_MULTIPLE_PRI_KEY'].includes(code)) {
         throw error;
       }
     }
@@ -74,7 +75,8 @@ export const migration = {
     try {
       await pool.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
     } catch (error: any) {
-      if (!['42000', '23000', '1061'].includes(error?.code)) {
+      const code = error?.code;
+      if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
         throw error;
       }
     }
@@ -82,7 +84,8 @@ export const migration = {
     try {
       await pool.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
     } catch (error: any) {
-      if (!['42000', '23000', '1061'].includes(error?.code)) {
+      const code = error?.code;
+      if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
         throw error;
       }
     }
@@ -90,7 +93,8 @@ export const migration = {
     try {
       await pool.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
     } catch (error: any) {
-      if (!['42000', '23000', '1061'].includes(error?.code)) {
+      const code = error?.code;
+      if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
         throw error;
       }
     }

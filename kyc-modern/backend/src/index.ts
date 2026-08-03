@@ -17,10 +17,11 @@ import rateLimit  from '@fastify/rate-limit';
 import staticPlugin from '@fastify/static';
 import websocket from '@fastify/websocket';
 
-import { initDb, getDistributionMode, getOldestPendingDossier, getOldestAvailableAgent, updateDossier, audit } from './db';
+import { initDb, getConfig } from './db';
 import { registerRoutes } from './routes';
 
 import { startDossierTimeoutWorker } from './utils/dossier-timeout-worker';
+import { distribuerMaintenant } from './utils/distribution';
 
 const PORT     = parseInt(process.env.PORT || '3001', 10);
 const HOST     = process.env.HOST || '0.0.0.0';
@@ -179,27 +180,25 @@ async function main(): Promise<void> {
   startDossierTimeoutWorker();
 
   // ── Distribution automatique ──────────────────────────────────────────────
-  const INTERVAL  = parseInt(process.env.DISTRIBUTION_INTERVAL_MS || '2000', 10);
-  const ABANDON   = parseInt(process.env.DISTRIBUTION_ABANDON_SEC || '120', 10);
-
-  setInterval(async () => {
+  const runDistributionLoop = async () => {
     try {
-      if (await getDistributionMode() !== 'auto') return;
-      const dossier = await getOldestPendingDossier();
-      if (!dossier) return;
-      const agent = await getOldestAvailableAgent(Math.floor(Date.now() / 1000) - ABANDON);
-      if (!agent) return;
-
-      const now = Math.floor(Date.now() / 1000);
-      await updateDossier(dossier.id, {
-        statut: 'en_cours', agent_saisie: agent.matricule, assigne_a: agent.matricule,
-        assigne_le: now, heure_prise: new Date().toTimeString().slice(0, 5),
-      });
-      audit(null, 'DISTRIB_AUTO', `dossier=${dossier.id} agent=${agent.matricule}`);
+      const intervalMs = parseInt((await getConfig('distribution_interval_ms')) ?? process.env.DISTRIBUTION_INTERVAL_MS ?? '2000', 10);
+      const delay = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 2000;
+      setTimeout(async () => {
+        try {
+          await distribuerMaintenant();
+        } catch (err) {
+          app.log.warn('[DISTRIB-AUTO] %s', err instanceof Error ? err.message : String(err));
+        }
+        await runDistributionLoop();
+      }, delay);
     } catch (err) {
-      app.log.warn('[DISTRIB-AUTO] %s', err instanceof Error ? err.message : String(err));
+      app.log.warn('[DISTRIB-AUTO] impossible de charger l’intervalle depuis la config: %s', err instanceof Error ? err.message : String(err));
+      setTimeout(() => void runDistributionLoop(), 2000);
     }
-  }, INTERVAL);
+  };
+
+  await runDistributionLoop();
 }
 
 for (const signal of ['SIGTERM', 'SIGINT']) {

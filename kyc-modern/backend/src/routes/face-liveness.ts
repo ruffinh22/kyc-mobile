@@ -99,11 +99,18 @@ export async function faceLivenessRoutes(app: any): Promise<void> {
         return reply.code(404).send({ success: false, error: `Dossier introuvable : ${dossierId}` });
       }
 
-      const result = await resolveLivenessSessionForDossier(dossierId, sessionId);
+      let result;
+      try {
+        result = await resolveLivenessSessionForDossier(dossierId, sessionId);
+      } catch (err) {
+        req.log.error(err, '[LIVENESS] résultat session échoué');
+        return reply.code(502).send({
+          success: false,
+          error: err instanceof Error ? err.message : 'Erreur lors du traitement du résultat Face Liveness',
+        });
+      }
 
       if (!result.success) {
-        // Session inconnue / mismatch / erreur AWS → 409 (conflit d'état),
-        // pas 500, car ce n'est pas nécessairement une erreur serveur.
         return reply.code(409).send(result);
       }
 
@@ -117,11 +124,13 @@ export async function faceLivenessRoutes(app: any): Promise<void> {
         visage_match: result.identity?.match === 1,
         visage_motif: result.identity?.motif ?? null,
         verified: result.verified,
-        message: result.verified
-          ? `✅ Identité vérifiée — vivacité ${result.liveness_confidence}%, correspondance ${result.identity?.score}%.`
-          : result.is_live
-            ? `⚠️ Personne réelle confirmée (${result.liveness_confidence}%) mais correspondance d’identité insuffisante — vérification manuelle requise.`
-            : `⚠️ Vivacité non confirmée (statut: ${result.liveness_status}) — vérification manuelle requise.`,
+        message: result.error
+          ? `⚠️ Vérification incomplète : ${result.error}`
+          : result.verified
+            ? `✅ Identité vérifiée — vivacité ${result.liveness_confidence}%, correspondance ${result.identity?.score}%.`
+            : result.is_live
+              ? `⚠️ Personne réelle confirmée (${result.liveness_confidence}%) mais correspondance d’identité insuffisante — vérification manuelle requise.`
+              : `⚠️ Vivacité non confirmée (statut: ${result.liveness_status}) — vérification manuelle requise.`,
       });
     },
   );

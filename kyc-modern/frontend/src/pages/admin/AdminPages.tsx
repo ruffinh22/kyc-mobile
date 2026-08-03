@@ -331,10 +331,14 @@ export function AdminAudit() {
 // ─────────────────────────────────────────────────────────────────────────────
 export function AdminDistribution() {
   const modeQ  = useFetch(() => api.getDistributionMode(), []);
+  const timingQ = useFetch(() => api.getDistributionTiming(), []);
   const seuilQ = useFetch(() => api.getSeuilAlerte(), []);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
   const [seuil, setSeuil]     = useState('');
+  const [intervalMs, setIntervalMs] = useState('');
+  const [abandonSec, setAbandonSec] = useState('');
   const [saving, setSaving]   = useState(false);
+  const [timingSaving, setTimingSaving] = useState(false);
   const [err, setErr]         = useState<string|null>(null);
   const [success, setSuccess] = useState<string|null>(null);
   const [motifs, setMotifs] = useState<string[]>([]);
@@ -349,6 +353,13 @@ export function AdminDistribution() {
   useEffect(() => {
     if (motifsQ.data?.motifs) setMotifs(motifsQ.data.motifs);
   }, [motifsQ.data?.motifs]);
+
+  useEffect(() => {
+    if (timingQ.data) {
+      setIntervalMs(String(timingQ.data.interval_ms ?? ''));
+      setAbandonSec(String(timingQ.data.abandon_sec ?? ''));
+    }
+  }, [timingQ.data]);
 
   const saveMotifs = async (next: string[]) => {
     setMotifSaving(true); setMotifErr(null); setMotifSuccess(null);
@@ -410,6 +421,23 @@ export function AdminDistribution() {
     try { await api.setSeuilAlerte(n); seuilQ.refetch(); setSuccess('Seuil mis à jour.'); setSeuil(''); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Erreur'); }
     finally { setSaving(false); }
+  };
+
+  const saveTiming = async () => {
+    const interval = parseInt(intervalMs, 10);
+    const abandon = parseInt(abandonSec, 10);
+    if (isNaN(interval) || interval < 1000 || interval > 60000) { setErr('Intervalle invalide (1000-60000 ms)'); return; }
+    if (isNaN(abandon) || abandon < 30 || abandon > 1800) { setErr('Délai d’abandon invalide (30-1800 s)'); return; }
+    setTimingSaving(true); setErr(null); setSuccess(null);
+    try {
+      await api.setDistributionTiming({ interval_ms: interval, abandon_sec: abandon });
+      timingQ.refetch();
+      setSuccess('Timing de redistribution mis à jour.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Erreur');
+    } finally {
+      setTimingSaving(false);
+    }
   };
 
   // Export Excel des motifs
@@ -477,7 +505,7 @@ export function AdminDistribution() {
   return (
     <>
       <div className="page-header">
-        <div><h1 className="page-title">Configuration — Distribution</h1><p className="page-sub">Gérer le mode de distribution et les paramètres d'alerte.</p></div>
+        <div><h1 className="page-title">Configuration — Distribution</h1><p className="page-sub">Gérer le mode, le timing et les paramètres d'alerte de la distribution automatique.</p></div>
       </div>
       {err     && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
@@ -519,6 +547,30 @@ export function AdminDistribution() {
           <div className="form-row" style={{ alignItems:'flex-end' }}>
             <div className="field" style={{ flex:1 }}><label>Nouveau seuil (min)</label><input type="number" min="1" max="1440" value={seuil} onChange={e => setSeuil(e.target.value)} placeholder="Ex. 10" /></div>
             <button className="btn btn-primary" disabled={saving || !seuil} onClick={saveSeuil}>Enregistrer</button>
+          </div>
+        </div>
+
+        {/* Widget Timing de Redistribution */}
+        <div className="card" style={{ background:'linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%)', border:'1px solid var(--border)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'1rem', marginBottom:'1rem' }}>
+            <div style={{ width:48, height:48, borderRadius:'12px', background:'var(--info-soft)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>
+              🔁
+            </div>
+            <div>
+              <p className="card-title" style={{ margin:0 }}>Timing de redistribution</p>
+              <p style={{ fontSize:12, color:'var(--ink-3)', margin:0 }}>Cycle et abandon</p>
+            </div>
+          </div>
+          <div className="form-row" style={{ flexDirection:'column', alignItems:'stretch', gap:'.75rem' }}>
+            <div className="field">
+              <label>Intervalle de vérification (ms)</label>
+              <input type="number" min="1000" max="60000" value={intervalMs} onChange={e => setIntervalMs(e.target.value)} placeholder="2000" />
+            </div>
+            <div className="field">
+              <label>Délai d’abandon avant redistribution (s)</label>
+              <input type="number" min="30" max="1800" value={abandonSec} onChange={e => setAbandonSec(e.target.value)} placeholder="120" />
+            </div>
+            <button className="btn btn-primary" disabled={timingSaving} onClick={saveTiming}>{timingSaving ? 'Enregistrement…' : 'Enregistrer'}</button>
           </div>
         </div>
 

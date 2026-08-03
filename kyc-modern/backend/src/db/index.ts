@@ -499,6 +499,7 @@ export async function updateDossier(
     'numero_mtn', 'wa_agent', 'username_agent', 'fonction_agent', 'zone_agent',
     'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live',
     'score_visage', 'visage_match', 'visage_motif', 'visage_verifie_le',
+    'liveness_status', 'liveness_confidence', 'liveness_verifie_le',
     'nom_titulaire', 'prenom_titulaire', 'date_naissance', 'lieu_naissance',
     'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
     'sexe', 'nationalite', 'profession', 'country', 'ocr_overrides',

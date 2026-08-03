@@ -274,37 +274,44 @@ export async function resolveLivenessSessionForDossier(
   // ── Identité : comparer l'image de référence (extraite par AWS depuis la
   //    session vidéo — non falsifiable par le client) à la photo recto CNI ──
   let identity: FaceCompareResult | null = null;
+  let comparisonError: string | null = null;
   const referenceBytes = awsResult.ReferenceImage?.Bytes;
 
   if (referenceBytes) {
     const referenceBuffer = Buffer.isBuffer(referenceBytes) ? referenceBytes : Buffer.from(referenceBytes);
 
-    const dossier = await db.getDossierById(dossierId);
-    if (dossier?.photo_recto) {
-      const base = path.resolve(UPLOAD_CNI) + path.sep;
-      const rectoFull = path.resolve(UPLOAD_CNI, dossier.photo_recto.trim());
-      if (rectoFull.startsWith(base) && fs.existsSync(rectoFull)) {
-        const rectoBuffer = await fsp.readFile(rectoFull);
-        identity = await compareWithRekognition(referenceBuffer, rectoBuffer);
-      } else {
-        identity = { score: 0, match: 0, motif: 'photo_recto_introuvable_disque' };
-      }
-    } else {
-      identity = { score: 0, match: 0, motif: 'photo_recto_manquante' };
-    }
-
-    // Sauvegarder l'image de référence AWS comme nouvelle photo_live —
-    // c'est une image dont la provenance est garantie par AWS (extraite
-    // pendant la session live), contrairement à un upload libre du client.
     try {
-      const date = new Date().toLocaleDateString('en-CA');
-      const destDir = path.join(UPLOAD_CNI, date);
-      await fsp.mkdir(destDir, { recursive: true });
-      const filename = `${dossierId}_live_${crypto.randomBytes(4).toString('hex')}.jpg`;
-      await fsp.writeFile(path.join(destDir, filename), referenceBuffer, { mode: 0o644 });
-      await db.updateDossier(dossierId, { photo_live: `${date}/${filename}` });
+      const dossier = await db.getDossierById(dossierId);
+      if (dossier?.photo_recto) {
+        const base = path.resolve(UPLOAD_CNI) + path.sep;
+        const rectoFull = path.resolve(UPLOAD_CNI, dossier.photo_recto.trim());
+        if (rectoFull.startsWith(base) && fs.existsSync(rectoFull)) {
+          const rectoBuffer = await fsp.readFile(rectoFull);
+          identity = await compareWithRekognition(referenceBuffer, rectoBuffer);
+        } else {
+          identity = { score: 0, match: 0, motif: 'photo_recto_introuvable_disque' };
+        }
+      } else {
+        identity = { score: 0, match: 0, motif: 'photo_recto_manquante' };
+      }
+
+      // Sauvegarder l'image de référence AWS comme nouvelle photo_live —
+      // c'est une image dont la provenance est garantie par AWS (extraite
+      // pendant la session live), contrairement à un upload libre du client.
+      try {
+        const date = new Date().toLocaleDateString('en-CA');
+        const destDir = path.join(UPLOAD_CNI, date);
+        await fsp.mkdir(destDir, { recursive: true });
+        const filename = `${dossierId}_live_${crypto.randomBytes(4).toString('hex')}.jpg`;
+        await fsp.writeFile(path.join(destDir, filename), referenceBuffer, { mode: 0o644 });
+        await db.updateDossier(dossierId, { photo_live: `${date}/${filename}` });
+      } catch (err) {
+        console.error('[LIVENESS] échec sauvegarde image de référence', err);
+      }
     } catch (err) {
-      console.error('[LIVENESS] échec sauvegarde image de référence', err);
+      comparisonError = err instanceof Error ? err.message : 'Erreur de comparaison d’identité';
+      console.error('[LIVENESS] échec comparaison identité', err);
+      identity = { score: 0, match: 0, motif: comparisonError };
     }
   } else {
     identity = { score: 0, match: 0, motif: 'image_reference_absente' };
@@ -335,5 +342,6 @@ export async function resolveLivenessSessionForDossier(
     is_live: isLive,
     identity,
     verified,
+    error: comparisonError ?? undefined,
   };
 }

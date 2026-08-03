@@ -4,10 +4,57 @@ import { StatutBadge, Modal, EmptyState } from './ui';
 import { photoUrlWithToken } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
+function parseDossierTime(value: string | null): number | null {
+  if (!value) return null;
+  const candidates = [value, value.replace(' ', 'T')];
+  for (const candidate of candidates) {
+    const parsed = Date.parse(candidate);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+function formatProcessingDuration(dossier: Dossier, now = Date.now()): string {
+  const startCandidate = dossier.assigne_le && dossier.assigne_le > 0
+    ? dossier.assigne_le * 1000
+    : parseDossierTime(dossier.heure_prise) ?? (dossier.created_at ? dossier.created_at * 1000 : null);
+
+  if (!startCandidate) return '—';
+
+  const end = dossier.statut === 'en_cours' ? now : parseDossierTime(dossier.heure_cloture);
+  if (!end || end < startCandidate) return '—';
+
+  const totalSeconds = Math.floor((end - startCandidate) / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  if (hours < 24) {
+    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}j ${remHours}h` : `${days}j`;
+}
+
 // ── Dossiers Table ─────────────────────────────────────────────────────────────
 export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate = true, rowActions }: {
   dossiers: Dossier[]; onSelect(d: Dossier): void; showAgent?: boolean; showDate?: boolean; rowActions?: (dossier: Dossier) => React.ReactNode;
 }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   if (!dossiers.length) return <EmptyState icon="📭" title="Aucun dossier" body="Aucun résultat ne correspond aux filtres." />;
 
   const counts = dossiers.reduce((acc, d) => {
@@ -40,6 +87,7 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
               {showAgent && <th>Agent</th>}
               {showDate  && <th>Date</th>}
               <th>Réception</th>
+              <th>Temps</th>
               <th>Statut</th>
               {rowActions && <th>Actions</th>}
             </tr>
@@ -57,6 +105,7 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
                 {showAgent && <td><span className="dossier-cell-value">{d.agent_saisie || '—'}</span></td>}
                 {showDate  && <td><span className="dossier-cell-value">{d.date || '—'}</span></td>}
                 <td><span className="dossier-cell-value">{d.heure_reception || '—'}</span></td>
+                <td><span className="dossier-cell-value">{formatProcessingDuration(d, now)}</span></td>
                 <td><StatutBadge statut={d.statut} /></td>
                 {rowActions && <td className="dossier-actions-cell" onClick={e => e.stopPropagation()}>{rowActions(d)}</td>}
               </tr>
@@ -75,6 +124,12 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
   const { user } = useAuth();
   const [errPhoto, setErrPhoto] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<{ imgs: string[]; idx: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
   useEffect(() => {
     if (!preview) return;
     const h = (e: KeyboardEvent) => {
@@ -109,6 +164,7 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
           <div className="detail-item"><span className="detail-label">Agent traitant</span><span className="detail-value">{dossier.agent_saisie || '—'}</span></div>
           <div className="detail-item"><span className="detail-label">Réception</span><span className="detail-value">{dossier.heure_reception || '—'}</span></div>
           <div className="detail-item"><span className="detail-label">Prise en charge</span><span className="detail-value">{dossier.heure_prise || '—'}</span></div>
+          <div className="detail-item"><span className="detail-label">Temps de traitement</span><span className="detail-value">{formatProcessingDuration(dossier, now)}</span></div>
           <div className="detail-item"><span className="detail-label">Clôture</span><span className="detail-value">{dossier.heure_cloture || '—'}</span></div>
           {dossier.resultat_crm && <div className="detail-item"><span className="detail-label">Résultat CRM</span><span className="detail-value">{dossier.resultat_crm}</span></div>}
           {dossier.raison_rejet && <div className="detail-item" style={{ gridColumn: '1/-1' }}><span className="detail-label">Raison rejet</span><span className="detail-value" style={{ color: 'var(--danger)' }}>{dossier.raison_rejet}</span></div>}

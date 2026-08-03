@@ -398,8 +398,11 @@ export async function getDossiers(params: {
     }
   } else if (params.scope === 'queue') {
     if (params.agent) {
-      where += " AND (statut='en_attente' OR (statut='en_cours' AND agent_saisie=?))";
+      // Pour un agent, la vue de file d’attente ne doit montrer que les dossiers
+      // qui lui ont été attribués automatiquement ou qu’il a déjà traités.
+      where += " AND agent_saisie=?";
       p.push(params.agent);
+      where += " AND statut IN ('en_cours','accepte','rejete')";
     } else {
       where += " AND statut='en_attente'";
     }

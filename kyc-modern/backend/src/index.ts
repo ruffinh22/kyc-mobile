@@ -106,8 +106,22 @@ async function main(): Promise<void> {
       // service n'est pas explicitement redémarré — c'est ce qui causait des
       // 404 fantômes sur /apk/app-release.apk malgré un fichier bien présent.
             app.get('/apk/app-release.apk', async (_req, reply) => {
-              const filePath = path.join(apkReleaseDir, chosenApk);
               try {
+                const entries = fs.readdirSync(apkReleaseDir).filter((f) => f.endsWith('.apk'));
+                if (entries.length === 0) {
+                  app.log.warn('[APK] aucun fichier .apk trouvé dans', apkReleaseDir);
+                  return reply.code(404).send({ error: 'APK non trouvé' });
+                }
+
+                // choisir le plus récent par date de modification
+                const sorted = entries.sort((a, b) => {
+                  const sa = fs.statSync(path.join(apkReleaseDir, a)).mtimeMs;
+                  const sb = fs.statSync(path.join(apkReleaseDir, b)).mtimeMs;
+                  return sb - sa;
+                });
+                const chosenApk = sorted[0];
+                const filePath = path.join(apkReleaseDir, chosenApk);
+
                 const stat = fs.statSync(filePath);
                 app.log.info('[APK] serving', filePath, stat.size);
                 const stream = fs.createReadStream(filePath);
@@ -129,7 +143,7 @@ async function main(): Promise<void> {
                 return reply.code(500).send({ error: 'APK non lisible' });
               }
             });
-            app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk ->', chosenApk);
+            app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk');
     } catch (err) {
       app.log.warn('[STATIC] impossible de servir APK release', err instanceof Error ? err.message : String(err));
     }

@@ -100,32 +100,38 @@ async function main(): Promise<void> {
       await app.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', decorateReply: false, maxAge: 0 });
       app.log.info('[STATIC] APK release servie depuis', apkReleaseDir);
 
-      const apkFiles = fs.readdirSync(apkReleaseDir)
-        .filter(name => name.toLowerCase().endsWith('.apk'))
-        .map((name) => ({
-          name,
-          mtime: fs.statSync(path.join(apkReleaseDir, name)).mtimeMs,
-        }))
-        .sort((a, b) => b.mtime - a.mtime)
-        .map((file) => file.name);
+      // Route dynamique : on relit le dossier à CHAQUE requête plutôt que de
+      // figer la liste des .apk au démarrage. Sans ça, un nouveau build généré
+      // après le démarrage du process (systemd) reste invisible tant que le
+      // service n'est pas explicitement redémarré — c'est ce qui causait des
+      // 404 fantômes sur /apk/app-release.apk malgré un fichier bien présent.
+      app.get('/apk/app-release.apk', async (_req, reply) => {
+        let apkFiles: string[] = [];
+        try {
+          apkFiles = fs.readdirSync(apkReleaseDir)
+            .filter(name => name.toLowerCase().endsWith('.apk'))
+            .map((name) => ({ name, mtime: fs.statSync(path.join(apkReleaseDir, name)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime)
+            .map((file) => file.name);
+        } catch (err) {
+          app.log.warn('[STATIC] impossible de lire apkReleaseDir', err instanceof Error ? err.message : String(err));
+        }
 
-      if (apkFiles.length > 0) {
-        const chosenApk = apkFiles[0];
-        app.get('/apk/app-release.apk', async (_req, reply) => {
-          const filePath = path.join(apkReleaseDir, chosenApk);
-          const stream = fs.createReadStream(filePath);
-          reply
-            .header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            .header('Pragma', 'no-cache')
-            .header('Expires', '0')
-            .header('Content-Type', 'application/vnd.android.package-archive')
-            .header('Content-Disposition', `attachment; filename="app-release.apk"`)
-            .send(stream);
-        });
-        app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk ->', chosenApk);
-      } else {
-        app.log.warn('[STATIC] aucun APK trouvé dans', apkReleaseDir);
-      }
+        if (apkFiles.length === 0) {
+          return reply.code(404).send({ error: 'Aucun APK release disponible' });
+        }
+
+        const filePath = path.join(apkReleaseDir, apkFiles[0]);
+        const stream = fs.createReadStream(filePath);
+        reply
+          .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+          .header('Pragma', 'no-cache')
+          .header('Expires', '0')
+          .header('Content-Type', 'application/vnd.android.package-archive')
+          .header('Content-Disposition', `attachment; filename="app-release.apk"`)
+          .send(stream);
+      });
+      app.log.info('[STATIC] route dynamique /apk/app-release.apk enregistrée');
     } catch (err) {
       app.log.warn('[STATIC] impossible de servir APK release', err instanceof Error ? err.message : String(err));
     }

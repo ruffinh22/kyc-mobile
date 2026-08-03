@@ -210,6 +210,8 @@ export async function getPresenceResume() { return apiFetch<PresenceResume & { s
 // ── Config ────────────────────────────────────────────────────────────────────
 export async function getDistributionMode() { return apiFetch<{ success: boolean; mode: string }>('/api/config/distribution-mode'); }
 export async function setDistributionMode(mode: string) { return apiFetch<{ success: boolean }>('/api/config/distribution-mode', { method: 'PUT', json: { mode } }); }
+export async function getDistributionTiming() { return apiFetch<{ success: boolean; interval_ms: number; abandon_sec: number }>('/api/config/distribution-timing'); }
+export async function setDistributionTiming(data: { interval_ms: number; abandon_sec: number }) { return apiFetch<{ success: boolean; interval_ms: number; abandon_sec: number }>('/api/config/distribution-timing', { method: 'PUT', json: data }); }
 export async function getRejectionMotifs() { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs'); }
 export async function setRejectionMotifs(motifs: string[]) { return apiFetch<{ success: boolean; motifs: string[] }>('/api/config/rejection-motifs', { method: 'PUT', json: { motifs } }); }
 export async function getSeuilAlerte() { return apiFetch<{ success: boolean; seuil: number }>('/api/config/seuil-alerte'); }

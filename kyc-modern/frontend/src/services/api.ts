@@ -22,6 +22,15 @@ function resolveApiBase(): string {
 const BASE = resolveApiBase();
 let _token: string | null = null;
 
+function getStoredToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const cookieToken = (document.cookie || '').split(';').map(s => s.trim()).find((c) => c.startsWith('kyc_token='));
+  if (cookieToken) {
+    return decodeURIComponent(cookieToken.split('=')[1] || '');
+  }
+  return localStorage.getItem('kyc4-token');
+}
+
 export function setToken(t: string | null) {
   _token = t;
   if (typeof document !== 'undefined') {
@@ -32,7 +41,14 @@ export function setToken(t: string | null) {
     }
   }
 }
-export function getToken() { return _token; }
+export function getToken() {
+  if (_token) return _token;
+  const stored = getStoredToken();
+  if (stored) {
+    _token = stored;
+  }
+  return _token;
+}
 
 export class ApiError extends Error {
   constructor(public message: string, public status: number, public details?: string[]) {
@@ -43,11 +59,14 @@ export class ApiError extends Error {
 export async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = opts;
   const isForm = rest.body instanceof FormData;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    ...(rest.headers as Record<string, string> || {}),
+  };
   if (json !== undefined && !isForm) headers['Content-Type'] = 'application/json';
-  if (_token) {
-    headers['Authorization'] = `Bearer ${_token}`;
-    console.log('[apiFetch] Token présent, longueur:', _token.length);
+  const token = getToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+    console.log('[apiFetch] Token présent, longueur:', token.length);
   } else {
     console.warn('[apiFetch] Aucun token disponible');
   }

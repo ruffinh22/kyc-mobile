@@ -12,9 +12,22 @@ interface FaceLivenessCheckProps {
 }
 
 const REGION = import.meta.env.VITE_AWS_REGION as string;
+const pageQueryApiBase = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('apiBase')?.trim() || null;
+  } catch {
+    return null;
+  }
+})();
+const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const runtimeOrigin = window.location.origin;
 const API_BASE = (() => {
-  const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
-  const runtimeOrigin = window.location.origin;
+  if (pageQueryApiBase) {
+    const base = pageQueryApiBase.replace(/\/$/, '');
+    console.warn('[FaceLivenessCheck] apiBase override from query', base);
+    return base;
+  }
   if (!envUrl) return runtimeOrigin;
   if (envUrl.startsWith('http://localhost') || envUrl.startsWith('https://localhost')) {
     const host = window.location.hostname;
@@ -22,7 +35,7 @@ const API_BASE = (() => {
       return runtimeOrigin;
     }
   }
-  return envUrl;
+  return envUrl.replace(/\/$/, '');
 })();
 const IDENTITY_POOL_ID = import.meta.env.VITE_COGNITO_IDENTITY_POOL_ID as string;
 
@@ -104,12 +117,15 @@ export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClos
 
     const init = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/public/dossiers/${encodeURIComponent(dossierId)}/liveness-session`, {
+        const url = `${API_BASE}/api/public/dossiers/${encodeURIComponent(dossierId)}/liveness-session`;
+        console.warn('[FaceLivenessCheck] createSession url', url);
+        const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         });
         const data = await res.json();
+        console.warn('[FaceLivenessCheck] createSession response', res.status, data);
         if (!res.ok || !data.success) {
           throw new Error(data.error || `Erreur session (${res.status})`);
         }
@@ -131,39 +147,41 @@ export function FaceLivenessCheck({ dossierId: propDossierId, onComplete, onClos
   }, [dossierId, preferredCamera]);
 
   const handleAnalysisComplete = useCallback(async () => {
-    if (!dossierId || !sessionId) return;
-    setPhase('analyzing');
-    try {
-      const res = await fetch(`${API_BASE}/api/public/dossiers/${encodeURIComponent(dossierId)}/liveness-session/${encodeURIComponent(sessionId)}/result`);
-      const text = await res.text();
-      let data: any = null;
+      if (!dossierId || !sessionId) return;
+      setPhase('analyzing');
       try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = { success: false, error: text || `Erreur résultat (${res.status})` };
-      }
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || data?.message || `Erreur résultat (${res.status})`);
-      }
-      const successMessage = data.message || 'Vérification terminée';
-      setResultMsg(successMessage);
-      setPhase('done');
-      onComplete?.(data);
-      notifyNative({ type: 'liveness-result', ...data });
+        const url = `${API_BASE}/api/public/dossiers/${encodeURIComponent(dossierId)}/liveness-session/${encodeURIComponent(sessionId)}/result`;
+        console.warn('[FaceLivenessCheck] result url', url);
+        const res = await fetch(url);
+        const text = await res.text();
+        let data: any = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = { success: false, error: text || `Erreur résultat (${res.status})` };
+        }
+        console.warn('[FaceLivenessCheck] result response', res.status, data);
+        if (!res.ok || !data?.success) {
+          throw new Error(data?.error || data?.message || `Erreur résultat (${res.status})`);
+        }
+        const successMessage = data.message || 'Vérification terminée';
+        setResultMsg(successMessage);
+        setPhase('done');
+        onComplete?.(data);
+        notifyNative({ type: 'liveness-result', ...data });
 
-      if (!compact && !onClose) {
-        window.setTimeout(() => {
-          window.location.assign('/acquisition');
-        }, 1400);
+        if (!compact && !onClose) {
+          window.setTimeout(() => {
+            window.location.assign('/acquisition');
+          }, 1400);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Erreur de vérification';
+        setErrorMsg(message);
+        setPhase('error');
+        notifyNative({ type: 'liveness-error', error: message });
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Erreur de vérification';
-      setErrorMsg(message);
-      setPhase('error');
-      notifyNative({ type: 'liveness-error', error: message });
-    }
-  }, [compact, dossierId, onClose, sessionId]);
-
+    }, [compact, dossierId, onClose, sessionId]);
   const handleError = useCallback((err: { state: string; error: Error }) => {
     const message = err?.error?.message || 'Erreur du composant de vivacité';
     setErrorMsg(message);

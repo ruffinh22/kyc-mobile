@@ -123,9 +123,11 @@ const s = StyleSheet.create({
   },
   actionIcon: {
     fontSize: T.base,
+    lineHeight: T.base,
     color: '#fff',
     fontWeight: '800',
     includeFontPadding: false,
+    textAlignVertical: 'center',
     textAlign: 'center',
   },
   actionBtnPlaceholder: { width: 38, height: 38 },

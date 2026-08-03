@@ -94,22 +94,32 @@ async function main(): Promise<void> {
   const apkReleaseDir = path.resolve(process.cwd(), '../../android/app/build/outputs/apk/release');
   if (fs.existsSync(apkReleaseDir)) {
     try {
-      await app.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', decorateReply: false });
+      await app.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', decorateReply: false, maxAge: 0 });
       app.log.info('[STATIC] APK release servie depuis', apkReleaseDir);
 
       const apkAlias = path.join(apkReleaseDir, 'app-release.apk');
       if (!fs.existsSync(apkAlias)) {
-        const apkFiles = fs.readdirSync(apkReleaseDir).filter(name => name.toLowerCase().endsWith('.apk'));
+        const apkFiles = fs.readdirSync(apkReleaseDir)
+          .filter(name => name.toLowerCase().endsWith('.apk'))
+          .map((name) => ({
+            name,
+            mtime: fs.statSync(path.join(apkReleaseDir, name)).mtimeMs,
+          }))
+          .sort((a, b) => b.mtime - a.mtime)
+          .map((file) => file.name);
+
         if (apkFiles.length > 0) {
           const chosenApk = apkFiles[0];
           app.get('/apk/app-release.apk', async (_req, reply) => {
             const filePath = path.join(apkReleaseDir, chosenApk);
             const stream = fs.createReadStream(filePath);
             reply
+              .header('Cache-Control', 'no-cache, no-store, must-revalidate')
+              .header('Pragma', 'no-cache')
+              .header('Expires', '0')
               .header('Content-Type', 'application/vnd.android.package-archive')
               .header('Content-Disposition', `attachment; filename="app-release.apk"`)
               .send(stream);
-            return reply;
           });
           app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk ->', chosenApk);
         }

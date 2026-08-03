@@ -23,10 +23,48 @@ import {
   ActivityIndicator,
   Animated,
   Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import WebView from 'react-native-webview';
 import { useAgentStore } from '../store/callStore';
 import { C, R, T } from '../theme/tokens';
+
+// ── Permission caméra (Android runtime) ────────────────────────────────────
+// La WebView ne peut relayer l'accès caméra à `getUserMedia()` que si l'appli
+// détient elle-même la permission OS. Sans elle, `onPermissionRequest` ne
+// sert à rien : Android refuse la requête avant même qu'on puisse l'accorder.
+async function ensureAndroidCameraPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const already = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+    if (already) return true;
+    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
+      title: 'Accès caméra requis',
+      message: 'La vérification faciale a besoin d’accéder à la caméra pour comparer ton visage à ta pièce d’identité.',
+      buttonPositive: 'Autoriser',
+      buttonNegative: 'Refuser',
+    });
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
+}
+
+// Forme minimale et volontairement souple de l'objet transmis par
+// `onPermissionRequest` (Android). Selon la version de react-native-webview,
+// `resources`/`grant`/`deny` se trouvent soit à la racine, soit sous
+// `nativeEvent` — on gère les deux pour éviter une régression au prochain
+// upgrade de la lib.
+type WebViewPermissionRequestLike = {
+  resources?: string[];
+  grant?: (resources: string[]) => void;
+  deny?: () => void;
+  nativeEvent?: {
+    resources: string[];
+    grant: (resources: string[]) => void;
+    deny: () => void;
+  };
+};
 
 type FaceVerifyParams = {
   dossierId: string;
@@ -69,8 +107,45 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
   const [message, setMessage] = useState<string>('Préparation de la vérification…');
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [cameraReady, setCameraReady] = useState(Platform.OS !== 'android');
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Demande la permission caméra OS avant même de monter la WebView.
+  // Sans ça, `onPermissionRequest` refusera systématiquement sur Android,
+  // ce qui fait échouer `getUserMedia()` côté page Liveness et déclenche
+  // un faux "refus" de la vérification faciale.
+  React.useEffect(() => {
+    let cancelled = false;
+    ensureAndroidCameraPermission().then((granted) => {
+      if (cancelled) return;
+      if (!granted) {
+        setError('Accès caméra refusé. Autorise la caméra dans les réglages de l’application pour continuer.');
+        setStatus('error');
+        return;
+      }
+      setCameraReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Accorde la permission caméra demandée par la page web à l'intérieur de
+  // la WebView (Android — WebChromeClient.onPermissionRequest). Sans ce
+  // handler, react-native-webview refuse la requête par défaut.
+  const handlePermissionRequest = useCallback((event: WebViewPermissionRequestLike) => {
+    const target = event.nativeEvent ?? event;
+    const { resources, grant, deny } = target as {
+      resources: string[];
+      grant: (resources: string[]) => void;
+      deny: () => void;
+    };
+    if (!resources || !grant) return;
+    const canGrant = resources.every((r) =>
+      r.endsWith('VIDEO_CAPTURE') || r.endsWith('AUDIO_CAPTURE'),
+    );
+    if (canGrant) grant(resources);
+    else deny?.();
+  }, []);
 
   const shake = useCallback(() => {
     Animated.sequence([
@@ -108,13 +183,22 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
     if (preferredCamera === 'front' || preferredCamera === 'back') {
       query.push(`preferredCamera=${encodeURIComponent(preferredCamera)}`);
     }
+    query.push(`apiBase=${encodeURIComponent(baseServerUrl)}`);
 
-    return `${baseServerUrl}/liveness-check?${query.join('&')}`;
+    const url = `${baseServerUrl}/liveness-check?${query.join('&')}`;
+    console.warn('[FaceVerify] livenessUrl', url);
+    return url;
   }, [baseServerUrl, dossierId, preferredCamera]);
 
   const handleWebMessage = useCallback((event: any) => {
     try {
       const payload = JSON.parse(event.nativeEvent.data);
+      if (payload?.type === 'console') {
+        if (payload.level === 'error') console.error('[FaceVerify][WebView]', ...payload.args);
+        else if (payload.level === 'warn') console.warn('[FaceVerify][WebView]', ...payload.args);
+        else console.log('[FaceVerify][WebView]', ...payload.args);
+        return;
+      }
       if (payload?.type === 'liveness-result') {
         setMessage(payload.message || 'Vérification terminée');
         if (payload.success) {
@@ -138,6 +222,32 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
       shake();
     }
   }, [navigation, shake]);
+
+  const injectedJavaScript = useMemo(() => {
+    return `
+      (function() {
+        const send = (level, args) => {
+          try {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'console', level, args }));
+          } catch (e) {}
+        };
+        const wrap = (fn, level) => function() {
+          try { send(level, Array.from(arguments)); } catch (e) {}
+          return fn.apply(this, arguments);
+        };
+        console.error = wrap(console.error, 'error');
+        console.warn = wrap(console.warn, 'warn');
+        console.log = wrap(console.log, 'log');
+        window.addEventListener('error', function(event) {
+          send('error', [event.message, event.filename, event.lineno, event.colno, (event.error && event.error.stack) || '']);
+        });
+        window.addEventListener('unhandledrejection', function(event) {
+          send('error', ['Unhandled promise rejection', event.reason && event.reason.message ? event.reason.message : event.reason, (event.reason && event.reason.stack) || '']);
+        });
+      })();
+      true;
+    `;
+  }, []);
 
   const handleWebError = useCallback((syntheticEvent: any) => {
     const nativeEvent = syntheticEvent.nativeEvent;
@@ -265,19 +375,39 @@ export function FaceVerifyScreen({ route, navigation }: FaceVerifyScreenProps) {
       </View>
 
       <View style={s.webviewCard}>
-        <WebView
-          key={reloadKey}
-          source={{ uri: livenessUrl }}
-          style={s.webview}
-          onLoadStart={() => { setStatus('loading'); setMessage('Connexion à la vérification…'); }}
-          onLoadEnd={() => setStatus((prev) => (prev === 'loading' ? 'ready' : prev))}
-          onMessage={handleWebMessage}
-          onError={handleWebError}
-          javaScriptEnabled
-          domStorageEnabled
-          startInLoadingState
-        />
-        {status === 'loading' && (
+        {cameraReady ? (
+          <WebView
+            key={reloadKey}
+            source={{ uri: livenessUrl }}
+            style={s.webview}
+            onLoadStart={() => { setStatus('loading'); setMessage('Connexion à la vérification…'); }}
+            onLoadEnd={() => setStatus((prev) => (prev === 'loading' ? 'ready' : prev))}
+            onMessage={handleWebMessage}
+            onError={handleWebError}
+            injectedJavaScript={injectedJavaScript}
+            javaScriptEnabled
+            domStorageEnabled
+            startInLoadingState
+            // ── Accès caméra ────────────────────────────────────────────
+            // Android : autorise explicitement la requête `getUserMedia()`
+            // émise par la page Liveness (sans quoi elle est refusée par
+            // défaut par le WebChromeClient natif).
+            onPermissionRequest={handlePermissionRequest}
+            // iOS (WKWebView ≥ 14.3) : relaie l'autorisation caméra au
+            // contenu web au lieu de la bloquer silencieusement.
+            cameraPermissionGrantType="grant"
+            allowsInlineMediaPlayback
+            mediaPlaybackRequiresUserAction={false}
+          />
+        ) : (
+          <View style={s.loadingOverlay}>
+            <View style={s.loadingRing}>
+              <ActivityIndicator size="large" color={C.yellow} />
+            </View>
+            <Text style={s.loadingText}>Demande d’accès à la caméra…</Text>
+          </View>
+        )}
+        {cameraReady && status === 'loading' && (
           <View style={s.loadingOverlay}>
             <View style={s.loadingRing}>
               <ActivityIndicator size="large" color={C.yellow} />
@@ -456,7 +586,7 @@ const s = StyleSheet.create({
     paddingVertical: 15,
     alignItems: 'center',
     shadowColor: C.shadowYellow, shadowOpacity: 0.3, shadowRadius: 14, elevation: 8,
-    marginTop: 22,
+    marginTop: 22, 
   },
   primaryBtnTxt: { fontSize: T.base, fontWeight: '800', color: C.blue },
   secondaryBtn: {

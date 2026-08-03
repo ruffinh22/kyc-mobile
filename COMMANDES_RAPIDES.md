@@ -28,7 +28,9 @@ cd ~/kyc-mobile && npm run build:android
 cd ~/kyc-mobile/android && ./gradlew assembleRelease
 ```
 
-**Résultat:** `~/kyc-mobile/android/app/build/outputs/apk/release/app-release.apk`
+**Résultat:** `~/kyc-mobile/android/app/build/outputs/apk/release/kyc-mobile-1.0.0-release-arm64-v8a.apk`
+
+> Si la build utilise un split ABI, le nom peut varier selon l'architecture : `kyc-mobile-<version>-release-<abi>.apk`.
 
 ---
 
@@ -36,14 +38,16 @@ cd ~/kyc-mobile/android && ./gradlew assembleRelease
 
 ```bash
 # Installer
-adb install ~/kyc-mobile/android/app/build/outputs/apk/release/app-release.apk
+adb install ~/kyc-mobile/android/app/build/outputs/apk/release/kyc-mobile-1.0.0-release-arm64-v8a.apk
 
 # Réinstaller (remplace)
-adb install -r ~/kyc-mobile/android/app/build/outputs/apk/release/app-release.apk
+adb install -r ~/kyc-mobile/android/app/build/outputs/apk/release/kyc-mobile-1.0.0-release-arm64-v8a.apk
 
 # Supprimer complètement
 adb uninstall com.kycmobile
 ```
+
+> Ajustez le nom de fichier APK si votre build génère un autre ABI (`arm64-v8a`, `armeabi-v7a`, etc.).
 
 ---
 
@@ -137,7 +141,7 @@ adb uninstall com.kycmobile && \
 cd ~/kyc-mobile && \
 ./gradlew clean && \
 npm run build:android && \
-adb install ~/kyc-mobile/android/app/build/outputs/apk/release/app-release.apk
+adb install ~/kyc-mobile/android/app/build/outputs/apk/release/kyc-mobile-1.0.0-release-arm64-v8a.apk
 ```
 
 ---
@@ -217,7 +221,7 @@ adb logcat | grep -E "KYC|health|WebSocket"
 │   │   ├── release.keystore      ← Clé de signature
 │   │   └── build/outputs/apk/
 │   │       └── release/
-│   │           └── app-release.apk  ← APK compilé ✓
+│   │           └── kyc-mobile-1.0.0-release-arm64-v8a.apk  ← APK compilé ✓
 │   └── gradlew                   ← Build tool
 ├── src/
 │   ├── screens/LoginScreen.tsx   ← Support multi-pays ✓

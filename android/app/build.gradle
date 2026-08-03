@@ -94,7 +94,12 @@ android.applicationVariants.all { variant ->
 
         def versionName = variant.versionName
         def buildType = variant.buildType.name
-        output.outputFileName = "kyc-mobile-${versionName}-${buildType}-${abiName}.apk"
+        if (buildType == 'debug') {
+            // Keep the default RN CLI install pattern for `npx react-native run-android`
+            output.outputFileName = "app-${abiName}-${buildType}.apk"
+        } else {
+            output.outputFileName = "kyc-mobile-${versionName}-${buildType}-${abiName}.apk"
+        }
     }
 }
 

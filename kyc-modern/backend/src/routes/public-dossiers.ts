@@ -883,6 +883,39 @@ export async function publicDossierRoutes(app: any): Promise<void> {
   });
 
   // ==========================================================================
+  // POST /api/public/dossiers/:id/reprendre-face-verify
+  // ==========================================================================
+  app.post('/api/public/dossiers/:id/reprendre-face-verify', async (req: FastifyRequest, reply: any) => {
+    const params = req.params as { id: string };
+    const q = req.query as Record<string, string>;
+    const waAgent = String(q.wa_agent ?? '').replace(/\D/g, '');
+    if (!waAgent || waAgent.length < 8) {
+      return reply.code(400).send({ error: 'wa_agent requis (8+ chiffres)' });
+    }
+
+    const d = await db.getDossierById(params.id);
+    if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
+    const dossierWa = String(d.wa_agent ?? '').replace(/\D/g, '');
+    if (!dossierWa || dossierWa !== waAgent) {
+      return reply.code(403).send({ error: 'Dossier non associé à ce WA' });
+    }
+
+    await db.updateDossier(params.id, {
+      statut: 'en_cours',
+      acquisition_status: 'face_verify_retry',
+      flow_step: 4,
+      score_visage: null,
+      visage_match: null,
+      visage_motif: null,
+      visage_verifie_le: null,
+      raison_rejet: null,
+    });
+
+    db.audit(null, 'PUBLIC_DOSSIER_FACE_VERIFY_REPRISE', `id=${params.id} wa_agent=${waAgent}`, req.ip);
+    return reply.send({ success: true, message: 'La vérification faciale peut être relancée.' });
+  });
+
+  // ==========================================================================
   // GET /api/public/mon-tableau?wa_agent=
   // ==========================================================================
   app.get('/api/public/mon-tableau', async (req: FastifyRequest, reply: any) => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, Pressable,
   ActivityIndicator, StatusBar, SafeAreaView, RefreshControl, Modal,
   TextInput, Animated, Easing, ScrollView,
 } from 'react-native';
@@ -123,9 +123,8 @@ export function DossierListScreen({ navigation }: any) {
     if (!item.id) return;
     try {
       setRetryingId(item.id);
-      const res = await fetch(`${baseUrl}/api/dossiers/${encodeURIComponent(item.id)}/reprendre-face-verify`, {
+      const res = await fetch(`${baseUrl}/api/public/dossiers/${encodeURIComponent(item.id)}/reprendre-face-verify?wa_agent=${encodeURIComponent(agentWa)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.success) {
@@ -240,7 +239,9 @@ export function DossierListScreen({ navigation }: any) {
   const renderItem = ({ item }: { item: DossierItem }) => {
     const score = typeof item.score_visage === 'number' ? item.score_visage : null;
     const matched = item.visage_match === 1;
+    const normalizedStatus = normalizeStatus(item.statut);
     const statusMeta = getStatusMeta(item.statut);
+    const canRetryFaceVerification = normalizedStatus === 'pending' || item.statut === 'face_verify_retry';
 
     const getScoreColor = (value: number | null) => {
       if (value == null) return '#64748b';
@@ -302,9 +303,27 @@ export function DossierListScreen({ navigation }: any) {
               <Text style={[s.cardSub, s.cardPhone]} numberOfLines={1} ellipsizeMode="tail">{item.numero_mtn}</Text>
             </View>
           </View>
-          <View style={[s.badge, statusMeta.chip, s.cardStatusBadge]}>
-            <Text style={s.badgeIcon}>{statusMeta.icon}</Text>
-            <Text style={[s.badgeText, { color: statusMeta.textColor }]}>{statusMeta.label}</Text>
+          <View style={s.cardHeaderRight}>
+            <View style={[s.badge, statusMeta.chip, s.cardStatusBadge]}>
+              <Text style={s.badgeIcon}>{statusMeta.icon}</Text>
+              <Text style={[s.badgeText, { color: statusMeta.textColor }]}>{statusMeta.label}</Text>
+            </View>
+            {canRetryFaceVerification && (
+              <Pressable
+                style={({ pressed }) => [s.retryAction, s.retryActionInline, pressed ? s.retryPressed : null]}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  void retryFaceVerification(item);
+                }}
+                disabled={retryingId === item.id}
+              >
+                {retryingId === item.id ? (
+                  <ActivityIndicator size="small" color={C.blue} />
+                ) : (
+                  <Text style={s.retryActionText}>↺</Text>
+                )}
+              </Pressable>
+            )}
           </View>
         </View>
 
@@ -337,21 +356,6 @@ export function DossierListScreen({ navigation }: any) {
               <Text style={s.noteValue}>{item.raison_rejet}</Text>
             </View>
           ) : null}
-
-          {(item.statut === 'en_cours' || item.statut === 'pending' || item.statut === 'face_verify_retry') && (
-            <TouchableOpacity
-              style={s.retryAction}
-              onPress={() => { void retryFaceVerification(item); }}
-              disabled={retryingId === item.id}
-              activeOpacity={0.9}
-            >
-              {retryingId === item.id ? (
-                <ActivityIndicator size="small" color={C.blue} />
-              ) : (
-                <Text style={s.retryActionText}>↺ Reprendre faciale</Text>
-              )}
-            </TouchableOpacity>
-          )}
         </View>
       </TouchableOpacity>
     );
@@ -615,6 +619,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   cardIdentity: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 4 },
   avatarWrap: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center', marginRight: 6 },
   avatarTxt: { color: C.yellow, fontWeight: '800', fontSize: 9 },
@@ -664,6 +669,14 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(59,130,246,0.12)',
     borderWidth: 1,
     borderColor: 'rgba(59,130,246,0.24)',
+  },
+  retryActionInline: {
+    marginTop: 0,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  retryPressed: {
+    opacity: 0.7,
   },
   retryActionText: { color: C.blue, fontSize: 10, fontWeight: '800' },
   noteBox: { flex: 1, minWidth: 88, padding: 6, borderRadius: 10, backgroundColor: 'rgba(15,23,42,0.04)', borderWidth: 1, borderColor: 'rgba(15,23,42,0.05)' },

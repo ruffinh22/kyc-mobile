@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const r = await api.login(matricule, password);
       const u: User = { matricule: r.user.matricule, nom: r.user.nom, prenom: r.user.prenom, role: r.user.role as User['role'], must_change_password: r.must_change_password };
+      api.setToken(r.token);
       setUser(u); setToken(r.token);
       localStorage.setItem(TOKEN_KEY, r.token);
       localStorage.setItem(USER_KEY, JSON.stringify(u));

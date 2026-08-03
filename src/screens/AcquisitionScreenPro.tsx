@@ -14,6 +14,7 @@ import {
   Modal, FlatList, Alert,
 } from 'react-native';
 import { Camera, CameraType } from 'expo-camera';
+import * as ImageManipulator from 'expo-image-manipulator';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { useAgentStore }  from '../store/callStore';
@@ -202,13 +203,28 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       Animated.timing(shakeAnim, { toValue: 0,  duration: 55, useNativeDriver: true }),
     ]).start();
 
+  // Une CNI n'a besoin d'aucune définition supérieure à ~1600px de large pour
+  // rester parfaitement lisible (OCR + relecture humaine) : au-delà, on ne
+  // paie que du poids réseau inutile. Le redimensionnement + réencodage
+  // natif (expo-image-manipulator) est quasi instantané (<300ms) et réduit
+  // le fichier de 80-90% sans perte visible, ce qui est déterminant sur un
+  // réseau terrain instable (voir logs "Upload échoué : erreur réseau").
+  const MAX_PHOTO_WIDTH = 1600;
+  const PHOTO_JPEG_QUALITY = 0.72;
+
   const compressPhoto = async (uri: string) => {
     try {
-      // Fallback robuste: on garde l'URI d'origine si la compression native n'est pas disponible.
-      // Le backend accepte déjà les uploads standards et l'enregistrement fonctionne.
-      return uri;
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: MAX_PHOTO_WIDTH } }],
+        { compress: PHOTO_JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      return result.uri;
     } catch (err) {
-      console.warn('[Acquisition] Compression photo échouée :', err);
+      // Si la compression échoue pour une raison quelconque, on retombe sur
+      // l'original plutôt que de bloquer la capture — mais c'est un cas
+      // d'exception, pas le comportement attendu.
+      console.warn('[Acquisition] Compression photo échouée, envoi en taille native :', err);
       return uri;
     }
   };
@@ -318,11 +334,18 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return null;
   };
 
+  const submitAttemptRef = useRef(0);
+
   const handleSubmit = async () => {
     const err = validate();
     if (err) { setError(err); shake(); return; }
+    submitAttemptRef.current = 0;
     setActiveStep(4);
     setLoading(true); setError(''); setProgress(0);
+    void submitDossier();
+  };
+
+  const submitDossier = async () => {
     try {
       const fd = new FormData();
       fd.append('numero_mtn', numeroMtn);
@@ -385,6 +408,11 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             shake();
             setLoading(false);
           }
+        } else if (xhr.status === 413) {
+          setError('Photo trop volumineuse pour le serveur (max 5 Mo) — reprends la photo.');
+          console.warn('[Acquisition] Upload refusé : fichier trop volumineux (413)');
+          shake();
+          setLoading(false);
         } else {
           try { setError(JSON.parse(xhr.responseText)?.error || `Erreur ${xhr.status}`); } catch { setError(`Erreur ${xhr.status}`); }
           console.warn('[Acquisition] Upload refusé par le serveur, statut', xhr.status, xhr.responseText);
@@ -393,7 +421,17 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         }
       });
       xhr.addEventListener('error', () => {
-        console.warn('[Acquisition] Upload échoué : erreur réseau');
+        // Réseau terrain instable : une coupure ponctuelle pendant l'envoi
+        // (et pas un refus serveur) mérite une seconde tentative silencieuse
+        // avant d'ennuyer l'agent avec une erreur.
+        if (submitAttemptRef.current < 1) {
+          submitAttemptRef.current += 1;
+          console.warn('[Acquisition] Upload échoué : erreur réseau — nouvelle tentative automatique');
+          setProgress(0);
+          void submitDossier();
+          return;
+        }
+        console.warn('[Acquisition] Upload échoué : erreur réseau (après tentative de reprise)');
         setError('Erreur réseau pendant l’envoi. Vérifie la connexion puis réessaie.');
         shake();
         setLoading(false);
@@ -406,10 +444,12 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       });
       const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
       const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
+      // Debug: log destination so we can diagnose network errors in logcat
+      console.warn('[Acquisition] Envoi dossier vers', `${base}/api/public/dossiers`, { serverUrl: agent.serverUrl });
       xhr.open('POST', `${base}/api/public/dossiers`);
       xhr.send(fd);
     } catch (e: any) {
-      console.warn('[Acquisition] handleSubmit a échoué :', e);
+      console.warn('[Acquisition] submitDossier a échoué :', e);
       setError(e.message || 'Erreur');
       shake();
       setLoading(false);
@@ -687,7 +727,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg0} />
 
-      <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" leftIcon="←" onLeftPress={() => navigation.goBack()} />
+      <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="←" onRightPress={() => navigation.goBack()} />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
@@ -1165,7 +1205,7 @@ const s = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.blue, alignItems: 'center', justifyContent: 'center',
   },
-  agentAvatarTxt: { fontSize: T.xs, fontWeight: '900', color: C.yellow },
+  agentAvatarTxt: { fontSize: T.xs, lineHeight: T.xs, fontWeight: '900', color: C.yellow, includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
   agentName: { fontSize: T.sm, fontWeight: '800', color: C.ink },
   agentMeta: { fontSize: T.xs, color: C.ink2, marginTop: 1 },
 
@@ -1182,7 +1222,7 @@ const s = StyleSheet.create({
   },
   stepCircleActive: { backgroundColor: C.blue, borderColor: C.yellow },
   stepCircleDone:   { backgroundColor: C.successSoft, borderColor: C.success },
-  stepNum:          { fontSize: T.sm, fontWeight: '700', color: C.ink3 },
+  stepNum:          { fontSize: T.sm, lineHeight: T.sm, fontWeight: '700', color: C.ink3, includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
   stepNumActive:    { color: '#fff' },
   stepLabel:        { fontSize: T.lg },
   stepLabelActive:  {},
@@ -1220,7 +1260,7 @@ const s = StyleSheet.create({
     width: 26, height: 26, borderRadius: 13,
     backgroundColor: C.yellow, alignItems: 'center', justifyContent: 'center',
   },
-  sectionNumTxt: { fontSize: T.sm, fontWeight: '900', color: C.blue },
+  sectionNumTxt: { fontSize: T.sm, lineHeight: T.sm, fontWeight: '900', color: C.blue, includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
   sectionTitle:  { fontSize: T.base, fontWeight: '800', color: C.ink, letterSpacing: -0.2 },
   sectionSubtitle: { fontSize: T.xs, color: C.ink3, marginTop: 2 },
 
@@ -1232,7 +1272,7 @@ const s = StyleSheet.create({
     backgroundColor: C.successSoft, borderWidth: 1, borderColor: C.successBorder,
     alignItems: 'center', justifyContent: 'center',
   },
-  shieldBadgeTxt: { fontSize: T.sm },
+  shieldBadgeTxt: { fontSize: T.sm, lineHeight: T.sm, includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
 
   // Pastilles obligatoire / optionnel
   requiredPill: {
@@ -1380,7 +1420,7 @@ const s = StyleSheet.create({
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: C.success, alignItems: 'center', justifyContent: 'center',
   },
-  photoBadgeTxt: { fontSize: T.xs, color: '#fff', fontWeight: '700' },
+  photoBadgeTxt: { fontSize: T.xs, lineHeight: T.xs, color: '#fff', fontWeight: '700', includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
   photoEmpty:    { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
   photoEmptyIcon:  { fontSize: 32 },
   photoEmptyLabel: { fontSize: T.xs, fontWeight: '800', color: C.blue, letterSpacing: 1.5 },
@@ -1430,7 +1470,7 @@ const cs = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center', justifyContent: 'center',
   },
-  closeTxt:     { fontSize: T.xl, color: '#fff', fontWeight: '700' },
+  closeTxt:     { fontSize: T.xl, lineHeight: T.xl, color: '#fff', fontWeight: '700', includeFontPadding: false, textAlignVertical: 'center', textAlign: 'center' },
   camTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   camDot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: C.yellow },
   camTitle:     { fontSize: T.md, fontWeight: '800', color: '#fff', letterSpacing: -0.2 },
@@ -1459,7 +1499,11 @@ const cs = StyleSheet.create({
   },
   switchCameraTxt: {
     fontSize: 22,
+    lineHeight: 22,
     color: '#fff',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    textAlign: 'center',
   },
   frame: {
     width: '80%', aspectRatio: 1.6,

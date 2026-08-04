@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     // true) ne s'applique qu'ici, donc reply.sendFile() devient disponible
     // sans entrer en conflit avec les autres registrations de @fastify/static
     // (uploads, frontend) qui restent decorateReply:false.
-    app.register(async (apkScope: FastifyInstance) => {
+    app.register(async (apkScope: any) => {
       await apkScope.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', maxAge: 0 });
 
       // Route dynamique : on relit le dossier à CHAQUE requête plutôt que de

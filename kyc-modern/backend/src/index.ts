@@ -95,58 +95,68 @@ async function main(): Promise<void> {
     ? path.resolve(process.cwd(), process.env.APK_RELEASE_DIR)
     : path.resolve(process.cwd(), '../../android/app/build/outputs/apk/release');
 
+  // Un build APK valide fait plusieurs Mo. En dessous, c'est presque
+  // toujours un résidu de build interrompu / test manuel / upload partiel —
+  // jamais un vrai livrable. On l'exclut de la sélection pour ne plus jamais
+  // servir accidentellement un fichier vide ou corrompu à la place du bon.
+  const MIN_VALID_APK_SIZE = 5 * 1024 * 1024; // 5 Mo
+
   if (fs.existsSync(apkReleaseDir)) {
-    try {
-      await app.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', decorateReply: false, maxAge: 0 });
-      app.log.info('[STATIC] APK release servie depuis', apkReleaseDir);
+    // Encapsulé dans son propre scope Fastify : decorateReply (par défaut
+    // true) ne s'applique qu'ici, donc reply.sendFile() devient disponible
+    // sans entrer en conflit avec les autres registrations de @fastify/static
+    // (uploads, frontend) qui restent decorateReply:false.
+    app.register(async (apkScope: FastifyInstance) => {
+      await apkScope.register(staticPlugin, { root: apkReleaseDir, prefix: '/apk/', maxAge: 0 });
 
       // Route dynamique : on relit le dossier à CHAQUE requête plutôt que de
       // figer la liste des .apk au démarrage. Sans ça, un nouveau build généré
       // après le démarrage du process (systemd) reste invisible tant que le
-      // service n'est pas explicitement redémarré — c'est ce qui causait des
-      // 404 fantômes sur /apk/app-release.apk malgré un fichier bien présent.
-            app.get('/apk/app-release.apk', async (_req, reply) => {
-              try {
-                const entries = fs.readdirSync(apkReleaseDir).filter((f) => f.endsWith('.apk'));
-                if (entries.length === 0) {
-                  app.log.warn('[APK] aucun fichier .apk trouvé dans', apkReleaseDir);
-                  return reply.code(404).send({ error: 'APK non trouvé' });
-                }
-
-                // choisir le plus récent par date de modification
-                const sorted = entries.sort((a, b) => {
-                  const sa = fs.statSync(path.join(apkReleaseDir, a)).mtimeMs;
-                  const sb = fs.statSync(path.join(apkReleaseDir, b)).mtimeMs;
-                  return sb - sa;
-                });
-                const chosenApk = sorted[0];
-                const filePath = path.join(apkReleaseDir, chosenApk);
-
-                const stat = fs.statSync(filePath);
-                app.log.info('[APK] serving', filePath, stat.size);
-                const stream = fs.createReadStream(filePath);
-                stream.on('error', (err) => {
-                  app.log.warn('[APK] stream error', err instanceof Error ? err.message : String(err));
-                  try { reply.code(500).send({ error: 'Erreur lecture APK' }); } catch (e) {}
-                });
-
-                reply
-                  .header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                  .header('Pragma', 'no-cache')
-                  .header('Expires', '0')
-                  .header('Content-Type', 'application/vnd.android.package-archive')
-                  .header('Content-Disposition', `attachment; filename="app-release.apk"`)
-                  .header('Content-Length', String(stat.size))
-                  .send(stream);
-              } catch (err) {
-                app.log.warn('[APK] impossible de lire le fichier APK', err instanceof Error ? err.message : String(err));
-                return reply.code(500).send({ error: 'APK non lisible' });
-              }
+      // service n'est pas explicitement redémarré.
+      apkScope.get('/apk/app-release.apk', async (_req, reply) => {
+        let candidates: { name: string; size: number; mtimeMs: number }[] = [];
+        try {
+          candidates = fs.readdirSync(apkReleaseDir)
+            .filter((f) => f.toLowerCase().endsWith('.apk'))
+            .map((name) => {
+              const st = fs.statSync(path.join(apkReleaseDir, name));
+              return { name, size: st.size, mtimeMs: st.mtimeMs };
             });
-            app.log.info('[STATIC] alias APK créé pour /apk/app-release.apk');
-    } catch (err) {
-      app.log.warn('[STATIC] impossible de servir APK release', err instanceof Error ? err.message : String(err));
-    }
+        } catch (err) {
+          apkScope.log.warn('[APK] lecture dossier échouée', err instanceof Error ? err.message : String(err));
+        }
+
+        const valid = candidates
+          .filter((f) => f.size >= MIN_VALID_APK_SIZE)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        if (valid.length === 0) {
+          apkScope.log.warn(
+            '[APK] aucun .apk valide (>= %dMo) dans %s — candidats trouvés: %j',
+            MIN_VALID_APK_SIZE / (1024 * 1024),
+            apkReleaseDir,
+            candidates,
+          );
+          return reply.code(404).send({ error: 'Aucun APK release valide disponible' });
+        }
+
+        const chosen = valid[0];
+        apkScope.log.info('[APK] sert %s (%d octets)', chosen.name, chosen.size);
+
+        // sendFile() (fourni par @fastify/static) gère Content-Length, ETag,
+        // Last-Modified et surtout les requêtes Range — essentiel pour que
+        // Chrome/Android puisse reprendre un téléchargement de 50+ Mo coupé
+        // sur une connexion mobile instable, ce que notre ancien streaming
+        // manuel ne supportait pas.
+        return reply
+          .header('Content-Disposition', 'attachment; filename="app-release.apk"')
+          .sendFile(chosen.name, apkReleaseDir);
+      });
+
+      apkScope.log.info('[STATIC] route dynamique /apk/app-release.apk (via sendFile) enregistrée');
+    });
+
+    app.log.info('[STATIC] APK release servie depuis', apkReleaseDir);
   } else {
     app.log.warn('[STATIC] APK release non trouvé à', apkReleaseDir);
   }

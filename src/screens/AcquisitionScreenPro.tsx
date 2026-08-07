@@ -6,15 +6,21 @@
  * plus jamais redemandé ici. Seuls le numéro MTN et les 2 photos sont saisis
  * à chaque dossier.
  */
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image,
   StatusBar, SafeAreaView, Animated,
-  Modal, FlatList, Alert,
+  Modal, FlatList, Alert, PanResponder,
 } from 'react-native';
 import { Camera, CameraType } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
+import ViewShot from 'react-native-view-shot';
+// Typings for this project's version of react-native-view-shot are incompatible
+// with our usage of children in JSX. Cast to `any` to avoid the TS error.
+const ViewShotAny: any = ViewShot;
+import Svg, { Rect, Path } from 'react-native-svg';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { useAgentStore }  from '../store/callStore';
@@ -41,8 +47,174 @@ const SEXE_OPTIONS = [
 // Champs issus de la lecture OCR de la CNI. Une fois validés, ils deviennent
 // non modifiables pour réduire les risques de fraude et garantir une
 // traçabilité claire de l'identité du titulaire.
-const OCR_LOCKED_FIELDS = ['nomTitulaire', 'prenomTitulaire', 'dateNaissance', 'lieuNaissance', 'numeroCni', 'sexe', 'nationalite'] as const;
+const OCR_LOCKED_FIELDS = ['nomTitulaire', 'prenomTitulaire', 'dateNaissance', 'lieuNaissance', 'numeroCni', 'sexe', 'nationalite', 'dateExpiration'] as const;
 type OcrLockedField = typeof OCR_LOCKED_FIELDS[number];
+
+// Signature du titulaire : 'dessin' si le titulaire sait signer (idéalement
+// en reproduisant sa signature de la pièce), 'empreinte' sinon — son
+// empreinte digitale apposée sur le pad tient alors lieu de signature.
+// Même contrat serveur que la version web (signature_mode / photo_signature,
+// voir public-dossiers.ts).
+type SignatureMode = 'dessin' | 'empreinte';
+
+// Types de pièce pris en charge. Les pièces "officielles" ont un format
+// d'État structuré (numéro, dates, expiration) : on exige une extraction/
+// saisie complète, y compris la date d'expiration. Une carte scolaire ou un
+// autre justificatif n'a pas ce niveau de structuration standardisée — les
+// champs secondaires peuvent légitimement manquer, on ne les exige donc pas.
+// Ce choix doit se faire AVANT la capture, pour que l'OCR sache quels champs
+// chercher (voir runOcr) et que le formulaire n'exige pas des infos absentes
+// du document (voir validate).
+const DOCUMENT_TYPES = [
+  { value: 'CNI',            label: 'CNI',                official: true },
+  { value: 'CEDEAO',         label: 'Carte CEDEAO',       official: true },
+  { value: 'PASSPORT',       label: 'Passeport',          official: true },
+  { value: 'CIP',            label: 'CIP',                official: true },
+  { value: 'PERMIS',         label: 'Permis de conduire', official: true },
+  { value: 'CARTE_SCOLAIRE', label: 'Carte scolaire',     official: false },
+  { value: 'CARTE_ETUDIANT', label: 'Carte étudiant',     official: false },
+  { value: 'AUTRE',          label: 'Autre',              official: false },
+] as const;
+type DocumentTypeValue = typeof DOCUMENT_TYPES[number]['value'];
+const isOfficialDoc = (v: string) => DOCUMENT_TYPES.find(d => d.value === v)?.official ?? false;
+
+// Profession suggérée automatiquement selon le type de pièce non officiel
+// présenté — l'agent n'a pas à la retaper à chaque fois pour un cas évident
+// (un élève muni d'une carte scolaire est un élève), tout en restant libre
+// de corriger si la situation réelle diffère (ex. adulte scolarisé tardif).
+// Pas de suggestion pour une pièce officielle ou "Autre" : la profession n'y
+// est pas déductible du seul type de document.
+const DEFAULT_PROFESSION_BY_TYPE: Partial<Record<DocumentTypeValue, string>> = {
+  CARTE_SCOLAIRE: 'Élève',
+  CARTE_ETUDIANT: 'Étudiant',
+};
+
+type SignaturePoint = { x: number; y: number };
+
+type NativeSignaturePadProps = {
+  mode: SignatureMode;
+  resetKey: number;
+  onChange: (dataUri: string) => void;
+  disabled?: boolean;
+  // Notifie le parent qu'un tracé est en cours, pour désactiver le scroll de
+  // la page pendant la signature (voir onInteractionChange plus bas) — sans
+  // ça, un ScrollView englobant peut intercepter le geste comme un scroll
+  // au lieu de le laisser au pad, surtout au tout premier mouvement.
+  onInteractionChange?: (interacting: boolean) => void;
+};
+
+function NativeSignaturePad({ mode, resetKey, onChange, disabled, onInteractionChange }: NativeSignaturePadProps) {
+  const [strokes, setStrokes] = useState<SignaturePoint[][]>([]);
+  const [currentStroke, setCurrentStroke] = useState<SignaturePoint[]>([]);
+  const [canvasSize, setCanvasSize] = useState({ width: 320, height: 220 });
+  const viewShotRef = useRef<any>(null);
+  const strokesRef = useRef<SignaturePoint[][]>([]);
+  const currentStrokeRef = useRef<SignaturePoint[]>([]);
+
+  useEffect(() => {
+    strokesRef.current = [];
+    currentStrokeRef.current = [];
+    setStrokes([]);
+    setCurrentStroke([]);
+    onChange('');
+  }, [resetKey, onChange]);
+
+  const captureSignature = useCallback(async (nextStrokes: SignaturePoint[][]) => {
+    try {
+      const uri = await viewShotRef.current?.capture?.();
+      if (typeof uri === 'string' && uri.length > 0) {
+        onChange(uri);
+      } else if (nextStrokes.length === 0) {
+        onChange('');
+      }
+    } catch {
+      if (nextStrokes.length === 0) {
+        onChange('');
+      }
+    }
+  }, [onChange]);
+
+  const finalizeStroke = useCallback((nextStrokes: SignaturePoint[][]) => {
+    strokesRef.current = nextStrokes;
+    setStrokes(nextStrokes);
+    currentStrokeRef.current = [];
+    setCurrentStroke([]);
+    void captureSignature(nextStrokes);
+  }, [captureSignature]);
+
+  const panResponder = useMemo(() => PanResponder.create({
+    // Capture dès le "should set" — pas seulement au niveau bulle — pour que
+    // le pad revendique le geste avant le ScrollView englobant. Sans les
+    // variantes *Capture, un ScrollView parent (ou tout ancêtre qui essaie
+    // lui-même d'intercepter le toucher) peut voler le premier mouvement et
+    // le pad ne reçoit alors jamais rien.
+    onStartShouldSetPanResponder: () => !disabled,
+    onStartShouldSetPanResponderCapture: () => !disabled,
+    onMoveShouldSetPanResponder: () => !disabled,
+    onMoveShouldSetPanResponderCapture: () => !disabled,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: (evt) => {
+      onInteractionChange?.(true);
+      const point = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
+      currentStrokeRef.current = [point];
+      setCurrentStroke([point]);
+    },
+    onPanResponderMove: (evt) => {
+      const point = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
+      const next = [...currentStrokeRef.current, point];
+      currentStrokeRef.current = next;
+      setCurrentStroke(next);
+    },
+    onPanResponderRelease: () => {
+      const nextStrokes = currentStrokeRef.current.length > 0
+        ? [...strokesRef.current, currentStrokeRef.current]
+        : strokesRef.current;
+      finalizeStroke(nextStrokes);
+      onInteractionChange?.(false);
+    },
+    onPanResponderTerminate: () => {
+      const nextStrokes = currentStrokeRef.current.length > 0
+        ? [...strokesRef.current, currentStrokeRef.current]
+        : strokesRef.current;
+      finalizeStroke(nextStrokes);
+      onInteractionChange?.(false);
+    },
+  }), [disabled, finalizeStroke, onInteractionChange]);
+
+  const buildPath = (points: SignaturePoint[]) => {
+    if (points.length === 0) return '';
+    const [first, ...rest] = points;
+    let d = `M ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+    for (const point of rest) {
+      d += ` L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    }
+    return d;
+  };
+
+  const strokeColor = mode === 'empreinte' ? 'rgba(0,48,135,0.78)' : '#0F1720';
+  const strokeWidth = mode === 'empreinte' ? 12 : 2.4;
+
+  return (
+    <ViewShotAny
+      ref={viewShotRef as any}
+      options={{ format: 'png', quality: 1 }}
+      style={{ flex: 1, backgroundColor: mode === 'empreinte' ? '#F1F5F9' : '#FFFFFF' }}
+      onLayout={(e) => setCanvasSize({ width: e.nativeEvent.layout.width || 320, height: e.nativeEvent.layout.height || 220 })}
+    >
+      <View style={{ flex: 1 }} {...panResponder.panHandlers}>
+        <Svg width="100%" height="100%" viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`}>
+          <Rect x={0} y={0} width={canvasSize.width} height={canvasSize.height} fill="transparent" />
+          {strokes.map((stroke, index) => (
+            <Path key={`stroke-${index}`} d={buildPath(stroke)} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+          ))}
+          {currentStroke.length > 0 && (
+            <Path d={buildPath(currentStroke)} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+          )}
+        </Svg>
+      </View>
+    </ViewShotAny>
+  );
+}
 
 export type AcquisitionScreenProProps = {
   navigation: {
@@ -71,12 +243,14 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const [progress, setProgress]       = useState(0);
   const [error, setError]             = useState('');
   const [success, setSuccess]         = useState(false);
+  const [signatureInteracting, setSignatureInteracting] = useState(false);
   const [activeStep, setActiveStep]   = useState(1);
   const [nationalityPickerVisible, setNationalityPickerVisible] = useState(false);
   const [selectedCountryCode, setSelectedCountryCode] = useState<CountryCode>('CG');
   const [countryName, setCountryName] = useState('Congo (Brazzaville)');
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const cameraOverlayAnim = useRef(new Animated.Value(1)).current;
+  const scrollViewRef = useRef<ScrollView | null>(null);
 
   // ── Infos titulaire (pré-remplies par OCR sur le recto + saisie agent) ────
   // nomTitulaire / prenomTitulaire / dateNaissance / lieuNaissance : lus par
@@ -84,10 +258,16 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   // autreNumero / nomPere / nomMere / adresseComplete / numeroCni / sexe /
   // nationalite / profession : jamais issus de l'OCR, saisis par l'agent
   // terrain et préremplis si le service OCR les retourne.
+  // Type de pièce choisi AVANT toute capture — conditionne à la fois ce que
+  // l'OCR va chercher (voir runOcr) et les champs exigés par le formulaire
+  // (voir validate) : complet + date d'expiration pour une pièce officielle,
+  // nom/prénom seulement pour une carte scolaire ou un justificatif "autre".
+  const [typePiece, setTypePiece] = useState<DocumentTypeValue | ''>('');
+
   const [idInfo, setIdInfo] = useState({
     nomTitulaire: '', prenomTitulaire: '', dateNaissance: '', lieuNaissance: '',
     autreNumero: '', nomPere: '', nomMere: '', adresseComplete: '', numeroCni: '',
-    sexe: '', nationalite: '', profession: '',
+    sexe: '', nationalite: '', profession: '', dateExpiration: '',
   });
   const [ocrStatus, setOcrStatus] = useState<'idle' | 'loading' | 'success' | 'failed'>('idle');
   // Champs OCR déverrouillés manuellement après confirmation explicite de l'agent
@@ -96,14 +276,40 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const setIdField = (key: keyof typeof idInfo, value: string) =>
     setIdInfo(prev => ({ ...prev, [key]: value }));
 
+  // ── Signature titulaire (dessin ou empreinte digitale) ────────────────────
+  // Le pad ne s'affiche qu'une fois le recto capturé (voir rendu plus bas),
+  // comme les champs d'identité juste au-dessus : avant ça, il n'y a encore
+  // aucun titulaire identifié à faire signer.
+  const [signatureMode, setSignatureMode] = useState<SignatureMode>('dessin');
+  const [signatureData, setSignatureData] = useState('');      // PNG base64 (data URI)
+  const [signaturePadKey, setSignaturePadKey] = useState(0);   // force le remount du pad à l'effacement/changement de mode
+
+  const clearSignature = () => {
+    setSignatureData('');
+    setSignaturePadKey(k => k + 1);
+  };
+
+  // Changer de mode efface le tracé en cours : un trait de signature et une
+  // empreinte n'ont pas la même épaisseur/couleur, mieux vaut recommencer
+  // proprement que de garder un tracé incohérent avec le mode affiché.
+  const switchSignatureMode = (mode: SignatureMode) => {
+    if (mode === signatureMode) return;
+    setSignatureMode(mode);
+    clearSignature();
+  };
+
   // ── Select générique (options fermées, ex. Sexe) ──────────────────────────
   const [optionPicker, setOptionPicker] = useState<{ key: OcrLockedField; label: string; options: { label: string; value: string }[] } | null>(null);
   const openOptionPicker = (key: OcrLockedField, label: string, options: { label: string; value: string }[]) =>
     setOptionPicker({ key, label, options });
 
   // ── Sélecteur de date natif (calendrier) — remplace la saisie manuelle ────
+  // dateFieldTarget indique quel champ idInfo la roue/le dialogue modifie :
+  // 'dateNaissance' (toujours) ou 'dateExpiration' (pièces officielles).
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dateFieldTarget, setDateFieldTarget] = useState<'dateNaissance' | 'dateExpiration'>('dateNaissance');
   const [tempDate, setTempDate] = useState<Date>(new Date(2000, 0, 1));
+  const [docTypePickerVisible, setDocTypePickerVisible] = useState(false);
 
   const parseDateFR = (str: string): Date | null => {
     const m = str.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -118,9 +324,36 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return `${dd}/${mm}/${d.getFullYear()}`;
   };
 
-  const openDatePicker = () => {
-    setTempDate(parseDateFR(idInfo.dateNaissance) || new Date(2000, 0, 1));
+  const openDatePicker = (field: 'dateNaissance' | 'dateExpiration' = 'dateNaissance') => {
+    setDateFieldTarget(field);
+    // Pour l'expiration on repart d'aujourd'hui (une pièce non expirée est
+    // toujours dans le futur) plutôt que de l'an 2000, plus pertinent pour
+    // guider l'agent qui doit choisir une date d'expiration.
+    const fallback = field === 'dateExpiration' ? new Date() : new Date(2000, 0, 1);
+    setTempDate(parseDateFR(idInfo[field]) || fallback);
     setShowDatePicker(true);
+  };
+
+  const handleTypePieceChange = (value: DocumentTypeValue) => {
+    if (typePiece === value) return;
+    setTypePiece(value);
+    // Le document change : les champs déjà lus/saisis ne sont plus fiables
+    // pour ce nouveau type de pièce.
+    if (ocrStatus !== 'idle') {
+      setOcrStatus('idle');
+      setManualOverride({});
+    }
+    // Suggestion de profession (élève/étudiant) : on ne remplace jamais une
+    // valeur déjà saisie par l'agent, seulement la précédente auto-suggestion
+    // ou un champ vide.
+    const suggestion = DEFAULT_PROFESSION_BY_TYPE[value];
+    if (suggestion) {
+      setIdInfo(prev => {
+        const prevWasSuggestion = Object.values(DEFAULT_PROFESSION_BY_TYPE).includes(prev.profession);
+        if (prev.profession && !prevWasSuggestion) return prev;
+        return { ...prev, profession: suggestion };
+      });
+    }
   };
 
   // Android : le dialogue natif se ferme et renvoie directement la date choisie
@@ -131,7 +364,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     if (Platform.OS === 'android') {
       setShowDatePicker(false);
       if (event.type === 'set' && selectedDate) {
-        setIdField('dateNaissance', formatDateFR(selectedDate));
+        setIdField(dateFieldTarget, formatDateFR(selectedDate));
       }
       return;
     }
@@ -139,7 +372,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   };
 
   const confirmIosDate = () => {
-    setIdField('dateNaissance', formatDateFR(tempDate));
+    setIdField(dateFieldTarget, formatDateFR(tempDate));
     setShowDatePicker(false);
   };
 
@@ -278,6 +511,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
       const fd = new FormData();
       fd.append('country', agent.country);
+      fd.append('type_piece', typePiece || 'AUTRE');
       fd.append('photo_recto', { uri, type: 'image/jpeg', name: 'recto.jpg' } as any);
 
       const ctrl = new AbortController();
@@ -302,6 +536,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         sexe:            prev.sexe            || data.sexe || '',
         nationalite:     prev.nationalite     || data.nationalite || '',
         profession:      prev.profession      || data.profession || '',
+        dateExpiration:  prev.dateExpiration  || data.date_expiration || '',
       }));
       setOcrStatus('success');
       setActiveStep(3);
@@ -314,24 +549,57 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
 
   const validate = (): string|null => {
     if (!agent.numeroAgent || !agent.country) return 'Profil agent introuvable — reconnecte-toi.';
+    if (!typePiece) return 'Sélectionnez le type de pièce avant de continuer';
     if (!numeroMtn) return 'Saisissez le numéro MTN';
     const v = validatePhoneNumber(numeroMtn, agent.country);
     if (!v.valid) return `Numéro invalide : ${v.error}`;
     if (!photos.recto) return 'Capturez le recto du CNI';
     if (!photos.verso) return 'Capturez le verso du CNI';
-    // Infos titulaire requises pour l'enregistrement SIM (réglementation KYC)
+    // Infos titulaire requises pour l'enregistrement SIM (réglementation KYC).
+    // Nom/prénom sont exigés quel que soit le document présenté.
     if (!idInfo.nomTitulaire.trim())    return 'Renseignez le nom du titulaire';
     if (!idInfo.prenomTitulaire.trim()) return 'Renseignez le prénom du titulaire';
-    if (!idInfo.dateNaissance.trim())   return 'Renseignez la date de naissance';
-    if (!idInfo.lieuNaissance.trim())   return 'Renseignez le lieu de naissance';
-    if (!idInfo.numeroCni.trim())       return 'Renseignez le numéro de la pièce d’identité';
+    // Une pièce officielle (CNI, CEDEAO, passeport, CIP, permis) a un format
+    // d'État structuré : on exige alors une extraction/saisie complète,
+    // numéro de pièce et date d'expiration inclus. Une carte scolaire ou un
+    // justificatif "autre" n'a pas ce niveau de structuration standardisée —
+    // ces champs peuvent légitimement manquer, on ne les exige donc pas.
+    const official = isOfficialDoc(typePiece);
+    if (official) {
+      if (!idInfo.dateNaissance.trim())   return 'Renseignez la date de naissance';
+      if (!idInfo.lieuNaissance.trim())   return 'Renseignez le lieu de naissance';
+      if (!idInfo.numeroCni.trim())       return 'Renseignez le numéro de la pièce d’identité';
+      if (!idInfo.dateExpiration.trim())  return 'Renseignez la date d’expiration de la pièce';
+    }
     if (!idInfo.sexe.trim())            return 'Renseignez le sexe';
-    if (!idInfo.nationalite.trim())    return 'Renseignez la nationalité';
     if (!idInfo.profession.trim())     return 'Renseignez la profession';
-    if (!idInfo.adresseComplete.trim()) return 'Renseignez l’adresse complète';
+    // Adresse et nationalité : une pièce non officielle (carte scolaire,
+    // carte étudiant, autre justificatif) ne les porte pas de façon fiable —
+    // on ne bloque donc plus leur absence dans ce cas, contrairement aux
+    // pièces officielles où elles restent exigées.
+    if (official) {
+      if (!idInfo.nationalite.trim())    return 'Renseignez la nationalité';
+      if (!idInfo.adresseComplete.trim()) return 'Renseignez l’adresse complète';
+    }
     if (!idInfo.nomPere.trim())         return 'Renseignez le nom du père';
     if (!idInfo.nomMere.trim())         return 'Renseignez le nom de la mère';
+    if (!signatureData) {
+      return signatureMode === 'empreinte'
+        ? 'Faites apposer l’empreinte digitale du titulaire'
+        : 'Faites signer le titulaire';
+    }
     return null;
+  };
+
+  // Convertit l'image base64 renvoyée par le pad de signature en fichier
+  // temporaire local : XMLHttpRequest/FormData sur React Native ont besoin
+  // d'une uri de fichier (comme pour les photos recto/verso), pas d'un
+  // simple base64 inline.
+  const signatureDataUriToFile = async (dataUri: string): Promise<string> => {
+    const base64 = dataUri.includes(',') ? dataUri.split(',')[1] : dataUri;
+    const fileUri = `${FileSystem.cacheDirectory}signature_${Date.now()}.png`;
+    await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+    return fileUri;
   };
 
   const submitAttemptRef = useRef(0);
@@ -355,6 +623,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       fd.append('fonction_agent', agent.fonctionAgent);
       fd.append('zone_agent', agent.zoneAgent);
       // ── Infos titulaire pour l'enregistrement SIM (voir SERVER_SPEC.md) ──
+      fd.append('type_piece', typePiece || 'AUTRE');
       fd.append('nom_titulaire', idInfo.nomTitulaire.trim());
       fd.append('prenom_titulaire', idInfo.prenomTitulaire.trim());
       fd.append('date_naissance', idInfo.dateNaissance.trim());
@@ -364,6 +633,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       fd.append('nom_mere', idInfo.nomMere.trim());
       fd.append('adresse_complete', idInfo.adresseComplete.trim());
       fd.append('numero_cni', idInfo.numeroCni.trim());
+      fd.append('date_expiration', idInfo.dateExpiration.trim());
       fd.append('sexe', idInfo.sexe.trim());
       fd.append('nationalite', idInfo.nationalite.trim());
       fd.append('profession', idInfo.profession.trim());
@@ -372,6 +642,12 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       if (overriddenFields.length) fd.append('ocr_overrides', overriddenFields.join(','));
       if (photos.recto?.uri) fd.append('photo_recto', { uri: photos.recto.uri, type: 'image/jpeg', name: 'recto.jpg' } as any);
       if (photos.verso?.uri) fd.append('photo_verso', { uri: photos.verso.uri, type: 'image/jpeg', name: 'verso.jpg' } as any);
+      // ── Signature titulaire (voir SERVER_SPEC.md — signature_mode / photo_signature) ──
+      fd.append('signature_mode', signatureMode);
+      if (signatureData) {
+        const sigUri = await signatureDataUriToFile(signatureData);
+        fd.append('photo_signature', { uri: sigUri, type: 'image/png', name: 'signature.png' } as any);
+      }
 
       const xhr = new XMLHttpRequest();
       xhr.timeout = 30_000; // réseau terrain instable : ne pas rester bloqué indéfiniment
@@ -566,6 +842,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     label: string,
     placeholder: string,
     extraInputProps: Partial<React.ComponentProps<typeof TextInput>> = {},
+    required = true,
   ) => {
     const locked = isFieldLocked(key);
     if (locked) {
@@ -587,7 +864,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return (
       <View style={s.field}>
         <View style={s.lockedFieldTop}>
-          <Text style={s.fieldLabel}>{label} <Text style={s.req}>*</Text></Text>
+          <Text style={s.fieldLabel}>{label} {required && <Text style={s.req}>*</Text>}</Text>
           {manualOverride[key] && <Text style={s.overrideTag}>Correction signalée</Text>}
         </View>
         <TextInput
@@ -653,10 +930,11 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     );
   };
 
-  // ── Champ date de naissance : ouvre le calendrier natif, tout est auto ────
-  const renderDateField = () => {
-    const key: OcrLockedField = 'dateNaissance';
-    const label = 'Date de naissance';
+  // ── Champ date (naissance ou expiration) : ouvre le calendrier natif ─────
+  // required=false permet d'afficher le champ sans astérisque pour une pièce
+  // non officielle où la date d'expiration n'est pas exigée mais reste
+  // saisissable si l'agent l'a sous les yeux.
+  const renderDateField = (key: 'dateNaissance' | 'dateExpiration', label: string, required = true) => {
     const locked = isFieldLocked(key);
     if (locked) {
       return (
@@ -669,7 +947,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
           </View>
           <View style={s.lockedFieldRow}>
             <Text style={s.lockedFieldIcon}>🔒</Text>
-            <Text style={s.lockedFieldValue}>{idInfo.dateNaissance}</Text>
+            <Text style={s.lockedFieldValue}>{idInfo[key]}</Text>
           </View>
         </View>
       );
@@ -677,19 +955,19 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return (
       <View style={s.field}>
         <View style={s.lockedFieldTop}>
-          <Text style={s.fieldLabel}>{label} <Text style={s.req}>*</Text></Text>
-          {manualOverride.dateNaissance && <Text style={s.overrideTag}>Correction signalée</Text>}
+          <Text style={s.fieldLabel}>{label} {required && <Text style={s.req}>*</Text>}</Text>
+          {manualOverride[key] && <Text style={s.overrideTag}>Correction signalée</Text>}
         </View>
         <TouchableOpacity
           style={[s.input, s.selectInput, s.selectInputRow]}
-          onPress={openDatePicker}
+          onPress={() => openDatePicker(key)}
           disabled={loading}
           accessibilityRole="button"
-          accessibilityLabel="Sélectionner la date de naissance"
+          accessibilityLabel={`Sélectionner ${label}`}
           accessibilityHint="Ouvre un calendrier"
         >
-          <Text style={[s.selectInputText, !idInfo.dateNaissance && s.selectInputPlaceholder]}>
-            {idInfo.dateNaissance || 'JJ/MM/AAAA'}
+          <Text style={[s.selectInputText, !idInfo[key] && s.selectInputPlaceholder]}>
+            {idInfo[key] || 'JJ/MM/AAAA'}
           </Text>
           <Text style={s.selectInputIcon}>📅</Text>
         </TouchableOpacity>
@@ -697,12 +975,12 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     );
   };
 
-  const renderNationalityField = () => {
+  const renderNationalityField = (required = true) => {
     const locked = isFieldLocked('nationalite');
     return (
       <View style={s.field}>
         <View style={s.lockedFieldTop}>
-          <Text style={s.fieldLabel}>Nationalité <Text style={s.req}>*</Text></Text>
+          <Text style={s.fieldLabel}>Nationalité {required && <Text style={s.req}>*</Text>}</Text>
           {manualOverride.nationalite && <Text style={s.overrideTag}>Correction signalée</Text>}
         </View>
         <TouchableOpacity
@@ -730,7 +1008,12 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       <AppHeader title="Acquisition" subtitle="Soumettre un numéro MTN" rightIcon="←" onRightPress={() => navigation.goBack()} />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
-        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+        <ScrollView
+          ref={scrollViewRef}
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          scrollEnabled={!signatureInteracting}
+        >
 
           {/* ── Agent (lecture seule) ──────────────────────────────────── */}
           <View style={s.agentCard}>
@@ -839,14 +1122,47 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               <Text style={s.sectionTitle}>Documents CNI</Text>
             </View>
 
+            {/* ── Type de pièce : choisi AVANT la capture ────────────────────
+                Conditionne ce que l'OCR va chercher et les champs exigés
+                plus bas (numéro, date d'expiration...). Changer le type
+                après une capture réinitialise le statut OCR pour éviter
+                d'envoyer des champs verrouillés qui ne correspondent plus
+                au document réellement présenté. */}
+            <View style={s.field}>
+              <Text style={s.fieldLabel}>Type de pièce <Text style={s.req}>*</Text></Text>
+              <TouchableOpacity
+                style={[s.input, s.selectInput]}
+                onPress={() => !loading && setDocTypePickerVisible(true)}
+                disabled={loading}
+                accessibilityRole="button"
+                accessibilityLabel="Sélectionner le type de pièce"
+              >
+                <View style={s.selectInputRow}>
+                  <Text style={[s.selectInputText, !typePiece && s.selectInputPlaceholder]}>
+                    {DOCUMENT_TYPES.find(dt => dt.value === typePiece)?.label || 'Sélectionner un type de pièce'}
+                  </Text>
+                  <Text style={s.selectInputIcon}>▾</Text>
+                </View>
+              </TouchableOpacity>
+              {!typePiece && (
+                <Text style={s.hint}>Choisissez le type de pièce avant de capturer les photos.</Text>
+              )}
+              {!!typePiece && !isOfficialDoc(typePiece) && (
+                <Text style={s.hint}>Document non officiel : certains champs (numéro, date d’expiration…) resteront optionnels.</Text>
+              )}
+            </View>
+
             <View style={s.photosGrid}>
               {(['recto','verso'] as const).map(side => {
                 const photo = photos[side];
                 return (
                   <TouchableOpacity
                     key={side}
-                    style={[s.photoBox, photo && s.photoBoxDone]}
-                    onPress={() => setCameraMode(side)}
+                    style={[s.photoBox, photo && s.photoBoxDone, !typePiece && s.photoBoxDisabled]}
+                    onPress={() => {
+                      if (!typePiece) { setError('Sélectionnez le type de pièce avant de capturer'); shake(); return; }
+                      setCameraMode(side);
+                    }}
                     disabled={loading}
                   >
                     {photo ? (
@@ -915,19 +1231,34 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               </View>
             )}
 
-            {renderVerifiableField('nomTitulaire', 'Nom', "Nom tel qu'il figure sur la CNI", { autoCapitalize: 'characters' })}
-            {renderVerifiableField('prenomTitulaire', 'Prénom(s)', 'Prénom(s)', { autoCapitalize: 'words' })}
+            {/* Les champs d'identité ne s'affichent qu'une fois la capture
+                du recto tentée (succès ou échec) : avant ça, ils seraient
+                soit vides soit trompeurs. Pendant l'analyse (loading), on
+                n'affiche que le spinner ci-dessus, pas un formulaire vide. */}
+            {(ocrStatus === 'success' || ocrStatus === 'failed') && (
+              <>
+                {renderVerifiableField('nomTitulaire', 'Nom', "Nom tel qu'il figure sur la CNI", { autoCapitalize: 'characters' })}
+                {renderVerifiableField('prenomTitulaire', 'Prénom(s)', 'Prénom(s)', { autoCapitalize: 'words' })}
 
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>{renderDateField()}</View>
-              <View style={{ flex: 1 }}>{renderVerifiableField('lieuNaissance', 'Lieu de naissance', 'Ville')}</View>
-            </View>
+                {/* Naissance, numéro de pièce et expiration : exigés pour une
+                    pièce officielle (format d'État structuré), simplement
+                    proposés (et non bloquants) pour une carte scolaire ou un
+                    justificatif "autre" — voir DOCUMENT_TYPES/isOfficialDoc. */}
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <View style={{ flex: 1 }}>{renderDateField('dateNaissance', 'Date de naissance', isOfficialDoc(typePiece))}</View>
+                  <View style={{ flex: 1 }}>{renderVerifiableField('lieuNaissance', `Lieu de naissance${isOfficialDoc(typePiece) ? '' : ' (si connu)'}`, 'Ville', {}, isOfficialDoc(typePiece))}</View>
+                </View>
 
-            {renderVerifiableField('numeroCni', 'Numéro de pièce', 'Numéro de pièce d’identité')}
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>{renderSelectField('sexe', 'Sexe', SEXE_OPTIONS)}</View>
-              <View style={{ flex: 1 }}>{renderNationalityField()}</View>
-            </View>
+                {renderVerifiableField('numeroCni', `Numéro de pièce${isOfficialDoc(typePiece) ? '' : ' (si disponible)'}`, 'Numéro de pièce d’identité', {}, isOfficialDoc(typePiece))}
+                {isOfficialDoc(typePiece) && renderDateField('dateExpiration', "Date d'expiration")}
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <View style={{ flex: 1 }}>{renderSelectField('sexe', 'Sexe', SEXE_OPTIONS)}</View>
+                  {/* Nationalité : lue automatiquement sur une pièce
+                      officielle, saisie manuelle sinon (voir ocr.ts). */}
+                  <View style={{ flex: 1 }}>{renderNationalityField(isOfficialDoc(typePiece))}</View>
+                </View>
+              </>
+            )}
           </View>
 
           {/* ═══════════════════════════════════════════════════════════════
@@ -998,18 +1329,100 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             </View>
 
             <View style={s.field}>
-              <Text style={s.fieldLabel}>Adresse complète <Text style={s.req}>*</Text></Text>
+              <Text style={s.fieldLabel}>Adresse complète {isOfficialDoc(typePiece) && <Text style={s.req}>*</Text>}</Text>
               <TextInput
                 style={[s.input, { minHeight: 84, textAlignVertical: 'top' }]}
                 value={idInfo.adresseComplete}
                 onChangeText={(v) => setIdField('adresseComplete', v)}
-                placeholder="Adresse complète du titulaire"
+                placeholder={isOfficialDoc(typePiece) ? 'Adresse complète du titulaire' : 'Adresse complète du titulaire (si connue)'}
                 placeholderTextColor={C.ink3}
                 multiline
                 editable={!loading}
               />
             </View>
           </View>
+
+          {/* ═══════════════════════════════════════════════════════════════
+              SECTION 5 — Signature du titulaire
+              N'apparaît qu'une fois le recto capturé : avant ça, il n'y a
+              pas encore de titulaire identifié à faire signer.
+          ═══════════════════════════════════════════════════════════════ */}
+          {!!photos.recto && (
+            <View style={s.section}>
+              <View style={s.sectionHeader}>
+                <View style={s.sectionNum}><Text style={s.sectionNumTxt}>5</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.sectionTitle}>Signature</Text>
+                  <Text style={s.sectionSubtitle}>{signatureMode === 'empreinte' ? 'Empreinte digitale' : 'Signature manuscrite'}</Text>
+                </View>
+                <View style={s.requiredPill}><Text style={s.requiredPillTxt}>Obligatoire</Text></View>
+              </View>
+
+              {/* Bascule dessin / empreinte — un seul pad, seuls le trait et
+                  le message d'instruction changent selon le mode choisi. */}
+              <View style={s.sigToggleRow}>
+                <TouchableOpacity
+                  style={[s.sigToggleBtn, signatureMode === 'dessin' && s.sigToggleBtnActive]}
+                  onPress={() => switchSignatureMode('dessin')}
+                  disabled={loading}
+                  accessibilityRole="button"
+                  accessibilityLabel="Signature manuscrite"
+                  accessibilityState={{ selected: signatureMode === 'dessin' }}
+                >
+                  <Text style={[s.sigToggleTxt, signatureMode === 'dessin' && s.sigToggleTxtActive]}>✍️ Signature</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[s.sigToggleBtn, signatureMode === 'empreinte' && s.sigToggleBtnActive]}
+                  onPress={() => switchSignatureMode('empreinte')}
+                  disabled={loading}
+                  accessibilityRole="button"
+                  accessibilityLabel="Empreinte digitale"
+                  accessibilityState={{ selected: signatureMode === 'empreinte' }}
+                >
+                  <Text style={[s.sigToggleTxt, signatureMode === 'empreinte' && s.sigToggleTxtActive]}>👆 Empreinte digitale</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={s.sigInstructions}>
+                {signatureMode === 'dessin'
+                  ? "Faites signer le titulaire ci-dessous (au doigt ou au stylet), en reproduisant si possible sa signature figurant sur la pièce."
+                  : "Le titulaire ne sait pas signer : demandez-lui d'apposer son doigt sur la zone ci-dessous. Cette empreinte sera enregistrée comme sa signature."}
+              </Text>
+
+              <View style={[s.sigPadWrap, signatureData && s.sigPadWrapDone]}>
+                <NativeSignaturePad
+                  key={signaturePadKey}
+                  mode={signatureMode}
+                  resetKey={signaturePadKey}
+                  onChange={setSignatureData}
+                  disabled={loading}
+                  onInteractionChange={setSignatureInteracting}
+                />
+                {!signatureData && (
+                  <View style={s.sigPadHintOverlay}>
+                    <Text style={s.sigPadHintText}>Touchez ici pour signer</Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={[s.sigFloatClearBtn, !signatureData && s.sigFloatClearBtnDisabled]}
+                  onPress={clearSignature}
+                  disabled={loading || !signatureData}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={s.sigFloatClearTxt}>Effacer</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={s.sigStatusRow}>
+                <Text style={[s.sigStatusTxt, signatureData && s.sigStatusTxtOk]}>
+                  {signatureData ? '✓ Signature enregistrée' : 'En attente de signature'}
+                </Text>
+                <TouchableOpacity onPress={clearSignature} disabled={loading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={s.sigClearTxt}>Effacer</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {/* ── Progress upload ───────────────────────────────────────────── */}
           {loading && progress > 0 && (
@@ -1077,6 +1490,44 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         }}
       />
 
+      <Modal
+        visible={docTypePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDocTypePickerVisible(false)}
+      >
+        <View style={s.modalBackdrop}>
+          <View style={s.modalCard}>
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Type de pièce</Text>
+              <TouchableOpacity style={s.closeBtnModal} onPress={() => setDocTypePickerVisible(false)}>
+                <Text style={s.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={DOCUMENT_TYPES}
+              keyExtractor={(item) => item.value}
+              style={s.optionList}
+              contentContainerStyle={s.optionListContent}
+              renderItem={({ item }) => {
+                const active = typePiece === item.value;
+                return (
+                  <TouchableOpacity
+                    style={[s.optionItem, active && s.optionItemActive]}
+                    onPress={() => {
+                      handleTypePieceChange(item.value as DocumentTypeValue);
+                      setDocTypePickerVisible(false);
+                    }}
+                  >
+                    <Text style={[s.optionText, active && s.optionTextActive]}>{item.label}</Text>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Select générique (ex. Sexe) — modale de choix ──────────────────── */}
       <Modal
         visible={!!optionPicker}
@@ -1125,7 +1576,9 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
           value={tempDate}
           mode="date"
           display="default"
-          maximumDate={new Date()}
+          // Une date de naissance ne peut être dans le futur ; une date
+          // d'expiration si — on ne plafonne donc qu'un des deux champs.
+          maximumDate={dateFieldTarget === 'dateNaissance' ? new Date() : undefined}
           onChange={onNativeDateChange}
         />
       )}
@@ -1139,12 +1592,12 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         >
           <View style={s.modalBackdrop}>
             <View style={s.datePickerCard}>
-              <Text style={s.modalTitle}>Date de naissance</Text>
+              <Text style={s.modalTitle}>{dateFieldTarget === 'dateExpiration' ? "Date d'expiration" : 'Date de naissance'}</Text>
               <DateTimePicker
                 value={tempDate}
                 mode="date"
                 display="spinner"
-                maximumDate={new Date()}
+                maximumDate={dateFieldTarget === 'dateNaissance' ? new Date() : undefined}
                 onChange={onNativeDateChange}
                 style={s.datePickerWheel}
               />
@@ -1399,6 +1852,55 @@ const s = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
 
+  // Type de pièce (choix en amont de la capture)
+  docTypeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
+  docTypeChip: {
+    paddingVertical: 9, paddingHorizontal: 14,
+    borderRadius: R.pill, borderWidth: 1.5, borderColor: C.bgBorder,
+    backgroundColor: '#fff',
+  },
+  docTypeChipSelected: { backgroundColor: C.blue, borderColor: C.blue },
+  docTypeChipTxt: { fontSize: T.sm, fontWeight: '700', color: C.ink2 },
+  docTypeChipTxtSelected: { color: '#fff' },
+
+  // Signature (bascule dessin/empreinte + pad)
+  sigToggleRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  sigToggleBtn: {
+    flex: 1, paddingVertical: 11, paddingHorizontal: 8, borderRadius: R.md,
+    borderWidth: 1.5, borderColor: C.bgBorder, backgroundColor: '#fff', alignItems: 'center',
+  },
+  sigToggleBtnActive: { backgroundColor: 'rgba(0,48,135,0.08)', borderColor: C.blue },
+  sigToggleTxt: { fontSize: T.sm, fontWeight: '700', color: C.blue },
+  sigToggleTxtActive: { color: C.blue },
+  sigInstructions: { fontSize: T.xs, color: C.ink3, lineHeight: 17, marginBottom: 10 },
+  sigPadWrap: {
+    width: '100%', minHeight: 220, height: 240, borderRadius: R.lg,
+    borderWidth: 1.5, borderStyle: 'dashed', borderColor: C.bgBorder,
+    backgroundColor: C.bg2, overflow: 'hidden', position: 'relative',
+    shadowColor: '#0F1720', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  sigPadWrapDone: { borderStyle: 'solid', borderColor: C.success },
+  sigPad: { flex: 1, backgroundColor: 'transparent' },
+  sigPadHintOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+    backgroundColor: 'rgba(248,250,252,0.55)',
+  },
+  sigPadHintText: { fontSize: T.sm, fontWeight: '700', color: C.ink3 },
+  sigFloatClearBtn: {
+    position: 'absolute', top: 10, right: 10, zIndex: 2,
+    backgroundColor: '#fff', borderWidth: 1.2, borderColor: C.danger,
+    paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999,
+    shadowColor: '#0F1720', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+  },
+  sigFloatClearBtnDisabled: { opacity: 0.45 },
+  sigFloatClearTxt: { fontSize: T.xs, fontWeight: '800', color: C.danger },
+  sigStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
+  sigStatusTxt: { fontSize: T.xs, fontWeight: '700', color: C.ink3 },
+  sigStatusTxtOk: { color: C.successText },
+  sigClearTxt: { fontSize: T.xs, fontWeight: '800', color: C.danger },
+
   // Photos
   photosGrid: { flexDirection: 'row', gap: 12 },
   photoBox: {
@@ -1408,6 +1910,7 @@ const s = StyleSheet.create({
     backgroundColor: C.yellowSoft,
   },
   photoBoxDone: { borderStyle: 'solid', borderColor: C.success },
+  photoBoxDisabled: { opacity: 0.45 },
   photoImg:     { width: '100%', height: '100%' },
   photoOverlay: {
     position: 'absolute', bottom: 0, left: 0, right: 0,

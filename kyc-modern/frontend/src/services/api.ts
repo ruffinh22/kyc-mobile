@@ -81,13 +81,15 @@ export async function getDossiers(p: { date?: string; debut?: string; fin?: stri
 export async function getDossierStats(date?: string) { return apiFetch<DossierStats>(`/api/dossiers/stats${date ? `?date=${date}` : ''}`); }
 export async function getDossier(id: string) { return apiFetch<{ dossier: Dossier }>(`/api/dossiers/${id}`); }
 export async function prendreEnCharge(id: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/prendre`, { method: 'POST' }); }
+export async function confirmerPriseEnCharge(id: string) { return apiFetch<{ success: boolean; assigne_le: number }>(`/api/dossiers/${id}/prendre-en-charge`, { method: 'POST' }); }
+export async function appelerDossier() { return apiFetch<{ success: boolean; aucun?: boolean; id?: string; message?: string }>('/api/dossiers/appeler', { method: 'POST' }); }
 export async function accepterDossier(id: string, resultat_crm?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/accepter`, { method: 'POST', json: { resultat_crm } }); }
 export async function rejeterDossier(id: string, raison: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/rejeter`, { method: 'POST', json: { raison } }); }
 export async function reprendreFaceVerify(id: string) { return apiFetch<{ success: boolean; message: string }>(`/api/dossiers/${id}/reprendre-face-verify`, { method: 'POST' }); }
 export async function transfererDossier(id: string, cible: string, message?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/transferer`, { method: 'POST', json: { cible, message } }); }
 export async function verifierVisage(id: string) { return apiFetch<{ score: number; match: boolean; motif: string }>(`/api/dossiers/${id}/verifier-visage`, { method: 'POST' }); }
-export function photoUrl(id: string, type: 'recto' | 'verso' | 'live') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
-export function photoUrlWithToken(id: string, type: 'recto' | 'verso' | 'live') {
+export function photoUrl(id: string, type: 'recto' | 'verso' | 'live' | 'signature') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
+export function photoUrlWithToken(id: string, type: 'recto' | 'verso' | 'live' | 'signature') {
   const base = `${BASE}/api/dossiers/${id}/photo/${type}`;
   // Prefer in-memory token, fallback to cookie or localStorage when available
   const token = _token || (typeof document !== 'undefined' ? (
@@ -126,7 +128,7 @@ export async function extractRectoDataWithTextract(photo_recto: Blob, country: s
     success: boolean;
     nom?: string; prenom?: string; date_naissance?: string; lieu_naissance?: string;
     adresse_complete?: string; numero_cni?: string; sexe?: string; nationalite?: string; profession?: string;
-    error?: string;
+    date_expiration?: string; type_piece?: string; error?: string;
   }>('/api/ocr/id-card', { method: 'POST', body: fd });
 }
 

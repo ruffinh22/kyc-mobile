@@ -53,6 +53,7 @@ export interface Dossier {
   photo_recto: string | null;
   photo_verso: string | null;
   photo_live: string | null;
+  photo_signature: string | null;
   score_visage: number | null;
   visage_match: number | null;
   visage_motif: string | null;
@@ -85,6 +86,9 @@ export interface Dossier {
   sexe: string | null;
   nationalite: string | null;
   profession: string | null;
+  type_piece: string | null;
+  date_expiration: string | null;
+  signature_mode: string | null;
   country: string | null;
   ocr_overrides: string | null;
   flow_step: number | null;

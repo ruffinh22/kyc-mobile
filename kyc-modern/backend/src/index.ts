@@ -18,9 +18,9 @@ import staticPlugin from '@fastify/static';
 import websocket from '@fastify/websocket';
 
 import { initDb, getConfig } from './db';
+import { reconcileAgentLocks } from './db/locks';
 import { registerRoutes } from './routes';
 
-import { startDossierTimeoutWorker } from './utils/dossier-timeout-worker';
 import { distribuerMaintenant } from './utils/distribution';
 
 const PORT     = parseInt(process.env.PORT || '3001', 10);
@@ -40,6 +40,7 @@ const app: any = Fastify({
 
 async function main(): Promise<void> {
   await initDb();
+  await reconcileAgentLocks().catch(err => console.error('[LOCKS] reconciliation initiale échouée:', err));
 
   await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } });
   const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
@@ -214,10 +215,6 @@ async function main(): Promise<void> {
 
   await app.listen({ port: PORT, host: HOST });
   app.log.info(`✅ KYC V4 démarré — http://${HOST}:${PORT} [${NODE_ENV}]`);
-
-  // ── Workers en arrière-plan ───────────────────────────────────────────────
-  // Détecter et retourner les dossiers abandonnés (timeout)
-  startDossierTimeoutWorker();
 
   // ── Distribution automatique ──────────────────────────────────────────────
   const runDistributionLoop = async () => {

@@ -4,6 +4,12 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { Dossier } from '../types';
+import {
+  appelerProchainDossier,
+  prendreDossierSpecifique,
+  releaseAgentLock,
+  transferDossierToAgent,
+} from '../db/locks';
 
 const UPLOAD_CNI = process.env.UPLOAD_CNI || path.join(process.cwd(),'uploads','cni');
 
@@ -28,7 +34,7 @@ function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
   return {
     ...d,
     numero_mtn: '***', wa_agent: '***',
-    photo_recto: null, photo_verso: null, photo_live: null,
+    photo_recto: null, photo_verso: null, photo_live: null, photo_signature: null,
     // Infos titulaire/SIM — mêmes règles de confidentialité que numero_mtn/photos
     nom_titulaire: '***', prenom_titulaire: '***',
     date_naissance: '***', lieu_naissance: '***',
@@ -37,8 +43,75 @@ function maskDossier(d: Dossier, matricule: string, role: string): Dossier {
   };
 }
 
+// ── Redistribution automatique des dossiers non traités ───────────────────────
+// Si un dossier reste "en_cours" plus longtemps que le délai d'abandon configuré
+// (config 'distribution_abandon_sec' — réglable via /api/config/distribution-timing,
+// 120s/2min par défaut, cf. config.ts) sans être traité (accepté, rejeté,
+// transféré...), il est remis dans la file globale ('en_attente') pour être
+// redistribué à un autre agent disponible.
+const DOSSIER_TIMEOUT_SEC_DEFAULT = 120;
+let timeoutIntervalStarted = false;
+
+async function getAbandonSeconds(): Promise<number> {
+  try {
+    const v = await db.getConfig('distribution_abandon_sec');
+    const n = parseInt(v ?? '', 10);
+    if (!Number.isNaN(n) && n > 0) return n;
+  } catch (e) {}
+  return DOSSIER_TIMEOUT_SEC_DEFAULT;
+}
+
+async function requeueDossiersExpires(): Promise<void> {
+  const maintenant = nowSec();
+  const abandonSec = await getAbandonSeconds();
+  const seuil = maintenant - abandonSec;
+  try {
+    const expires = await db.query<{ id: string; agent_saisie: string | null }>(
+      "SELECT id, agent_saisie FROM dossiers WHERE statut = 'en_cours' AND assigne_le IS NOT NULL AND assigne_le < ?",
+      [seuil]
+    );
+    if (!expires.length) return;
+
+    await db.exec(
+      `UPDATE dossiers
+       SET statut = 'en_attente', agent_saisie = NULL, assigne_a = NULL,
+           assigne_le = NULL, heure_prise = NULL, updated_at = ?
+       WHERE statut = 'en_cours' AND assigne_le IS NOT NULL AND assigne_le < ?`,
+      [maintenant, seuil]
+    );
+
+    for (const d of expires) {
+      // Le dossier n'est plus en_cours pour cet agent : on libère son
+      // verrou (agent_dossier_lock) pour qu'il soit immédiatement
+      // ré-éligible à une nouvelle attribution, sans attendre le prochain
+      // cycle de réconciliation.
+      if (d.agent_saisie) {
+        try { await releaseAgentLock(d.agent_saisie); } catch (e) {}
+      }
+      db.audit(d.agent_saisie || 'SYSTEM', 'DOSSIER_TIMEOUT_REQUEUE', `id=${d.id} (>${abandonSec}s sans action, remis en file)`, 'system');
+      try {
+        const sse = await import('../utils/sse.js');
+        if (d.agent_saisie) sse.notifier(d.agent_saisie, 'dossier-expire', { id: d.id });
+      } catch (e) {}
+    }
+
+    // Redistribuer immédiatement aux agents disponibles (mode auto)
+    try {
+      const { distribuerMaintenant } = await import('../utils/distribution.js');
+      await distribuerMaintenant();
+    } catch (e) {}
+  } catch (e) {
+    // Ne jamais interrompre le serveur pour une erreur de nettoyage périodique
+  }
+}
+
 export async function dossiersRoutes(app: any): Promise<void> {
   (app as unknown as { addHook: (name: string, hook: typeof requireAuth) => void }).addHook('preHandler', requireAuth);
+
+  if (!timeoutIntervalStarted) {
+    timeoutIntervalStarted = true;
+    setInterval(() => { requeueDossiersExpires(); }, 30_000);
+  }
 
   // GET /api/dossiers
   app.get('/api/dossiers', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -75,7 +148,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
     const params = req.params as { id: string; type: string };
     const { matricule, role } = req.user;
     const log = req.log as unknown as { info: (payload: Record<string, unknown>, msg?: string) => void };
-    if (!['recto','verso','live'].includes(params.type)) return reply.code(400).send({ error: 'Type invalide' });
+    if (!['recto','verso','live','signature'].includes(params.type)) return reply.code(400).send({ error: 'Type invalide' });
     const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     log.info({ event: 'photo-access', dossierId: params.id, type: params.type, user: req.user, agent_saisie: d.agent_saisie, statut: d.statut }, 'photo access check');
@@ -83,7 +156,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
       log.info({ reason: 'access_rejected', expectedMatricule: matricule, actualAgentSaisie: d.agent_saisie, statut: d.statut }, 'photo access denied');
       return reply.code(403).send({ error: 'Accès refusé' });
     }
-    const field = `photo_${params.type}` as 'photo_recto'|'photo_verso'|'photo_live';
+    const field = `photo_${params.type}` as 'photo_recto'|'photo_verso'|'photo_live'|'photo_signature';
     if (!d[field]) return reply.code(404).send({ error: 'Photo non disponible' });
     const safeRoot = path.resolve(UPLOAD_CNI);
     const fullPath = path.resolve(safeRoot, d[field]!);
@@ -137,73 +210,67 @@ export async function dossiersRoutes(app: any): Promise<void> {
   });
 
   // POST /api/dossiers/:id/prendre
+  // PATCH : passe par prendreDossierSpecifique() (verrou agent_dossier_lock),
+  // qui garantit que l'agent ne détient déjà aucun autre dossier en_cours —
+  // l'ancienne version ne faisait AUCUNE vérification de ce type.
   app.post('/api/dossiers/:id/prendre', async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id: string };
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
     const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     if (d.statut !== 'en_attente') return reply.code(409).send({ error: `Statut: ${d.statut}` });
-    await db.updateDossier(params.id, { statut: 'en_cours', agent_saisie: req.user.matricule, assigne_a: req.user.matricule, assigne_le: nowSec(), heure_prise: nowTime() });
+
+    const outcome = await prendreDossierSpecifique(req.user.matricule, params.id);
+    if (outcome === 'agent_occupe') {
+      return reply.code(409).send({ error: 'Vous avez déjà un dossier en cours' });
+    }
+    if (outcome === 'dossier_indisponible') {
+      return reply.code(409).send({ error: 'Dossier déjà pris par un autre agent' });
+    }
+
     await db.upsertPresence(req.user.matricule, 'online');
     db.audit(req.user.matricule,'DOSSIER_PRIS',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
   });
 
+  // POST /api/dossiers/:id/prendre-en-charge
+  // Confirmation explicite, côté agent, de la prise en charge d'un dossier déjà
+  // en_cours (attribué via distribution automatique / POST /api/dossiers/appeler).
+  // L'agent doit consulter le détail complet du dossier avant d'accepter/rejeter ;
+  // ce clic relève le chrono d'abandon (assigne_le) pour que le dossier ne soit
+  // pas repris par le système pendant que l'agent est en train de le traiter.
+  app.post('/api/dossiers/:id/prendre-en-charge', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
+    const d = await db.getDossierById(params.id);
+    if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
+    if (d.statut !== 'en_cours') return reply.code(409).send({ error: `Statut: ${d.statut}` });
+    if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
+    const nouvelleAssignation = nowSec();
+    await db.updateDossier(params.id, { assigne_le: nouvelleAssignation });
+    db.audit(req.user.matricule, 'DOSSIER_PRISE_EN_CHARGE_CONFIRMEE', `id=${params.id}`, req.ip);
+    return reply.send({ success: true, assigne_le: nouvelleAssignation });
+  });
+
   // POST /api/dossiers/appeler - Mode AUTO: appeler le prochain dossier
+  // PATCH : toute la logique de contrôle "1 dossier max par agent" + boucle
+  // anti-collision est désormais dans appelerProchainDossier() (db/locks.ts),
+  // qui pose le verrou et attribue le dossier dans UNE transaction. C'est la
+  // même fonction que celle utilisée par le worker de distribution
+  // automatique (utils/distribution.ts) — les deux chemins ne peuvent donc
+  // plus jamais attribuer 2 dossiers au même agent, même en cas d'appel
+  // concurrent des deux à la fois.
   app.post('/api/dossiers/appeler', async (req: FastifyRequest, reply: FastifyReply) => {
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
     const { matricule } = req.user;
-    const maintenant = nowSec();
 
-    // 1) Limite de dossiers en cours simultanés (distribution_max_total, défaut 2)
-    let maxTotal = 2;
-    try {
-      const configRow = await db.query<{ valeur: string }>("SELECT valeur FROM config WHERE cle='distribution_max_total'");
-      if (configRow.length && parseInt(configRow[0].valeur, 10) > 0) {
-        maxTotal = parseInt(configRow[0].valeur, 10);
-      }
-    } catch (e) {}
+    const res = await appelerProchainDossier(matricule);
 
-    const enCours = await db.query<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM dossiers WHERE agent_saisie = ? AND statut = 'en_cours'",
-      [matricule]
-    );
-    if (enCours.length && enCours[0].n >= maxTotal) {
-      return reply.code(409).send({ error: `Maximum de ${maxTotal} dossiers en cours atteint` });
+    if (res.result === 'agent_occupe') {
+      return reply.code(409).send({ error: 'Maximum de 1 dossier en cours atteint' });
     }
-
-    // 2) Boucle anti-collision: prendre le plus ancien en_attente
-    let attribue: { id: string; numero_mtn: string } | null = null;
-    for (let essai = 0; essai < 5; essai++) {
-      const prochains = await db.query<{ id: string; numero_mtn: string }>(
-        "SELECT id, numero_mtn FROM dossiers WHERE statut = 'en_attente' ORDER BY created_at ASC LIMIT 1"
-      );
-      if (!prochains.length) {
-        return reply.send({ success: true, aucun: true, message: 'Aucun dossier en attente' });
-      }
-
-      const prochain = prochains[0];
-      const result = await db.exec(
-        `UPDATE dossiers
-         SET statut = 'en_cours',
-             agent_saisie = ?,
-             assigne_a = ?,
-             assigne_le = ?,
-             heure_prise = FROM_UNIXTIME(?),
-             updated_at = ?
-         WHERE id = ? AND statut = 'en_attente'`,
-        [matricule, matricule, maintenant, maintenant, maintenant, prochain.id]
-      );
-
-      if (result.affectedRows === 1) {
-        attribue = prochain;
-        break;
-      }
-      // Sinon un autre agent l'a pris: on réessaie
-    }
-
-    if (!attribue) {
-      return reply.code(409).send({ error: 'Aucun dossier disponible (collision)' });
+    if (res.result === 'aucun_dossier') {
+      return reply.send({ success: true, aucun: true, message: 'Aucun dossier en attente' });
     }
 
     // 3) L'agent devient occupé: on efface dispo_depuis
@@ -211,15 +278,15 @@ export async function dossiersRoutes(app: any): Promise<void> {
       await db.exec("UPDATE presence SET dispo_depuis = NULL WHERE matricule = ?", [matricule]);
     } catch (e) {}
 
-    db.audit(matricule, 'DOSSIER_APPELER', `id=${attribue.id} numero=${attribue.numero_mtn}`, req.ip);
-    
+    db.audit(matricule, 'DOSSIER_APPELER', `id=${res.dossierId} numero=${res.numeroMtn}`, req.ip);
+
     // Notifier via SSE
     try {
       const sse = await import('../utils/sse.js');
-      sse.notifier(matricule, 'nouveau-dossier', { id: attribue.id });
+      sse.notifier(matricule, 'nouveau-dossier', { id: res.dossierId });
     } catch(e){}
 
-    return reply.send({ success: true, id: attribue.id });
+    return reply.send({ success: true, id: res.dossierId });
   });
 
   // POST /api/dossiers/ping-dispo - L'agent signale qu'il est présent et actif
@@ -256,6 +323,10 @@ export async function dossiersRoutes(app: any): Promise<void> {
          WHERE agent_saisie=? AND statut='en_cours'`,
         [maintenant, matricule]
       );
+
+      // Le(s) dossier(s) de cet agent ne sont plus en_cours : on libère son
+      // verrou pour qu'il soit immédiatement ré-éligible à la reprise.
+      try { await releaseAgentLock(matricule); } catch (e) {}
 
       // Passer en pause
       await db.exec(
@@ -314,6 +385,9 @@ export async function dossiersRoutes(app: any): Promise<void> {
     if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
     const body = req.body as { resultat_crm?: string }|null;
     await db.updateDossier(params.id, { statut: 'accepte', heure_cloture: nowTime(), closed_at: nowSec(), resultat_crm: body?.resultat_crm??null });
+    // Le dossier quitte en_cours : on libère le verrou pour rendre l'agent
+    // immédiatement éligible à une nouvelle attribution.
+    try { await releaseAgentLock(req.user.matricule); } catch (e) {}
     db.audit(req.user.matricule,'DOSSIER_ACCEPTE',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
   });
@@ -329,11 +403,21 @@ export async function dossiersRoutes(app: any): Promise<void> {
     const body = req.body as { raison?: string }|null;
     if (!body?.raison?.trim()) return reply.code(400).send({ error: 'Raison obligatoire' });
     await db.updateDossier(params.id, { statut: 'rejete', heure_cloture: nowTime(), closed_at: nowSec(), raison_rejet: body.raison.trim() });
+    try { await releaseAgentLock(req.user.matricule); } catch (e) {}
     db.audit(req.user.matricule,'DOSSIER_REJETE',`id=${params.id} raison=${body.raison}`,req.ip);
     return reply.send({ success: true });
   });
 
   // POST /api/dossiers/:id/reprendre-face-verify
+  // NOTE : cette route remet un dossier en en_cours pour le même agent sans
+  // repasser par le verrou (le dossier lui appartient déjà, d.agent_saisie
+  // === matricule est vérifié). Si le dossier n'était PAS déjà en_cours au
+  // moment de l'appel (ex: reprise après un rejet), l'agent pourrait ne plus
+  // détenir de verrou, ou pire, en détenir un pour un AUTRE dossier entre
+  // temps. Distinct du bug initial — à valider avec le métier si ce flux est
+  // censé être possible en dehors d'un dossier déjà en_cours ; je n'ai pas
+  // introduit de contrôle ici pour ne pas changer un comportement produit
+  // sans confirmation.
   app.post('/api/dossiers/:id/reprendre-face-verify', async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id: string };
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
@@ -357,6 +441,9 @@ export async function dossiersRoutes(app: any): Promise<void> {
   });
 
   // POST /api/dossiers/:id/transferer (sup/admin)
+  // PATCH : passe par transferDossierToAgent() (db/locks.ts), qui refuse le
+  // transfert si l'agent cible a déjà un dossier en_cours (au lieu de créer
+  // silencieusement une seconde attribution pour lui).
   app.post('/api/dossiers/:id/transferer',
     { preHandler: requireRole(['superviseur','admin']) },
     async (req: FastifyRequest, reply: FastifyReply) => {
@@ -366,9 +453,14 @@ export async function dossiersRoutes(app: any): Promise<void> {
       const cible = body.cible.trim().toUpperCase();
       const cibleCompte = await db.getCompteByMatricule(cible);
       if (!cibleCompte || !cibleCompte.actif) return reply.code(400).send({ error: 'Agent cible introuvable ou inactif' });
-      const d = await db.getDossierById(params.id);
-      if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
-      await db.updateDossier(params.id, { statut: 'en_cours', agent_saisie: cible, assigne_a: cible, assigne_le: nowSec(), heure_prise: nowTime(), transfert_message: body.message??null, transfert_par: req.user.matricule });
+
+      const outcome = await transferDossierToAgent(params.id, cible, {
+        message: body.message ?? null,
+        transferePar: req.user.matricule,
+      });
+      if (outcome === 'introuvable') return reply.code(404).send({ error: 'Dossier introuvable' });
+      if (outcome === 'cible_occupee') return reply.code(409).send({ error: 'Agent cible déjà occupé par un autre dossier' });
+
       db.audit(req.user.matricule,'DOSSIER_TRANSFERE',`id=${params.id} vers=${cible}`,req.ip);
       return reply.send({ success: true });
     }

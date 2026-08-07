@@ -22,6 +22,10 @@ function getPoolOrThrow(): Pool {
   return pool;
 }
 
+export function getPool(): Pool {
+  return getPoolOrThrow();
+}
+
 export function isDbAvailable(): boolean {
   return pool !== null;
 }
@@ -451,36 +455,38 @@ export async function getDossierStats(date: string): Promise<{
 export async function createDossier(data: {
   id: string; numero_mtn: string; wa_agent?: string | null; username_agent?: string | null;
   fonction_agent?: string | null; zone_agent?: string | null; date: string;
-  heure_reception: string; photo_recto?: string | null; photo_verso?: string | null; photo_live?: string | null;
+  heure_reception: string; photo_recto?: string | null; photo_verso?: string | null; photo_live?: string | null; photo_signature?: string | null;
   score_visage?: number | null; visage_match?: number | null; visage_motif?: string | null;
   visage_verifie_le?: number | null; nom_titulaire?: string | null;
   prenom_titulaire?: string | null; date_naissance?: string | null;
   lieu_naissance?: string | null; autre_numero?: string | null; nom_pere?: string | null;
   nom_mere?: string | null; adresse_complete?: string | null; numero_cni?: string | null;
   sexe?: string | null; nationalite?: string | null; profession?: string | null;
+  type_piece?: string | null; date_expiration?: string | null; signature_mode?: string | null;
   country?: string | null; ocr_overrides?: string | null; flow_step?: number | null;
   acquisition_status?: string | null;
 }): Promise<void> {
   const now = nowSec();
   const columns = [
     'id', 'numero_mtn', 'wa_agent', 'username_agent', 'fonction_agent', 'zone_agent',
-    'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live', 'score_visage', 'visage_match',
+    'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live', 'photo_signature', 'score_visage', 'visage_match',
     'visage_motif', 'visage_verifie_le', 'nom_titulaire', 'prenom_titulaire', 'date_naissance',
     'lieu_naissance', 'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
-    'sexe', 'nationalite', 'profession', 'country', 'ocr_overrides', 'flow_step', 'acquisition_status',
+    'sexe', 'nationalite', 'profession', 'type_piece', 'date_expiration', 'country', 'ocr_overrides', 'flow_step', 'acquisition_status',
     'created_at', 'updated_at',
   ];
   const values = [
     data.id, data.numero_mtn, data.wa_agent ?? null, data.username_agent ?? null,
     data.fonction_agent ?? null, data.zone_agent ?? null,
     data.date, data.heure_reception,
-    data.photo_recto ?? null, data.photo_verso ?? null, data.photo_live ?? null,
+    data.photo_recto ?? null, data.photo_verso ?? null, data.photo_live ?? null, data.photo_signature ?? null,
     data.score_visage ?? null, data.visage_match ?? null, data.visage_motif ?? null,
     data.visage_verifie_le ?? null, data.nom_titulaire ?? null, data.prenom_titulaire ?? null,
     data.date_naissance ?? null, data.lieu_naissance ?? null, data.autre_numero ?? null,
     data.nom_pere ?? null, data.nom_mere ?? null, data.adresse_complete ?? null,
     data.numero_cni ?? null, data.sexe ?? null, data.nationalite ?? null,
-    data.profession ?? null, data.country ?? null, data.ocr_overrides ?? null,
+    data.profession ?? null, data.type_piece ?? null, data.date_expiration ?? null, data.signature_mode ?? null,
+    data.country ?? null, data.ocr_overrides ?? null,
     data.flow_step ?? null, data.acquisition_status ?? null, now, now,
   ];
   const placeholders = columns.map(() => '?').join(', ');
@@ -500,12 +506,12 @@ export async function updateDossier(
     'resultat_crm', 'assigne_a', 'assigne_le', 'closed_at', 'transfert_message',
     'transfert_par', 'gsm_complete', 'note', 'note_superviseur',
     'numero_mtn', 'wa_agent', 'username_agent', 'fonction_agent', 'zone_agent',
-    'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live',
+    'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live', 'photo_signature',
     'score_visage', 'visage_match', 'visage_motif', 'visage_verifie_le',
     'liveness_status', 'liveness_confidence', 'liveness_verifie_le',
     'nom_titulaire', 'prenom_titulaire', 'date_naissance', 'lieu_naissance',
     'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
-    'sexe', 'nationalite', 'profession', 'country', 'ocr_overrides',
+    'sexe', 'nationalite', 'profession', 'type_piece', 'date_expiration', 'signature_mode', 'country', 'ocr_overrides',
     'flow_step', 'acquisition_status',
   ];
   const sets: string[] = ['updated_at=?'];

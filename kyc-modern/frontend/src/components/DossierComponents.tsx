@@ -14,6 +14,17 @@ function parseDossierTime(value: string | null): number | null {
   return null;
 }
 
+function formatDossierDate(value: string | null): string {
+  if (!value) return '—';
+  const trimmed = value.trim();
+  if (!trimmed) return '—';
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return trimmed;
+  return new Date(parsed).toLocaleDateString('fr-FR', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+  });
+}
+
 function formatProcessingDuration(dossier: Dossier, now = Date.now()): string {
   const startCandidate = dossier.assigne_le && dossier.assigne_le > 0
     ? dossier.assigne_le * 1000
@@ -98,12 +109,12 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
                 <td>
                   <div className="dossier-cell-primary">
                     <span className="dossier-ref-badge">{d.id}</span>
-                    <span className="dossier-ref-sub">{d.date || '—'}</span>
+                    <span className="dossier-ref-sub">{formatDossierDate(d.date)}</span>
                   </div>
                 </td>
                 <td><span className="dossier-cell-value">{d.masque ? '***' : d.numero_mtn || '—'}</span></td>
                 {showAgent && <td><span className="dossier-cell-value">{d.agent_saisie || '—'}</span></td>}
-                {showDate  && <td><span className="dossier-cell-value">{d.date || '—'}</span></td>}
+                {showDate  && <td><span className="dossier-cell-value">{formatDossierDate(d.date)}</span></td>}
                 <td><span className="dossier-cell-value">{d.heure_reception || '—'}</span></td>
                 <td><span className="dossier-cell-value">{formatProcessingDuration(d, now)}</span></td>
                 <td><StatutBadge statut={d.statut} /></td>
@@ -158,6 +169,7 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
 
         <div className="detail-grid">
           <div className="detail-item"><span className="detail-label">Numéro MTN</span><span className="detail-value">{dossier.masque ? '***' : dossier.numero_mtn}</span></div>
+          <div className="detail-item"><span className="detail-label">Date</span><span className="detail-value">{formatDossierDate(dossier.date)}</span></div>
           <div className="detail-item"><span className="detail-label">Agent terrain</span><span className="detail-value">{dossier.username_agent || '—'}</span></div>
           <div className="detail-item"><span className="detail-label">Fonction</span><span className="detail-value">{dossier.fonction_agent || '—'}</span></div>
           <div className="detail-item"><span className="detail-label">Zone</span><span className="detail-value">{dossier.zone_agent || '—'}</span></div>

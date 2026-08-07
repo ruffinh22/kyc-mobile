@@ -29,6 +29,12 @@ const MAX_FILE     = 5  * 1024 * 1024; // 5 Mo pour recto/verso
 const MAX_LIVE     = 10 * 1024 * 1024; // 10 Mo pour photo live
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+// Doit rester cohérent avec OFFICIAL_DOC_TYPES dans routes/ocr.ts : types de
+// pièces au format d'État structuré (numéro, dates, expiration) pour
+// lesquels on exige une extraction/saisie complète. Toute autre valeur
+// (carte scolaire, type non reconnu) tolère des champs manquants.
+const OFFICIAL_DOC_TYPES = new Set(['CNI', 'CEDEAO', 'PASSPORT', 'CIP', 'PERMIS']);
+
 // NOTE: session management for face-verify flows is handled in
 // `face-verify.ts` to avoid duplicated route declarations.
 
@@ -554,7 +560,11 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         if (part.type === 'field') {
           fields[part.fieldname] = String(part.value ?? '');
         } else if (part.type === 'file') {
-          if (!['photo_recto', 'photo_verso', 'photo_live'].includes(part.fieldname)) {
+          // photo_signature : signature manuscrite ou empreinte digitale
+          // capturée sur le pad en fin de formulaire (voir signature_mode
+          // ci-dessous pour distinguer les deux) — même traitement fichier
+          // que recto/verso/live.
+          if (!['photo_recto', 'photo_verso', 'photo_live', 'photo_signature'].includes(part.fieldname)) {
             part.file.resume(); continue;
           }
           if (!ALLOWED_MIME.has(part.mimetype)) { part.file.resume(); continue; }
@@ -572,8 +582,20 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         const { wa_agent, username_agent, fonction_agent, zone_agent, numero_mtn, country,
           nom_titulaire, prenom_titulaire, date_naissance, lieu_naissance,
           autre_numero, nom_pere, nom_mere, adresse_complete, numero_cni,
-          sexe, nationalite, profession } = fields;
+          sexe, nationalite, profession, type_piece, date_expiration, signature_mode } = fields;
         const normalizedWaAgent = String(wa_agent ?? '').replace(/\D/g, '');
+        // Signature : 'dessin' (tracé manuscrit, y compris recopié depuis la
+        // pièce) ou 'empreinte' (le titulaire appose son doigt — utilisé
+        // quand il ne sait pas signer). Par défaut 'dessin' si non précisé
+        // par un client plus ancien qui n'enverrait pas encore ce champ.
+        const normalizedSignatureMode = (String(signature_mode ?? '').trim().toLowerCase() === 'empreinte')
+          ? 'empreinte' : 'dessin';
+        // Pièce officielle (CNI, CEDEAO, PASSPORT, CIP, PERMIS) : extraction
+        // et validation complètes attendues, y compris la date d'expiration.
+        // Carte scolaire ou type non reconnu : format non standardisé, on
+        // n'exige que le strict nécessaire (nom/prénom du titulaire).
+        const normalizedTypePiece = String(type_piece ?? '').trim().toUpperCase() || 'AUTRE';
+        const isOfficialDocType = OFFICIAL_DOC_TYPES.has(normalizedTypePiece);
 
         // Validation renforcée : exiger un numéro WhatsApp agent non vide.
         // Minimal length 7 digits pour éviter les valeurs vides ou incorrectes.
@@ -585,13 +607,20 @@ export async function publicDossierRoutes(app: any): Promise<void> {
     if (!country?.trim())    return reply.code(400).send({ error: 'Pays requis' });
     if (!photos.photo_recto || !photos.photo_verso)
       return reply.code(400).send({ error: 'Photos recto et verso obligatoires' });
+    // Signature (manuscrite ou empreinte digitale) — obligatoire pour
+    // l'enregistrement SIM, capturée sur le pad en fin de formulaire.
+    if (!photos.photo_signature)
+      return reply.code(400).send({ error: 'Signature du titulaire obligatoire (dessin ou empreinte digitale)' });
     // Infos titulaire — requises pour l'enregistrement SIM (réglementation KYC)
     if (!nom_titulaire?.trim())    return reply.code(400).send({ error: 'Nom du titulaire requis' });
     if (!prenom_titulaire?.trim()) return reply.code(400).send({ error: 'Prénom du titulaire requis' });
-    if (!date_naissance?.trim())   return reply.code(400).send({ error: 'Date de naissance requise' });
-    if (!lieu_naissance?.trim())   return reply.code(400).send({ error: 'Lieu de naissance requis' });
     if (!nom_pere?.trim())         return reply.code(400).send({ error: 'Nom du père requis' });
     if (!nom_mere?.trim())         return reply.code(400).send({ error: 'Nom de la mère requis' });
+    if (isOfficialDocType) {
+      if (!date_naissance?.trim()) return reply.code(400).send({ error: 'Date de naissance requise' });
+      if (!lieu_naissance?.trim()) return reply.code(400).send({ error: 'Lieu de naissance requis' });
+      if (!date_expiration?.trim()) return reply.code(400).send({ error: 'Date d’expiration de la pièce requise' });
+    }
 
     const date    = nowDate();
     const destDir = path.join(UPLOAD_CNI, date);
@@ -600,7 +629,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
     const id = `KYC${Date.now()}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     const photoPaths: Record<string, string> = {};
 
-    for (const label of ['photo_recto', 'photo_verso', 'photo_live'] as const) {
+    for (const label of ['photo_recto', 'photo_verso', 'photo_live', 'photo_signature'] as const) {
       if (!photos[label]) continue;
       const ext = photos[label].mime === 'image/png' ? 'png'
                 : photos[label].mime === 'image/webp' ? 'webp' : 'jpg';
@@ -625,8 +654,10 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         zone_agent: zone_agent || dossier.zone_agent || null,
         nom_titulaire: nom_titulaire.trim(),
         prenom_titulaire: prenom_titulaire.trim(),
-        date_naissance: date_naissance.trim(),
-        lieu_naissance: lieu_naissance.trim(),
+        type_piece: normalizedTypePiece,
+        date_naissance: (date_naissance ?? '').trim() || dossier.date_naissance || null,
+        lieu_naissance: (lieu_naissance ?? '').trim() || dossier.lieu_naissance || null,
+        date_expiration: (date_expiration ?? '').trim() || dossier.date_expiration || null,
         autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || dossier.autre_numero || null,
         nom_pere: nom_pere.trim(),
         nom_mere: nom_mere.trim(),
@@ -636,6 +667,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         nationalite: (nationalite ?? '').trim() || dossier.nationalite || null,
         profession: (profession ?? '').trim() || dossier.profession || null,
         ocr_overrides: fields.ocr_overrides || dossier.ocr_overrides || null,
+        signature_mode: normalizedSignatureMode || dossier.signature_mode || null,
         flow_step: 4,
         acquisition_status: 'submitted',
         statut: 'en_attente',
@@ -643,6 +675,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         photo_recto: photoPaths.photo_recto,
         photo_verso: photoPaths.photo_verso,
         ...(photoPaths.photo_live ? { photo_live: photoPaths.photo_live } : {}),
+        photo_signature: photoPaths.photo_signature ?? dossier.photo_signature ?? null,
       });
 
       db.audit(null, 'DOSSIER_PUBLIC_MIS_A_JOUR', `id=${dossierId} wa=${wa_agent ?? ''}`, req.ip);
@@ -654,6 +687,8 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         recto_path: photoPaths.photo_recto ?? dossier.photo_recto ?? '',
         verso_path: photoPaths.photo_verso ?? dossier.photo_verso ?? '',
         photo_live: photoPaths.photo_live ?? dossier.photo_live ?? '',
+        signature_path: photoPaths.photo_signature ?? dossier.photo_signature ?? '',
+        signature_mode: normalizedSignatureMode || dossier.signature_mode || null,
         country: country?.trim() || dossier.country || null,
         flow_step: 4,
         acquisition_status: 'submitted',
@@ -674,8 +709,10 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         heure_reception: nowTime(),
         nom_titulaire: nom_titulaire.trim(),
         prenom_titulaire: prenom_titulaire.trim(),
-        date_naissance: date_naissance.trim(),
-        lieu_naissance: lieu_naissance.trim(),
+        type_piece: normalizedTypePiece,
+        date_naissance: (date_naissance ?? '').trim() || null,
+        lieu_naissance: (lieu_naissance ?? '').trim() || null,
+        date_expiration: (date_expiration ?? '').trim() || null,
         autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || null,
         nom_pere: nom_pere.trim(),
         nom_mere: nom_mere.trim(),
@@ -685,12 +722,14 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         nationalite: (nationalite ?? '').trim() || null,
         profession: (profession ?? '').trim() || null,
         ocr_overrides: fields.ocr_overrides || null,
+        signature_mode: normalizedSignatureMode,
         flow_step: 4,
         acquisition_status: 'submitted',
       }),
       photo_recto: photoPaths.photo_recto,
       photo_verso: photoPaths.photo_verso,
       photo_live: photoPaths.photo_live,
+      photo_signature: photoPaths.photo_signature,
     });
 
     db.audit(null, 'DOSSIER_PUBLIC_CREE', `id=${id} wa=${wa_agent ?? ''}`, req.ip);
@@ -703,6 +742,8 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       recto_path: photoPaths.photo_recto ?? '',
       verso_path: photoPaths.photo_verso ?? '',
       photo_live: photoPaths.photo_live ?? '',
+      signature_path: photoPaths.photo_signature ?? '',
+      signature_mode: normalizedSignatureMode,
       country: country?.trim() || null,
       flow_step: 4,
       acquisition_status: 'submitted',
@@ -864,6 +905,8 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       lieu_naissance: d.lieu_naissance ?? null,
       adresse_complete: d.adresse_complete ?? null,
       numero_cni: d.numero_cni ?? null,
+      type_piece: d.type_piece ?? null,
+      date_expiration: d.date_expiration ?? null,
       sexe: d.sexe ?? null,
       nationalite: d.nationalite ?? null,
       profession: d.profession ?? null,
@@ -943,6 +986,8 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         lieu_naissance: d.lieu_naissance ?? null,
         adresse_complete: d.adresse_complete ?? null,
         numero_cni: d.numero_cni ?? null,
+        type_piece: d.type_piece ?? null,
+        date_expiration: d.date_expiration ?? null,
         sexe: d.sexe ?? null,
         nationalite: d.nationalite ?? null,
         profession: d.profession ?? null,

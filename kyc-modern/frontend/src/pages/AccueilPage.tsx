@@ -1,6 +1,7 @@
 // ============================================================================
 // AccueilPage – Sélection de l'espace de travail (terrain vs back-office)
 // Design : navy profond MTN, verre dépoli premium, liseré or métallique,
+//          bandeau de confiance institutionnel, présence multi-pays,
 //          header avec logo + bouton de téléchargement APK
 // ============================================================================
 
@@ -14,9 +15,10 @@ export function AccueilPage() {
     <div style={S.root} className="ac-root">
       <FontsAndKeyframes />
 
-      {/* Halos décoratifs */}
+      {/* Halos décoratifs + trame technique */}
       <div style={S.haloTop} />
       <div style={S.haloBottom} />
+      <div style={S.gridPattern} />
       <div style={S.grain} />
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -29,23 +31,39 @@ export function AccueilPage() {
           </div>
         </div>
 
-        <ApkButton
-          href="/apk/app-release.apk"
-        />
+        <div style={S.headerRight}>
+          <span style={S.headerBadge}><IconGlobe /> Réseau mobile</span>
+          <ApkButton href="/apk/app-release.apk" />
+        </div>
       </header>
 
       {/* ── Hero ───────────────────────────────────────────────────────── */}
       <div style={S.hero} className="ac-hero">
-        <span style={S.heroEyebrow}>Plateforme KYC · Palladium Africa</span>
-        <h1 style={S.heroTitle} className="ac-hero-title">Sélectionnez votre<br />espace de travail</h1>
+        <span style={S.heroEyebrow}>
+          <span className="live-dot" />
+          Plateforme KYC · Palladium Africa
+        </span>
+        <h1 style={S.heroTitle} className="ac-hero-title">
+          Sélectionnez votre<br /><span style={S.heroTitleAccent}>espace de travail</span>
+        </h1>
         <p style={S.heroSubtitle}>
           Deux univers, une seule exigence&nbsp;: la certification de qualité.
         </p>
+
+        {/* Bandeau de confiance institutionnel */}
+        <div style={S.trustBar} className="ac-trust-bar">
+          <span style={S.trustItem}><IconLock /> Chiffrement de bout en bout</span>
+          <span style={S.trustDivider} />
+          <span style={S.trustItem}><IconCheck /> Conforme aux normes KYC</span>
+          <span style={S.trustDivider} />
+          <span style={S.trustItem}><IconGlobe /> Opérations multi-pays</span>
+        </div>
       </div>
 
       {/* ── Cartes ─────────────────────────────────────────────────────── */}
       <div style={S.grid} className="ac-grid">
         <CardLink
+          index="01"
           href="/acquisition"
           icon={<IconClipboard />}
           eyebrow="Terrain"
@@ -55,6 +73,7 @@ export function AccueilPage() {
         />
 
         <CardLink
+          index="02"
           href="/login"
           icon={<IconBuilding />}
           eyebrow="Back office"
@@ -65,7 +84,10 @@ export function AccueilPage() {
         />
       </div>
 
-      <p style={S.footer} className="ac-footer">KYC · Palladium Africa © 2026 · 🔒 Connexion sécurisée</p>
+      <div style={S.footerDivider} />
+      <p style={S.footer} className="ac-footer">
+        KYC · Palladium Africa © 2026 · 🔒 Connexion sécurisée
+      </p>
     </div>
   );
 }
@@ -105,7 +127,7 @@ function ApkButton({ href }: { href: string }) {
 
 // ── Composant carte lien ────────────────────────────────────────────────────
 function CardLink({
-  href, icon, eyebrow, title, desc, isGold = false, onNavigate,
+  href, icon, eyebrow, title, desc, isGold = false, onNavigate, index,
 }: {
   href: string;
   icon: React.ReactNode;
@@ -114,6 +136,7 @@ function CardLink({
   desc: string;
   isGold?: boolean;
   onNavigate?: () => void;
+  index: string;
 }) {
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -150,6 +173,7 @@ function CardLink({
       }}
     >
       <span className="card-shine" style={S.cardShine} />
+      <span style={S.cardIndex}>{index}</span>
       <div style={S.cardTop}>
         <div style={{ ...S.cardIconBadge, ...(isGold ? S.cardIconBadgeGold : {}) }}>{icon}</div>
         <span style={S.cardEyebrow}>{eyebrow}</span>
@@ -211,6 +235,39 @@ function IconDownload() {
   );
 }
 
+function IconLock() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0 }}>
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0 }}>
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+  );
+}
+
+function IconGlobe() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M2 12h20"/>
+      <path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10Z"/>
+    </svg>
+  );
+}
+
 // ── Fonts + keyframes (injecté une fois) ────────────────────────────────────
 function FontsAndKeyframes() {
   return (
@@ -222,13 +279,48 @@ function FontsAndKeyframes() {
         50%      { transform: translateX(-50%) translateY(14px); opacity: 1; }
       }
 
+      @keyframes pulseDot {
+        0%   { box-shadow: 0 0 0 0 rgba(70,220,150,.55); }
+        70%  { box-shadow: 0 0 0 7px rgba(70,220,150,0); }
+        100% { box-shadow: 0 0 0 0 rgba(70,220,150,0); }
+      }
+
+      @keyframes ringSpin {
+        to { transform: rotate(360deg); }
+      }
+
       .ac-root { box-sizing: border-box; }
       .ac-root *, .ac-root *::before, .ac-root *::after { box-sizing: inherit; }
 
+      .live-dot {
+        display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+        background: #46dc96; margin-right: 7px; vertical-align: middle;
+        animation: pulseDot 2.2s infinite;
+      }
+
+      .ac-card { position: relative; isolation: isolate; }
+      .ac-card::before {
+        content: '';
+        position: absolute; inset: -1px;
+        border-radius: 23px;
+        padding: 1px;
+        background: conic-gradient(from 0deg, rgba(255,204,0,0) 0%, rgba(255,204,0,.7) 20%, rgba(255,204,0,0) 40%);
+        -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        opacity: 0;
+        transition: opacity .5s ease;
+        animation: ringSpin 5s linear infinite;
+        pointer-events: none;
+        z-index: -1;
+      }
+      .ac-card:hover::before { opacity: 1; }
+
       /* ── Tablette ─────────────────────────────────────────────── */
       @media (max-width: 860px) {
-        .ac-header { padding-top: 22px !important; }
-        .ac-grid   { max-width: 520px !important; gap: 18px !important; }
+        .ac-header    { padding-top: 22px !important; }
+        .ac-grid      { max-width: 520px !important; gap: 18px !important; }
+        .ac-trust-bar { gap: 10px !important; }
       }
 
       /* ── Grille en une colonne ────────────────────────────────── */
@@ -239,12 +331,14 @@ function FontsAndKeyframes() {
 
       /* ── Mobile ───────────────────────────────────────────────── */
       @media (max-width: 560px) {
-        .ac-root      { padding-left: 14px !important; padding-right: 14px !important; padding-bottom: 40px !important; }
-        .ac-header    { flex-direction: column !important; align-items: stretch !important; gap: 14px !important; padding-top: 18px !important; }
-        .ac-apk-btn   { width: 100% !important; justify-content: center !important; padding: 12px 16px !important; }
-        .ac-hero      { margin-top: 32px !important; margin-bottom: 30px !important; }
-        .ac-hero-title{ font-size: 24px !important; letter-spacing: -.2px !important; }
-        .ac-footer    { margin-top: 32px !important; text-align: center !important; padding: 0 8px !important; }
+        .ac-root       { padding-left: 14px !important; padding-right: 14px !important; padding-bottom: 40px !important; }
+        .ac-header     { flex-direction: column !important; align-items: stretch !important; gap: 14px !important; padding-top: 18px !important; }
+        .ac-apk-btn    { width: 100% !important; justify-content: center !important; padding: 12px 16px !important; }
+        .ac-hero       { margin-top: 32px !important; margin-bottom: 26px !important; }
+        .ac-hero-title { font-size: 24px !important; letter-spacing: -.2px !important; }
+        .ac-trust-bar  { flex-direction: column !important; gap: 10px !important; align-items: center !important; }
+        .ac-trust-bar > span[data-divider] { display: none !important; }
+        .ac-footer     { margin-top: 26px !important; text-align: center !important; padding: 0 8px !important; }
       }
 
       /* ── Très petit écran ─────────────────────────────────────── */
@@ -264,7 +358,7 @@ function FontsAndKeyframes() {
 const S: Record<string, React.CSSProperties> = {
   root: {
     minHeight: '100vh',
-    background: 'var(--mtn-blue, #003e7e)',
+    background: 'radial-gradient(ellipse 1200px 700px at 50% -10%, #0d5aad 0%, #003e7e 42%, #00294f 78%, #001327 100%)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -273,6 +367,15 @@ const S: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
     fontFamily: "'Inter', system-ui, sans-serif",
     WebkitFontSmoothing: 'antialiased',
+  },
+  gridPattern: {
+    position: 'absolute', inset: 0,
+    backgroundImage:
+      'linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px)',
+    backgroundSize: '64px 64px',
+    maskImage: 'radial-gradient(ellipse 900px 600px at 50% 0%, #000 0%, transparent 75%)',
+    WebkitMaskImage: 'radial-gradient(ellipse 900px 600px at 50% 0%, #000 0%, transparent 75%)',
+    pointerEvents: 'none',
   },
   grain: {
     position: 'absolute', inset: 0,
@@ -300,7 +403,7 @@ const S: Record<string, React.CSSProperties> = {
   // Header
   header: {
     position: 'relative', zIndex: 2,
-    width: '100%', maxWidth: 900,
+    width: '100%', maxWidth: 960,
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '26px 4px 0',
     gap: 16,
@@ -328,6 +431,17 @@ const S: Record<string, React.CSSProperties> = {
   headerTag: {
     fontStyle: 'italic', fontWeight: 500, fontSize: 10,
     color: 'rgba(255,255,255,.6)', letterSpacing: '.2px', marginTop: 2,
+  },
+  headerRight: { display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' },
+  headerBadge: {
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    fontSize: 10.5, fontWeight: 600, letterSpacing: '.3px',
+    color: 'rgba(255,255,255,.6)',
+    padding: '6px 12px',
+    borderRadius: 999,
+    border: '1px solid rgba(255,255,255,.14)',
+    background: 'rgba(255,255,255,.04)',
+    whiteSpace: 'nowrap',
   },
 
   // APK button (header)
@@ -366,29 +480,59 @@ const S: Record<string, React.CSSProperties> = {
   // Hero
   hero: {
     position: 'relative', zIndex: 1,
-    marginTop: 56, marginBottom: 44,
+    marginTop: 56, marginBottom: 40,
     textAlign: 'center' as const,
-    maxWidth: 620,
+    maxWidth: 660,
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
   },
   heroEyebrow: {
-    display: 'inline-block',
+    display: 'inline-flex', alignItems: 'center',
     fontSize: 11, fontWeight: 700,
     letterSpacing: 3.2, textTransform: 'uppercase' as const,
     color: '#FFCC00',
-    marginBottom: 18,
+    marginBottom: 20,
+    padding: '7px 16px',
+    borderRadius: 999,
+    border: '1px solid rgba(255,204,0,.28)',
+    background: 'rgba(255,204,0,.05)',
   },
   heroTitle: {
     fontFamily: "'Sora', sans-serif",
-    fontWeight: 800, fontSize: 'clamp(28px, 4vw, 40px)',
+    fontWeight: 800, fontSize: 'clamp(28px, 4vw, 42px)',
     lineHeight: 1.18, letterSpacing: '-.5px',
     color: '#F8F9FB',
     margin: 0,
+  },
+  heroTitleAccent: {
+    background: 'linear-gradient(100deg, #FFE58A 0%, #FFCC00 45%, #FFE58A 100%)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    backgroundClip: 'text',
   },
   heroSubtitle: {
     marginTop: 16,
     fontSize: 14.5, lineHeight: 1.6,
     color: 'rgba(255,255,255,.7)',
     fontWeight: 400,
+  },
+
+  // Bandeau de confiance
+  trustBar: {
+    marginTop: 26,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 18,
+    flexWrap: 'wrap',
+  },
+  trustItem: {
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    fontSize: 11.5, fontWeight: 500,
+    color: 'rgba(255,255,255,.6)',
+    letterSpacing: '.1px',
+  },
+  trustDivider: {
+    width: 3, height: 3, borderRadius: '50%',
+    background: 'rgba(255,255,255,.25)',
+    flexShrink: 0,
   },
 
   // Grid
@@ -429,6 +573,13 @@ const S: Record<string, React.CSSProperties> = {
     transform: 'translateX(-120%) skewX(-12deg)',
     transition: 'transform .7s ease',
     pointerEvents: 'none',
+  },
+  cardIndex: {
+    position: 'absolute', top: 22, right: 26,
+    fontFamily: "'Sora', sans-serif",
+    fontSize: 11, fontWeight: 700,
+    letterSpacing: '.5px',
+    color: 'rgba(255,255,255,.22)',
   },
   cardTop: {
     display: 'flex', alignItems: 'center', gap: 12,
@@ -479,9 +630,16 @@ const S: Record<string, React.CSSProperties> = {
   },
 
   // Footer
+  footerDivider: {
+    position: 'relative', zIndex: 1,
+    width: '100%', maxWidth: 320,
+    height: 1,
+    marginTop: 40,
+    background: 'linear-gradient(90deg, transparent, rgba(255,255,255,.16), transparent)',
+  },
   footer: {
     position: 'relative', zIndex: 1,
-    marginTop: 48, fontSize: 12,
+    marginTop: 18, fontSize: 12,
     color: 'rgba(255,255,255,.55)',
     letterSpacing: '.3px',
     fontWeight: 500,

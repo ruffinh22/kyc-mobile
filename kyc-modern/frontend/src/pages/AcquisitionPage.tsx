@@ -65,6 +65,36 @@ interface DossierTerrain {
 
 type Tab = 'form' | 'dash';
 
+// Types de pièce pris en charge — mêmes règles que côté mobile et serveur
+// (voir ocr.ts / public-dossiers.ts / AcquisitionScreenPro.tsx) : une pièce
+// "officielle" a un format d'État structuré (numéro, dates, expiration) et
+// exige une saisie complète ; une carte scolaire, une carte étudiant ou un
+// justificatif "autre" n'ont pas ce niveau de structuration standardisée —
+// les champs secondaires (numéro, lieu de naissance, adresse, nationalité,
+// date d'expiration) peuvent légitimement manquer, on ne les exige donc pas.
+const DOCUMENT_TYPES = [
+  { value: 'CNI',            label: 'CNI',                official: true },
+  { value: 'CEDEAO',         label: 'Carte CEDEAO',       official: true },
+  { value: 'PASSPORT',       label: 'Passeport',          official: true },
+  { value: 'CIP',            label: 'CIP',                official: true },
+  { value: 'PERMIS',         label: 'Permis de conduire', official: true },
+  { value: 'CARTE_SCOLAIRE', label: 'Carte scolaire',     official: false },
+  { value: 'CARTE_ETUDIANT', label: 'Carte étudiant',     official: false },
+  { value: 'AUTRE',          label: 'Autre',              official: false },
+] as const;
+type DocumentTypeValue = typeof DOCUMENT_TYPES[number]['value'];
+const isOfficialDoc = (v: string) => DOCUMENT_TYPES.find(d => d.value === v)?.official ?? false;
+
+// Profession suggérée automatiquement selon le type de pièce non officiel
+// présenté (élève muni d'une carte scolaire = élève) — l'agent reste libre
+// de corriger si la situation réelle diffère. Pas de suggestion pour une
+// pièce officielle ou "Autre", la profession n'y étant pas déductible du
+// seul type de document.
+const DEFAULT_PROFESSION_BY_TYPE: Partial<Record<DocumentTypeValue, string>> = {
+  CARTE_SCOLAIRE: 'Élève',
+  CARTE_ETUDIANT: 'Étudiant',
+};
+
 interface AgentInfo {
   wa_agent: string; username_agent: string;
   fonction_agent: string; zone_agent: string; country: string;
@@ -341,6 +371,16 @@ function extractFieldsFromOcr(raw: string) {
       const numero = corrigerNumeroCni(line) ?? corrigerNumeroCni(lines[i + 1] ?? '');
       if (numero) updates.numero_cni = numero;
     }
+    // Date d'expiration : n'est extraite/exigée que pour une pièce
+    // officielle (voir isOfficialDoc), mais on la capture ici dès qu'elle
+    // est présente — l'appelant décide ensuite si elle est pertinente.
+    if (!updates.date_expiration && /EXPIRATION|VALIDE/.test(line)) {
+      const m = line.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/) ?? (lines[i + 1] ?? '').match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/);
+      if (m) {
+        const dateValue = toDateInput(m[1]);
+        if (dateValue) updates.date_expiration = dateValue;
+      }
+    }
   }
 
   // Filet de sécurité : si aucun numéro CNI n'a été trouvé via les libellés,
@@ -351,10 +391,16 @@ function extractFieldsFromOcr(raw: string) {
     if (numero) updates.numero_cni = numero;
   }
 
-  const dateMatch = normalized.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/);
-  if (dateMatch && !updates.date_naissance) {
-    const dateValue = toDateInput(dateMatch[1]);
-    if (dateValue) updates.date_naissance = dateValue;
+  // Repli "date isolée" : uniquement si la date de naissance n'a pas été
+  // trouvée via un label explicite, et en excluant une date déjà identifiée
+  // comme date d'expiration pour ne jamais confondre les deux.
+  if (!updates.date_naissance) {
+    const allDates = [...normalized.matchAll(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/g)].map(m => m[1]);
+    const candidate = allDates.find(d => toDateInput(d) && toDateInput(d) !== updates.date_expiration);
+    if (candidate) {
+      const dateValue = toDateInput(candidate);
+      if (dateValue) updates.date_naissance = dateValue;
+    }
   }
 
   return updates;
@@ -408,7 +454,7 @@ function preprocessForOcr(imageDataUrl: string): Promise<{ imageDataUrl: string;
   });
 }
 
-async function extractRectoText(imageBlob: Blob | string, country: string, onProgress: (progress: number, status: OcrStatus) => void) {
+async function extractRectoText(imageBlob: Blob | string, country: string, typePiece: string, onProgress: (progress: number, status: OcrStatus) => void) {
   try {
     onProgress(10, 'running');
     
@@ -446,6 +492,7 @@ async function extractRectoText(imageBlob: Blob | string, country: string, onPro
       if (result.nationalite) rawLines.push(`NATIONALITÉ: ${result.nationalite}`);
       if (result.profession) rawLines.push(`PROFESSION: ${result.profession}`);
       if (result.adresse_complete) rawLines.push(`ADRESSE: ${result.adresse_complete}`);
+      if (result.date_expiration) rawLines.push(`DATE D'EXPIRATION: ${result.date_expiration}`);
 
       const rawText = rawLines.join('\n');
       const displayText = rawLines
@@ -569,13 +616,24 @@ export function AcquisitionPage() {
   const [editAgent, setEditAgent] = useState(false);
   const [form, setForm]         = useState({
     dossier_id: '', wa_agent: '', username_agent: '', fonction_agent: '',
-    zone_agent: '', numero_mtn: '', country: '',
+    zone_agent: '', numero_mtn: '', country: '', type_piece: '' as DocumentTypeValue | '',
     nom_titulaire: '', prenom_titulaire: '', date_naissance: '', lieu_naissance: '',
     autre_numero: '', nom_pere: '', nom_mere: '', adresse_complete: '', numero_cni: '',
-    sexe: '', nationalite: '', profession: '', ocr_overrides: '',
+    sexe: '', nationalite: '', profession: '', date_expiration: '', ocr_overrides: '',
   });
   const [photos, setPhotos]     = useState<{ recto: PhotoState | null; verso: PhotoState | null }>({ recto: null, verso: null });
   const [photoErr, setPhotoErr] = useState({ recto: false, verso: false });
+
+  // ── Signature du titulaire ──────────────────────────────────────────────
+  // 'dessin' : tracé manuscrit (au doigt/stylet), reproduisant si possible la
+  // signature de la pièce. 'empreinte' : le titulaire ne sait pas signer —
+  // il appose son doigt sur la même zone, l'empreinte visuelle capturée
+  // tenant lieu de signature (voir signature_mode côté serveur/public-dossiers.ts).
+  const [signature, setSignature]         = useState<PhotoState | null>(null);
+  const [signatureMode, setSignatureMode] = useState<'dessin' | 'empreinte'>('dessin');
+  const sigCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const sigDrawingRef = useRef(false);
+  const sigHasInkRef  = useRef(false);
   const [loading, setLoading]   = useState(false);
   const [progress, setProgress] = useState(0);
   const [erreur, setErreur]     = useState('');
@@ -688,12 +746,93 @@ export function AcquisitionPage() {
     const num = form.numero_mtn.replace(/\D/g, '');
     const conf = paysConf;
     const waOk = !!conf && wa.length === conf.digitCount;
+    const official = isOfficialDoc(form.type_piece);
+    // Nom/prénom/filiation exigés quel que soit le document présenté.
+    // Naissance, numéro de pièce et date d'expiration : exigés uniquement
+    // pour une pièce officielle (format d'État structuré) — une carte
+    // scolaire, une carte étudiant ou un justificatif "autre" n'ont pas ce
+    // niveau de structuration standardisée, on ne les exige donc pas.
     const titulaireOk = !!form.nom_titulaire.trim() && !!form.prenom_titulaire.trim() &&
-      !!form.date_naissance.trim() && !!form.lieu_naissance.trim() &&
-      !!form.nom_pere.trim() && !!form.nom_mere.trim();
-    return form.country && waOk && form.username_agent && form.fonction_agent &&
+      !!form.nom_pere.trim() && !!form.nom_mere.trim() &&
+      (!official || (
+        !!form.date_naissance.trim() && !!form.lieu_naissance.trim() &&
+        !!form.numero_cni.trim() && !!form.date_expiration.trim()
+      ));
+    return form.country && !!form.type_piece && waOk && form.username_agent && form.fonction_agent &&
            form.zone_agent && conf && num.length === conf.digitCount &&
-           titulaireOk && photos.recto && photos.verso;
+           titulaireOk && photos.recto && photos.verso && !!signature;
+  };
+
+  // ── Pad de signature (canvas) ────────────────────────────────────────────
+  // Même pad pour les deux modes : seuls le trait (fin pour un tracé signé,
+  // épais pour une empreinte) et le message d'instruction changent — c'est
+  // toujours un simple dessin capturé en image (photo_signature).
+  const getSigPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = sigCanvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  };
+
+  const sigPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = sigCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    canvas.setPointerCapture(e.pointerId);
+    sigDrawingRef.current = true;
+    const { x, y } = getSigPos(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = signatureMode === 'empreinte' ? 16 : 2.4;
+    ctx.strokeStyle = signatureMode === 'empreinte' ? 'rgba(0,48,135,.78)' : '#0F1720';
+  };
+
+  const sigPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!sigDrawingRef.current) return;
+    const ctx = sigCanvasRef.current?.getContext('2d');
+    if (!ctx) return;
+    const { x, y } = getSigPos(e);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    sigHasInkRef.current = true;
+  };
+
+  const sigPointerUp = () => {
+    if (!sigDrawingRef.current) return;
+    sigDrawingRef.current = false;
+    const canvas = sigCanvasRef.current;
+    if (!canvas || !sigHasInkRef.current) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      setSignature(prev => {
+        if (prev?.preview) URL.revokeObjectURL(prev.preview);
+        return { file: blob, preview: URL.createObjectURL(blob) };
+      });
+    }, 'image/png');
+  };
+
+  const clearSignature = () => {
+    const canvas = sigCanvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    sigHasInkRef.current = false;
+    setSignature(prev => {
+      if (prev?.preview) URL.revokeObjectURL(prev.preview);
+      return null;
+    });
+  };
+
+  // Basculer entre signature dessinée et empreinte digitale : on efface le
+  // pad, sans quoi une empreinte laissée pourrait être envoyée en mode
+  // "dessin" (ou l'inverse), ce qui fausserait signature_mode côté serveur.
+  const switchSignatureMode = (mode: 'dessin' | 'empreinte') => {
+    if (mode === signatureMode) return;
+    setSignatureMode(mode);
+    clearSignature();
   };
 
   // ── Caméra ────────────────────────────────────────────────────────────────
@@ -743,24 +882,30 @@ export function AcquisitionPage() {
       }
 
       const deviceToUse = deviceId || selectedCam || undefined;
-      const constraints: MediaStreamConstraints = deviceToUse
-        ? { video: { deviceId: { exact: deviceToUse } } }
-        : { video: { facingMode: facing ?? 'environment' } };
-      let stream: MediaStream;
-      
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (e) {
-        // Si la caméra spécifiée n'est pas disponible, essayer avec une autre
-        console.warn('Caméra spécifiée non disponible, tentative avec fallback:', e);
-        const vids = cameras.length > 0 ? cameras : (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
-        if (vids.length > 0) {
-          const fallbackCam = vids.find(d => d.deviceId !== deviceToUse) || vids[0];
-          stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: fallbackCam.deviceId } } });
-          setSelectedCam(fallbackCam.deviceId);
-        } else {
-          throw e;
+      const constraintOptions: Array<MediaStreamConstraints> = [];
+
+      if (deviceToUse) {
+        constraintOptions.push({ video: { deviceId: { exact: deviceToUse } } });
+      }
+      constraintOptions.push({ video: { facingMode: facing ?? 'environment' } });
+      constraintOptions.push({ video: { facingMode: 'user' } });
+      constraintOptions.push({ video: true });
+
+      let stream: MediaStream | null = null;
+      let lastError: unknown = null;
+
+      for (const constraints of constraintOptions) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (e) {
+          lastError = e;
+          console.warn('Essai contraintes caméra échoué:', constraints, e);
         }
+      }
+
+      if (!stream) {
+        throw lastError ?? new Error('Aucune source vidéo disponible');
       }
 
       streamRef.current = stream;
@@ -810,9 +955,10 @@ export function AcquisitionPage() {
   }, [selectedCam, stopCamera, cameras]);
 
   const ouvrirCamera = useCallback(async (type: 'recto' | 'verso') => {
+    if (!form.type_piece) { setErreur('Sélectionnez le type de pièce avant de capturer les photos'); return; }
     setCamType(type); setCamOpen(true); setErreur('');
     await startCamera(selectedCam || undefined, facingMode);
-  }, [startCamera, selectedCam, facingMode]);
+  }, [startCamera, selectedCam, facingMode, form.type_piece]);
 
   const fermerCamera = () => { stopCamera(); setCamOpen(false); };
 
@@ -863,7 +1009,7 @@ export function AcquisitionPage() {
 
     if (t === 'recto') {
       void (async () => {
-        const result = await extractRectoText(blob, form.country, (progress, status) => {
+        const result = await extractRectoText(blob, form.country, form.type_piece, (progress, status) => {
           setPreview(prev => prev && prev.type === 'recto' ? { ...prev, ocrStatus: status, ocrProgress: progress } : prev);
         });
         setPreview(prev => prev && prev.type === 'recto' ? {
@@ -894,6 +1040,7 @@ export function AcquisitionPage() {
         if (!f.numero_cni && parsed.numero_cni) updates.numero_cni = parsed.numero_cni;
         if (!f.nationalite && parsed.nationalite) updates.nationalite = parsed.nationalite;
         if (!f.sexe && parsed.sexe) updates.sexe = parsed.sexe;
+        if (!f.date_expiration && parsed.date_expiration) updates.date_expiration = parsed.date_expiration;
         return { ...f, ...updates };
       });
     }
@@ -966,7 +1113,7 @@ export function AcquisitionPage() {
   // la photo live via /api/public/dossiers/:id/live
 
   const soumettre = async () => {
-    if (!peutSoumettre()) { setErreur('Tous les champs et photos recto/verso sont obligatoires'); return; }
+    if (!peutSoumettre()) { setErreur('Tous les champs, les photos recto/verso et la signature du titulaire sont obligatoires'); return; }
     setErreur(''); setLoading(true); setProgress(0);
     try {
       const fd = new FormData();
@@ -979,6 +1126,7 @@ export function AcquisitionPage() {
       fd.append('zone_agent',     form.zone_agent);
       for (const [key, value] of Object.entries({
         dossier_id: form.dossier_id,
+        type_piece: form.type_piece,
         nom_titulaire: form.nom_titulaire,
         prenom_titulaire: form.prenom_titulaire,
         date_naissance: form.date_naissance,
@@ -988,6 +1136,7 @@ export function AcquisitionPage() {
         nom_mere: form.nom_mere,
         adresse_complete: form.adresse_complete,
         numero_cni: form.numero_cni,
+        date_expiration: form.date_expiration,
         sexe: form.sexe,
         nationalite: form.nationalite,
         profession: form.profession,
@@ -997,6 +1146,8 @@ export function AcquisitionPage() {
       }
       fd.append('photo_recto',    photos.recto!.file, 'recto.jpg');
       fd.append('photo_verso',    photos.verso!.file, 'verso.jpg');
+      fd.append('signature_mode', signatureMode);
+      fd.append('photo_signature', signature!.file, 'signature.png');
 
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = e => {
@@ -1255,9 +1406,40 @@ export function AcquisitionPage() {
                 <SectionLabel label="Documents" />
                 <Card>
                   <StepHeader num="03" title="Photos CNI" sub="Recto et verso" />
+
+                  {/* Type de pièce : choisi AVANT toute capture — conditionne
+                      les champs exigés plus bas (numéro, date d'expiration...)
+                      ainsi que la profession suggérée. */}
+                  <Fld label="Type de pièce" req>
+                    <select
+                      value={form.type_piece}
+                      onChange={e => {
+                        const value = e.target.value as DocumentTypeValue | '';
+                        setForm(f => {
+                          const suggestion = value ? DEFAULT_PROFESSION_BY_TYPE[value as DocumentTypeValue] : undefined;
+                          const prevWasSuggestion = Object.values(DEFAULT_PROFESSION_BY_TYPE).includes(f.profession);
+                          const profession = suggestion && (!f.profession || prevWasSuggestion) ? suggestion : f.profession;
+                          return { ...f, type_piece: value, profession };
+                        });
+                      }}
+                      style={inpSt}
+                    >
+                      <option value="">— Sélectionnez —</option>
+                      {DOCUMENT_TYPES.map(dt => (
+                        <option key={dt.value} value={dt.value}>{dt.label}</option>
+                      ))}
+                    </select>
+                  </Fld>
+                  {!form.type_piece && (
+                    <p style={{ fontSize: 11, color: '#DC2626', margin: '-6px 0 10px' }}>Choisissez le type de pièce avant de capturer les photos.</p>
+                  )}
+                  {!!form.type_piece && !isOfficialDoc(form.type_piece) && (
+                    <p style={{ fontSize: 11, color: '#6B7A99', margin: '-6px 0 10px' }}>Document non officiel : certains champs (numéro, date d'expiration…) resteront optionnels.</p>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
                     {(['recto', 'verso'] as const).map(type => (
-                      <div key={type} onClick={() => ouvrirCamera(type)} style={{ aspectRatio: '85/54', borderRadius: 12, overflow: 'hidden', position: 'relative', background: photos[type] ? 'transparent' : '#EDF1F8', border: `2px ${photos[type] ? 'solid #16A34A' : photoErr[type] ? 'solid #DC2626' : 'dashed rgba(0,48,135,.25)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      <div key={type} onClick={() => ouvrirCamera(type)} style={{ aspectRatio: '85/54', borderRadius: 12, overflow: 'hidden', position: 'relative', background: photos[type] ? 'transparent' : '#EDF1F8', border: `2px ${photos[type] ? 'solid #16A34A' : photoErr[type] ? 'solid #DC2626' : 'dashed rgba(0,48,135,.25)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, opacity: form.type_piece ? 1 : 0.45 }}>
                         {photos[type] ? (
                           <>
                             <img src={photos[type]!.preview} alt={type} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -1280,8 +1462,18 @@ export function AcquisitionPage() {
                   </div>
                 </Card>
 
-                {/* Informations titulaire */}
+                {/* Informations titulaire — n'apparaissent qu'une fois le
+                    recto capturé : avant ça elles seraient vides et donc
+                    trompeuses (l'agent pourrait croire l'OCR en échec). */}
                 <SectionLabel label="Identité du client" />
+                {!photos.recto ? (
+                  <Card style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, opacity: 0.7 }}>
+                    <span style={{ fontSize: 18 }}>🪪</span>
+                    <span style={{ fontSize: 12.5, color: '#6B7A99', lineHeight: 1.5 }}>
+                      Capturez d'abord le recto de la pièce ci-dessus : les informations du titulaire s'afficheront ici, pré-remplies par la lecture automatique.
+                    </span>
+                  </Card>
+                ) : (
                 <Card>
                   <StepHeader num="04" title="Titulaire" sub="Informations obligatoires" />
                   <Fld label="Nom titulaire" req>
@@ -1290,10 +1482,10 @@ export function AcquisitionPage() {
                   <Fld label="Prénom titulaire" req>
                     <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder="Prénom du titulaire" style={inpSt} />
                   </Fld>
-                  <Fld label="Date de naissance" req>
+                  <Fld label="Date de naissance" req={isOfficialDoc(form.type_piece)}>
                     <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} style={inpSt} />
                   </Fld>
-                  <Fld label="Lieu de naissance" req>
+                  <Fld label="Lieu de naissance" req={isOfficialDoc(form.type_piece)}>
                     <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder="Lieu de naissance" style={inpSt} />
                   </Fld>
                   <Fld label="Nom du père" req>
@@ -1302,12 +1494,21 @@ export function AcquisitionPage() {
                   <Fld label="Nom de la mère" req>
                     <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder="Nom de la mère" style={inpSt} />
                   </Fld>
-                  <Fld label="Adresse complète">
+                  {/* Adresse et nationalité : une pièce non officielle (carte
+                      scolaire, carte étudiant, autre) ne les porte pas de
+                      façon fiable — champs proposés mais jamais bloquants
+                      dans ce cas, contrairement à une pièce officielle. */}
+                  <Fld label="Adresse complète" hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
                     <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder="Adresse complète" style={inpSt} />
                   </Fld>
-                  <Fld label="Numéro CNI">
+                  <Fld label="Numéro CNI" req={isOfficialDoc(form.type_piece)}>
                     <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder="Numéro CNI" style={inpSt} />
                   </Fld>
+                  {isOfficialDoc(form.type_piece) && (
+                    <Fld label="Date d'expiration" req>
+                      <input type="date" value={form.date_expiration} onChange={e => setForm(f => ({ ...f, date_expiration: e.target.value }))} style={inpSt} />
+                    </Fld>
+                  )}
                   <Fld label="Sexe">
                     <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} style={inpSt}>
                       <option value="">— Sélectionnez —</option>
@@ -1315,7 +1516,7 @@ export function AcquisitionPage() {
                       <option value="F">Féminin</option>
                     </select>
                   </Fld>
-                  <Fld label="Nationalité">
+                  <Fld label="Nationalité" hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
                     <input value={form.nationalite} onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))} placeholder="Nationalité" style={inpSt} />
                   </Fld>
                   <Fld label="Profession">
@@ -1336,6 +1537,73 @@ export function AcquisitionPage() {
                     </div>
                   </div>
                 </Card>
+                )}
+
+                {/* Signature du titulaire — dessinée si le titulaire sait
+                    signer (idéalement en reproduisant sa signature de la
+                    pièce), ou empreinte digitale sinon : même pad, seuls le
+                    trait et le message d'instruction changent selon le mode
+                    choisi ci-dessous par l'agent. */}
+                {!!photos.recto && (
+                <>
+                <SectionLabel label="Signature" />
+                <Card>
+                  <StepHeader num="05" title="Signature du titulaire" sub={signatureMode === 'empreinte' ? 'Empreinte digitale' : 'Signature manuscrite'} />
+
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => switchSignatureMode('dessin')}
+                      style={{ flex: 1, padding: '10px 8px', borderRadius: 10, border: `2px solid ${signatureMode === 'dessin' ? '#003087' : 'rgba(0,48,135,.2)'}`, background: signatureMode === 'dessin' ? 'rgba(0,48,135,.08)' : '#fff', color: '#003087', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                    >
+                      ✍️ Signature
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => switchSignatureMode('empreinte')}
+                      style={{ flex: 1, padding: '10px 8px', borderRadius: 10, border: `2px solid ${signatureMode === 'empreinte' ? '#003087' : 'rgba(0,48,135,.2)'}`, background: signatureMode === 'empreinte' ? 'rgba(0,48,135,.08)' : '#fff', color: '#003087', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                    >
+                      👆 Empreinte digitale
+                    </button>
+                  </div>
+
+                  <p style={{ fontSize: 11.5, color: '#6B7A99', margin: '0 0 10px', lineHeight: 1.5 }}>
+                    {signatureMode === 'dessin'
+                      ? "Faites signer le titulaire ci-dessous (au doigt ou au stylet), en reproduisant si possible sa signature figurant sur la pièce."
+                      : "Le titulaire ne sait pas signer : demandez-lui d'apposer son doigt sur la zone ci-dessous. Cette empreinte sera enregistrée comme sa signature."}
+                  </p>
+
+                  <canvas
+                    ref={sigCanvasRef}
+                    width={600}
+                    height={220}
+                    onPointerDown={sigPointerDown}
+                    onPointerMove={sigPointerMove}
+                    onPointerUp={sigPointerUp}
+                    onPointerLeave={sigPointerUp}
+                    style={{
+                      width: '100%', aspectRatio: '600/220', display: 'block',
+                      background: signatureMode === 'empreinte' ? '#F1F5F9' : '#fff',
+                      border: `2px dashed ${signature ? '#16A34A' : 'rgba(0,48,135,.25)'}`,
+                      borderRadius: 12, touchAction: 'none', cursor: 'crosshair',
+                    }}
+                  />
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: signature ? '#16A34A' : '#94A3B8' }}>
+                      {signature ? '✓ Signature enregistrée' : 'En attente de signature'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearSignature}
+                      style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      Effacer
+                    </button>
+                  </div>
+                </Card>
+                </>
+                )}
 
                 {erreur && (
                   <div style={{ background: 'rgba(220,38,38,.08)', border: '1px solid rgba(220,38,38,.22)', borderLeft: '3px solid #DC2626', borderRadius: 8, padding: '12px 16px', margin: '12px 12px 0', fontSize: 13, color: '#DC2626', display: 'flex', alignItems: 'flex-start', gap: 8 }}>

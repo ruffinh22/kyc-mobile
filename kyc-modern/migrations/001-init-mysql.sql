@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS dossiers (
   sexe              VARCHAR(20)   DEFAULT NULL,
   nationalite       VARCHAR(100)  DEFAULT NULL,
   profession        VARCHAR(100)  DEFAULT NULL,
+  type_piece        VARCHAR(50)   DEFAULT NULL,
+  date_expiration   VARCHAR(50)   DEFAULT NULL,
   country           VARCHAR(5)    DEFAULT NULL,
   ocr_overrides     VARCHAR(200)  DEFAULT NULL,
   flow_step         TINYINT(1)    DEFAULT 4,

@@ -12,8 +12,7 @@ function loadMigrations(): MigrationModule[] {
   if (!fs.existsSync(dir)) return [];
 
   return fs.readdirSync(dir)
-    .filter(file => file.endsWith('.ts') || file.endsWith('.js'))
-    .filter(file => !file.endsWith('.d.ts') && !file.endsWith('.js.map'))
+    .filter(file => file.endsWith('.ts'))
     .sort()
     .map(file => path.join(dir, file))
     .map(filePath => {

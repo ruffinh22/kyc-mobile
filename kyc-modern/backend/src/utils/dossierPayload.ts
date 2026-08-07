@@ -20,6 +20,10 @@ export type DossierCreateInput = {
   sexe?: string | null;
   nationalite?: string | null;
   profession?: string | null;
+  type_piece?: string | null;
+  date_expiration?: string | null;
+  signature_mode?: string | null;
+  photo_signature?: string | null;
   ocr_overrides?: string | null;
   flow_step?: number | null;
   acquisition_status?: string | null;
@@ -48,6 +52,10 @@ export function buildDossierCreatePayload(input: DossierCreateInput) {
     sexe: input.sexe ?? null,
     nationalite: input.nationalite ?? null,
     profession: input.profession ?? null,
+    type_piece: input.type_piece ?? null,
+    date_expiration: input.date_expiration ?? null,
+    signature_mode: input.signature_mode ?? null,
+    photo_signature: input.photo_signature ?? null,
     ocr_overrides: input.ocr_overrides ?? null,
     flow_step: input.flow_step ?? 4,
     acquisition_status: input.acquisition_status ?? 'submitted',

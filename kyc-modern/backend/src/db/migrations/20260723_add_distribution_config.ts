@@ -8,7 +8,7 @@ export const migration = {
       INSERT IGNORE INTO config (cle, valeur, updated_at) 
       VALUES 
         ('distribution_mode', 'auto', UNIX_TIMESTAMP()),
-        ('distribution_max_total', '2', UNIX_TIMESTAMP())
+        ('distribution_max_total', '1', UNIX_TIMESTAMP())
     `);
   },
   down: async (pool: Pool): Promise<void> => {

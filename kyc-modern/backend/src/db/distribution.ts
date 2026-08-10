@@ -121,7 +121,7 @@ export async function distribuerMaintenant(): Promise<void> {
 
       // Notifier via SSE
       try {
-        const sse = await import('./sse.js');
+        const sse = await import('../utils/sse.js');
         sse.notifier(ag.matricule, 'nouveau-dossier', { id: res.dossierId });
       } catch (e) {}
     }

@@ -78,13 +78,13 @@ export async function appelerProchainDossier(matricule: string): Promise<AppelRe
     // 2) Le plus ancien dossier disponible, verrouillé pour cette transaction
     //    seulement (SKIP LOCKED laisse les autres agents piocher un autre
     //    dossier sans attendre).
-    const [candidats] = await conn.execute<RowDataPacket[]>(
+    const [candidats] = await conn.execute(
       `SELECT id, numero_mtn FROM dossiers
        WHERE statut = 'en_attente'
        ORDER BY created_at ASC
        LIMIT 1
        FOR UPDATE SKIP LOCKED`
-    );
+    ) as [RowDataPacket[], any];
 
     if (!candidats.length) {
       await conn.rollback();
@@ -143,12 +143,12 @@ export async function prendreDossierSpecifique(matricule: string, dossierId: str
     }
 
     const maintenant = nowSec();
-    const [result] = await conn.execute<ResultSetHeader>(
+    const [result] = await conn.execute(
       `UPDATE dossiers
        SET statut='en_cours', agent_saisie=?, assigne_a=?, assigne_le=?, heure_prise=?, updated_at=?
        WHERE id=? AND statut='en_attente'`,
       [matricule, matricule, maintenant, nowHHMM(), maintenant, dossierId]
-    );
+    ) as [ResultSetHeader, any];
 
     if (result.affectedRows !== 1) {
       await conn.rollback();
@@ -183,10 +183,10 @@ export async function transferDossierToAgent(
   try {
     await conn.beginTransaction();
 
-    const [rows] = await conn.execute<RowDataPacket[]>(
+    const [rows] = await conn.execute(
       'SELECT id, agent_saisie FROM dossiers WHERE id = ? LIMIT 1 FOR UPDATE',
       [dossierId]
-    );
+    ) as [RowDataPacket[], any];
     if (!rows.length) {
       await conn.rollback();
       return 'introuvable';

@@ -22,6 +22,10 @@ function getPoolOrThrow(): Pool {
   return pool;
 }
 
+export function getPool(): Pool {
+  return getPoolOrThrow();
+}
+
 export function isDbAvailable(): boolean {
   return pool !== null;
 }

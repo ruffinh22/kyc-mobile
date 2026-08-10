@@ -33,6 +33,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createWorker, OEM, PSM } from 'tesseract.js';
 import { getPublicDossiers } from '../services/api';
+import { AFRICAN_COUNTRIES } from '../utils/phoneValidator';
 
 const API_BASE = (() => {
   const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
@@ -1517,7 +1518,18 @@ export function AcquisitionPage() {
                     </select>
                   </Fld>
                   <Fld label="Nationalité" hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
-                    <input value={form.nationalite} onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))} placeholder="Nationalité" style={inpSt} />
+                    <select
+                      value={form.nationalite}
+                      onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))}
+                      style={inpSt}
+                    >
+                      <option value="">— Sélectionnez —</option>
+                      {(Object.values(AFRICAN_COUNTRIES) as Array<{ code: string; name: string }>).map(country => (
+                        <option key={country.code} value={country.name}>
+                          {country.name}
+                        </option>
+                      ))}
+                    </select>
                   </Fld>
                   <Fld label="Profession">
                     <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder="Profession" style={inpSt} />

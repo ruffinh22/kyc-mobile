@@ -472,7 +472,7 @@ export async function createDossier(data: {
     'date', 'heure_reception', 'photo_recto', 'photo_verso', 'photo_live', 'photo_signature', 'score_visage', 'visage_match',
     'visage_motif', 'visage_verifie_le', 'nom_titulaire', 'prenom_titulaire', 'date_naissance',
     'lieu_naissance', 'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
-    'sexe', 'nationalite', 'profession', 'type_piece', 'date_expiration', 'country', 'ocr_overrides', 'flow_step', 'acquisition_status',
+    'sexe', 'nationalite', 'profession', 'type_piece', 'date_expiration', 'signature_mode', 'country', 'ocr_overrides', 'flow_step', 'acquisition_status',
     'created_at', 'updated_at',
   ];
   const values = [

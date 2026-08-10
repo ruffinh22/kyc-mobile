@@ -86,8 +86,8 @@ export async function rejeterDossier(id: string, raison: string) { return apiFet
 export async function reprendreFaceVerify(id: string) { return apiFetch<{ success: boolean; message: string }>(`/api/dossiers/${id}/reprendre-face-verify`, { method: 'POST' }); }
 export async function transfererDossier(id: string, cible: string, message?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/transferer`, { method: 'POST', json: { cible, message } }); }
 export async function verifierVisage(id: string) { return apiFetch<{ score: number; match: boolean; motif: string }>(`/api/dossiers/${id}/verifier-visage`, { method: 'POST' }); }
-export function photoUrl(id: string, type: 'recto' | 'verso' | 'live') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
-export function photoUrlWithToken(id: string, type: 'recto' | 'verso' | 'live') {
+export function photoUrl(id: string, type: 'recto' | 'verso' | 'live' | 'signature') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
+export function photoUrlWithToken(id: string, type: 'recto' | 'verso' | 'live' | 'signature') {
   const base = `${BASE}/api/dossiers/${id}/photo/${type}`;
   // Prefer in-memory token, fallback to cookie or localStorage when available
   const token = _token || (typeof document !== 'undefined' ? (

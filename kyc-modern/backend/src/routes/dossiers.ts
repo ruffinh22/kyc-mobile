@@ -75,7 +75,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
     const params = req.params as { id: string; type: string };
     const { matricule, role } = req.user;
     const log = req.log as unknown as { info: (payload: Record<string, unknown>, msg?: string) => void };
-    if (!['recto','verso','live'].includes(params.type)) return reply.code(400).send({ error: 'Type invalide' });
+    if (!['recto','verso','live','signature'].includes(params.type)) return reply.code(400).send({ error: 'Type invalide' });
     const d = await db.getDossierById(params.id);
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
     log.info({ event: 'photo-access', dossierId: params.id, type: params.type, user: req.user, agent_saisie: d.agent_saisie, statut: d.statut }, 'photo access check');
@@ -83,7 +83,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
       log.info({ reason: 'access_rejected', expectedMatricule: matricule, actualAgentSaisie: d.agent_saisie, statut: d.statut }, 'photo access denied');
       return reply.code(403).send({ error: 'Accès refusé' });
     }
-    const field = `photo_${params.type}` as 'photo_recto'|'photo_verso'|'photo_live';
+    const field = `photo_${params.type}` as 'photo_recto'|'photo_verso'|'photo_live'|'photo_signature';
     if (!d[field]) return reply.code(404).send({ error: 'Photo non disponible' });
     const safeRoot = path.resolve(UPLOAD_CNI);
     const fullPath = path.resolve(safeRoot, d[field]!);

@@ -3,21 +3,10 @@
 // Adaptée de kyc-v40 pour MySQL + TypeScript
 // Appelée par le worker (toutes les 2s) ET à chaque soumission de dossier
 // FIFO strict, max 1 push auto par agent
-//
-// PATCH 2026-08-08 : l'attribution passe désormais par
-// db/locks.ts::appelerProchainDossier(), qui pose un verrou exclusif par
-// agent (table agent_dossier_lock, PK matricule) dans la même transaction
-// que l'UPDATE du dossier. Avant ce patch, l'exclusion des agents occupés
-// se basait sur un simple "NOT IN (SELECT ... WHERE statut='en_cours')"
-// relu séparément de l'UPDATE d'attribution : un appel concurrent à
-// POST /api/dossiers/appeler (pull, déclenché par le frontend) pouvait
-// s'intercaler entre les deux et faire passer un agent déjà servi ici une
-// seconde fois — c'est la cause du bug "2 dossiers auto au lieu de 1".
 // ============================================================================
 
 import { query, exec, nowSec, getConfig } from '../db';
 import { RowDataPacket } from 'mysql2';
-import { appelerProchainDossier, releaseAgentLock, reconcileAgentLocks } from '../db/locks';
 
 interface ConfigRow {
   valeur: string;
@@ -36,14 +25,10 @@ export async function distribuerMaintenant(): Promise<void> {
     const seuilAbandon = maintenant - Math.max(30, abandonSec);
     const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
-    // Filet de sécurité de base : répare tout verrou désynchronisé avant de
-    // calculer les agents "libres" ci-dessous (peu coûteux, tables indexées).
-    await reconcileAgentLocks();
-
     // ---- FILET DE SÉCURITÉ ----
     // Récupérer les dossiers en_cours dont l'agent n'a pas ping depuis le délai d'abandon configuré
-    const orphelins = await query<{ id: string; agent_saisie: string | null } & RowDataPacket>(
-      `SELECT d.id, d.agent_saisie FROM dossiers d 
+    const orphelins = await query<{ id: string } & RowDataPacket>(
+      `SELECT d.id FROM dossiers d 
        WHERE d.statut='en_cours' AND d.agent_saisie IS NOT NULL
        AND d.agent_saisie NOT IN (
          SELECT matricule FROM presence WHERE ts >= ?
@@ -59,9 +44,6 @@ export async function distribuerMaintenant(): Promise<void> {
          WHERE id=? AND statut='en_cours'`,
         [maintenant, o.id]
       );
-      // Le dossier n'est plus en_cours pour cet agent : on libère son verrou
-      // pour qu'il redevienne immédiatement éligible à une nouvelle attribution.
-      if (o.agent_saisie) await releaseAgentLock(o.agent_saisie);
     }
     // ---- fin filet ----
 
@@ -108,22 +90,32 @@ export async function distribuerMaintenant(): Promise<void> {
     );
 
     for (const ag of agents) {
-      // appelerProchainDossier pose le verrou ET assigne le dossier dans une
-      // seule transaction. Si un pull concurrent (POST /api/dossiers/appeler)
-      // a entre-temps servi cet agent, le verrou existe déjà et l'attribution
-      // échoue proprement (result: 'agent_occupe') au lieu de créer un
-      // deuxième dossier en_cours pour lui.
-      const res = await appelerProchainDossier(ag.matricule);
-      if (res.result !== 'ok') continue;
+      // Prendre le plus ancien dossier en_attente
+      const prochains = await query<{ id: string } & RowDataPacket>(
+        `SELECT id FROM dossiers WHERE statut='en_attente' ORDER BY created_at ASC LIMIT 1`
+      );
+      if (!prochains.length) break;
 
-      // Attribution réussie: l'agent devient occupé
-      await exec("UPDATE presence SET dispo_depuis=NULL WHERE matricule=?", [ag.matricule]);
+      const prochain = prochains[0];
+      const result = await exec(
+        `UPDATE dossiers 
+         SET statut='en_cours', agent_saisie=?, assigne_a=?, 
+             assigne_le=?, heure_prise=DATE_FORMAT(FROM_UNIXTIME(?), '%H:%i'),
+             updated_at=? 
+         WHERE id=? AND statut='en_attente'`,
+        [ag.matricule, ag.matricule, maintenant, maintenant, maintenant, prochain.id]
+      );
 
-      // Notifier via SSE
-      try {
-        const sse = await import('./sse.js');
-        sse.notifier(ag.matricule, 'nouveau-dossier', { id: res.dossierId });
-      } catch (e) {}
+      if (result.affectedRows === 1) {
+        // Attribution réussie: l'agent devient occupé
+        await exec("UPDATE presence SET dispo_depuis=NULL WHERE matricule=?", [ag.matricule]);
+        
+        // Notifier via SSE
+        try { 
+          const sse = await import('./sse.js');
+          sse.notifier(ag.matricule, 'nouveau-dossier', { id: prochain.id }); 
+        } catch(e){}
+      }
     }
   } catch (err) {
     // Silencieux : le worker réessaiera au prochain cycle

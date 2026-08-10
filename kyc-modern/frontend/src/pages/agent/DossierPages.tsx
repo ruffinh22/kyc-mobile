@@ -1,10 +1,10 @@
-import { useMemo, useState, FormEvent, useEffect, useRef, ReactNode } from 'react';
+import { useMemo, useState, FormEvent, useEffect, useRef } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { Dossier, DossierStatut } from '../../types';
 import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../components/ui';
-import { DossiersTable } from '../../components/DossierComponents';
+import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
 import { FaceLivenessCheck } from '../FaceLivenessCheck';
 import { PauseButton } from '../../components/PauseButton';
 
@@ -24,6 +24,11 @@ function faceSummary(d: Dossier) {
   if (d.score_visage >= 80) return { label: 'Conforme', tone: 'ok', icon: '✅', motif: d.visage_motif || 'Score élevé et conforme' };
   if (d.score_visage >= 70) return { label: 'À vérifier', tone: 'warn', icon: '⚠️', motif: d.visage_motif || 'Seuil proche, contrôle recommandé' };
   return { label: 'Non conforme', tone: 'error', icon: '❌', motif: d.visage_motif || 'Score faible' };
+}
+
+function ageMinutes(createdAt: number | null | undefined) {
+  if (!createdAt) return 0;
+  return Math.max(0, Math.floor((Date.now() / 1000 - createdAt) / 60));
 }
 
 function formatFaceScore(value: number | string | null | undefined) {
@@ -57,272 +62,6 @@ const formatPhoneLike = (val: string, country: string, maxDigits: number) => {
 
   return parts.join(' ');
 };
-
-// ── Charte institutionnelle (MTN) — même identité visuelle que les pages GSM ───
-const MTN_BLUE = '#003087';
-const MTN_GOLD = '#FFCC00';
-const MTN_TEXT = '#0F172A';
-const MTN_MUTED = '#64748B';
-
-function SectionLabel({ children, accent = MTN_BLUE }: { children: ReactNode; accent?: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '2px 0 4px' }}>
-      <span style={{ width: 4, height: 18, borderRadius: 2, background: accent, flexShrink: 0 }} />
-      <p style={{ margin: 0, fontSize: 13, fontWeight: 800, letterSpacing: '.02em', color: MTN_TEXT, textTransform: 'uppercase' }}>
-        {children}
-      </p>
-    </div>
-  );
-}
-
-const DOSSIER_STATUT_BADGE: Record<string, { bg: string; fg: string }> = {
-  accepte:    { bg: '#DCFCE7', fg: '#166534' },
-  rejete:     { bg: '#FEE2E2', fg: '#991B1B' },
-  en_cours:   { bg: '#FEF3C7', fg: '#92400E' },
-  en_attente: { bg: '#FEF3C7', fg: '#92400E' },
-};
-
-function DossierStatutBadge({ value }: { value?: string | null }) {
-  if (!value) return <span style={{ color: MTN_MUTED }}>—</span>;
-  const label = ({ en_attente: 'En attente', en_cours: 'En cours', accepte: 'Accepté', rejete: 'Rejeté' } as Record<string, string>)[value] ?? value;
-  const tone = DOSSIER_STATUT_BADGE[value] ?? { bg: '#EEF2F7', fg: MTN_TEXT };
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 10px',
-      borderRadius: 999, background: tone.bg, color: tone.fg, whiteSpace: 'nowrap',
-    }}>
-      {label}
-    </span>
-  );
-}
-
-// ── Détail complet d'un dossier — identité du titulaire ────────────────────────
-// Vue unique, réutilisée partout où un agent doit consulter un dossier : elle
-// affiche systématiquement TOUTES les informations du titulaire (nom, prénom,
-// naissance, filiation, adresse, pièce…), organisées par sections logiques
-// plutôt qu'une longue liste plate, avec un vrai en-tête d'identité (avatar,
-// statut, numéro copiable) et une galerie de pièces plus lisible. L'agent doit
-// pouvoir se faire une opinion complète du dossier avant de prendre une
-// décision (prise en charge, acceptation, rejet).
-const DOSSIER_IDENTITY_SECTIONS: { title: string; accent?: string; fields: [string, keyof Dossier][] }[] = [
-  {
-    title: 'Identité du titulaire',
-    fields: [
-      ['Nom',               'nom_titulaire'],
-      ['Prénom',            'prenom_titulaire'],
-      ['Date de naissance', 'date_naissance'],
-      ['Lieu de naissance', 'lieu_naissance'],
-      ['Sexe',              'sexe'],
-      ['Nationalité',       'nationalite'],
-      ['Profession',        'profession'],
-    ],
-  },
-  {
-    title: 'Filiation',
-    fields: [
-      ['Nom du père',   'nom_pere'],
-      ['Nom de la mère','nom_mere'],
-    ],
-  },
-  {
-    title: "Coordonnées et pièce d'identité",
-    accent: MTN_GOLD,
-    fields: [
-      ['Adresse complète',  'adresse_complete'],
-      ['Numéro CNI',        'numero_cni'],
-      ['Type de pièce',     'type_piece'],
-      ["Date d'expiration", 'date_expiration'],
-      ['Autre numéro',      'autre_numero'],
-      ['Numéro MTN',        'numero_mtn'],
-      ['Pays',              'country'],
-    ],
-  },
-];
-
-const DOSSIER_PHOTO_TYPES: { key: 'photo_recto' | 'photo_verso' | 'photo_live' | 'photo_signature'; type: 'recto' | 'verso' | 'live' | 'signature'; label: string; group: 'cni' | 'live' | 'signature' }[] = [
-  { key: 'photo_recto',     type: 'recto',     label: 'CNI recto',  group: 'cni' },
-  { key: 'photo_verso',     type: 'verso',     label: 'CNI verso',  group: 'cni' },
-  { key: 'photo_live',      type: 'live',      label: 'Photo live', group: 'live' },
-  { key: 'photo_signature', type: 'signature', label: 'Signature',  group: 'signature' },
-];
-
-function initials(dossier: Dossier): string {
-  const a = (dossier.prenom_titulaire || '').trim()[0] || '';
-  const b = (dossier.nom_titulaire || '').trim()[0] || '';
-  return (a + b).toUpperCase() || '?';
-}
-
-function CopyableValue({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {}
-      }}
-      title="Copier"
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent',
-        cursor: 'pointer', padding: 0, font: 'inherit', color: 'inherit',
-      }}
-    >
-      <span>{value}</span>
-      <span style={{ fontSize: 11, color: copied ? '#16A34A' : 'rgba(255,255,255,.6)', fontWeight: 700 }}>
-        {copied ? '✓ copié' : '⧉'}
-      </span>
-    </button>
-  );
-}
-
-function FaceScoreBar({ score, tone }: { score: number; tone: string }) {
-  const color = tone === 'ok' ? '#16A34A' : tone === 'warn' ? '#D97706' : tone === 'error' ? '#DC2626' : MTN_MUTED;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 120 }}>
-      <div style={{ flex: 1, height: 6, borderRadius: 999, background: '#E2E8F0', overflow: 'hidden' }}>
-        <div style={{ width: `${Math.min(100, Math.max(0, score))}%`, height: '100%', background: color, borderRadius: 999 }} />
-      </div>
-      <span style={{ fontSize: 12.5, fontWeight: 700, color }}>{score.toFixed(1)}%</span>
-    </div>
-  );
-}
-
-function DossierIdentityModal({ dossier, onClose, onZoom, footer }: {
-  dossier: Dossier;
-  onClose: () => void;
-  onZoom?: (imgs: string[], idx: number, title: string) => void;
-  footer?: ReactNode;
-}) {
-  const face = faceSummary(dossier);
-  const nomComplet = `${dossier.nom_titulaire || ''} ${dossier.prenom_titulaire || ''}`.trim() || 'Titulaire non renseigné';
-
-  const cniPhotos = DOSSIER_PHOTO_TYPES.filter(p => p.group === 'cni' && !!dossier[p.key]);
-  const otherPhotos = DOSSIER_PHOTO_TYPES.filter(p => p.group !== 'cni' && !!dossier[p.key]);
-  const allImgs = DOSSIER_PHOTO_TYPES.filter(p => !!dossier[p.key]).map(p => api.photoUrlWithToken(dossier.id, p.type));
-  const imgIndex = (type: string) => DOSSIER_PHOTO_TYPES.filter(p => !!dossier[p.key]).findIndex(p => p.type === type);
-
-  return (
-    <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={footer}>
-      {/* En-tête identité */}
-      <div style={{
-        borderRadius: 16, overflow: 'hidden', marginBottom: 18,
-        background: `linear-gradient(135deg, ${MTN_BLUE} 0%, #001d5c 100%)`,
-        borderBottom: `3px solid ${MTN_GOLD}`,
-        boxShadow: '0 10px 28px rgba(0,48,135,.18)',
-      }}>
-        <div style={{ padding: '18px 20px', color: '#fff', display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: '50%', flexShrink: 0,
-            background: MTN_GOLD, color: MTN_BLUE, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 18, fontWeight: 800, letterSpacing: '.02em',
-            boxShadow: '0 4px 12px rgba(0,0,0,.2)',
-          }}>
-            {initials(dossier)}
-          </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <p style={{ margin: 0, fontSize: 17, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {nomComplet}
-              </p>
-              <DossierStatutBadge value={dossier.statut} />
-            </div>
-            <p style={{ margin: '4px 0 0', fontSize: 12.5, color: 'rgba(255,255,255,.82)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {dossier.numero_mtn ? <CopyableValue value={dossier.numero_mtn} /> : 'Numéro non renseigné'}
-              <span style={{ opacity: .5 }}>·</span>
-              <span>{dossier.zone_agent || 'Zone non renseignée'}</span>
-              <span style={{ opacity: .5 }}>·</span>
-              <span style={{ fontFamily: 'monospace', fontSize: 11.5, opacity: .85 }}>{dossier.id}</span>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Vérification faciale */}
-      <div style={{
-        marginBottom: 18, padding: '14px 16px', borderRadius: 12,
-        background: '#F8FAFC', border: '1px solid #E2E8F0', display: 'flex',
-        flexWrap: 'wrap', gap: '10px 22px', alignItems: 'center', justifyContent: 'space-between',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: MTN_MUTED, textTransform: 'uppercase', letterSpacing: '.03em' }}>
-            Vérification faciale
-          </span>
-          <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
-        </div>
-        {dossier.score_visage !== null && dossier.score_visage !== undefined && (
-          <FaceScoreBar score={Number(dossier.score_visage)} tone={face.tone} />
-        )}
-      </div>
-      {face.motif && (
-        <p style={{ margin: '-10px 0 18px', fontSize: 12, color: MTN_MUTED, paddingLeft: 2 }}>{face.motif}</p>
-      )}
-
-      {/* Sections d'identité */}
-      {DOSSIER_IDENTITY_SECTIONS.map((section, i) => {
-        const filled = section.fields.filter(([, key]) => !!(dossier[key] && String(dossier[key]).trim()));
-        if (!filled.length) return null;
-        return (
-          <div key={section.title}>
-            {i > 0 && <hr className="divider" />}
-            <SectionLabel accent={section.accent}>{section.title}</SectionLabel>
-            <div className="detail-grid">
-              {filled.map(([label, key]) => (
-                <div className="detail-item" key={String(key)}>
-                  <span className="detail-label">{label}</span>
-                  <span className="detail-value">{String(dossier[key])}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-      {!DOSSIER_IDENTITY_SECTIONS.some(s => s.fields.some(([, key]) => !!(dossier[key] && String(dossier[key]).trim()))) && (
-        <EmptyState icon="🗂" title="Aucune information d'identité renseignée" />
-      )}
-
-      {/* Pièces et preuves visuelles */}
-      {(cniPhotos.length > 0 || otherPhotos.length > 0) && (
-        <>
-          <hr className="divider" />
-          <SectionLabel accent={MTN_GOLD}>Pièces et preuves visuelles</SectionLabel>
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            {cniPhotos.length > 0 && (
-              <div style={{
-                display: 'flex', gap: 8, padding: 10, borderRadius: 12,
-                border: '1px solid #E2E8F0', background: '#fff',
-              }}>
-                {cniPhotos.map(p => (
-                  <div key={p.type} style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center', width: 120 }}>
-                    <img
-                      src={api.photoUrlWithToken(dossier.id, p.type)}
-                      alt={p.label}
-                      style={{ width: 120, height: 90, objectFit: 'cover', borderRadius: 8, cursor: onZoom ? 'pointer' : 'default' }}
-                      onClick={() => onZoom?.(allImgs, imgIndex(p.type), `${dossier.id} — ${p.label}`)}
-                    />
-                    <span style={{ fontSize: 11.5, color: MTN_MUTED, textAlign: 'center', fontWeight: 600 }}>{p.label}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {otherPhotos.map(p => (
-              <div key={p.type} style={{
-                display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center', width: 120,
-                padding: 10, borderRadius: 12, border: '1px solid #E2E8F0', background: '#fff',
-              }}>
-                <img
-                  src={api.photoUrlWithToken(dossier.id, p.type)}
-                  alt={p.label}
-                  style={{ width: 120, height: 90, objectFit: p.group === 'signature' ? 'contain' : 'cover', borderRadius: 8, background: p.group === 'signature' ? '#F8FAFC' : undefined, cursor: onZoom ? 'pointer' : 'default' }}
-                  onClick={() => onZoom?.(allImgs, imgIndex(p.type), `${dossier.id} — ${p.label}`)}
-                />
-                <span style={{ fontSize: 11.5, color: MTN_MUTED, textAlign: 'center', fontWeight: 600 }}>{p.label}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </Modal>
-  );
-}
 
 // ── Dashboard Agent ────────────────────────────────────────────────────────────
 export function AgentDashboard() {
@@ -467,37 +206,11 @@ export function AgentDashboard() {
   );
 }
 
-// ── File d'attente (dossiers distribués automatiquement à l'agent) ─────────────
-const DOSSIER_TIMEOUT_SEC_DEFAULT = 120; // repli si /api/config/distribution-timing indisponible (défaut backend réel)
-
-function secondsRemaining(assigneLe: number | null | undefined, now: number, timeoutSec: number): number | null {
-  if (!assigneLe) return null;
-  const elapsedSec = Math.floor(now / 1000) - assigneLe;
-  return timeoutSec - elapsedSec;
-}
-
-function formatCountdown(remaining: number): string {
-  const clamped = Math.max(0, remaining);
-  const m = Math.floor(clamped / 60);
-  const s = clamped % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function countdownTone(remaining: number, timeoutSec: number): 'ok' | 'warn' | 'danger' {
-  if (remaining <= timeoutSec * 0.2) return 'danger';
-  if (remaining <= timeoutSec * 0.5) return 'warn';
-  return 'ok';
-}
-
+// ── File d'attente ─────────────────────────────────────────────────────────────
 export function AgentFileAttente() {
   const { user } = useAuth();
   const [preview, setPreview] = useState<{ imgs: string[]; idx: number; title?: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
   useEffect(() => {
     if (!preview) return;
     const h = (e: KeyboardEvent) => {
@@ -516,61 +229,20 @@ export function AgentFileAttente() {
   const [motifSearch, setMotifSearch] = useState('');
   const [motifPage, setMotifPage] = useState(1);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
-  const [demanding, setDemanding] = useState(false);
-
-  // Un dossier distribué automatiquement n'est pas immédiatement actionnable :
-  // l'agent doit d'abord cliquer sur « Prendre en charge » (après avoir consulté
-  // le détail complet du titulaire) avant de pouvoir Appeler / Accepter / Rejeter.
-  // Ceci évite toute décision (accepter/rejeter) prise sans avoir vu l'identité
-  // complète du dossier.
-  const [takenIds, setTakenIds] = useState<Set<string>>(new Set());
-
-  // Un agent ne voit QUE ce qui lui a été distribué automatiquement — jamais la
-  // file globale des autres agents.
-  const { data, loading, error, refetch } = useFetch(
-    () => api.getDossiers({ limit: 10, scope: 'mine', statut: 'en_cours' }), []
-  );
-
+  const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200, scope: 'queue' }), []);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
-  const timingQ = useFetch(() => api.getDistributionTiming(), []);
-  const timeoutSec = timingQ.data?.abandon_sec && timingQ.data.abandon_sec > 0 ? timingQ.data.abandon_sec : DOSSIER_TIMEOUT_SEC_DEFAULT;
 
-  const dossiers = (data?.dossiers ?? []).filter(d => d.statut === 'en_cours');
+  const dossiers = data?.dossiers ?? [];
+  const stats = useMemo(() => ({
+    total: dossiers.length,
+    en_attente: dossiers.filter(d => d.statut === 'en_attente').length,
+    en_cours: dossiers.filter(d => d.statut === 'en_cours').length,
+    accepte: dossiers.filter(d => d.statut === 'accepte').length,
+    rejete: dossiers.filter(d => d.statut === 'rejete').length,
+    vieux: dossiers.filter(d => ageMinutes(d.created_at) > 5).length,
+  }), [dossiers]);
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
-
-  const demanderDossier = async () => {
-    setDemanding(true); setErr(null); setSuccess(null);
-    try {
-      const res = await api.appelerDossier();
-      if (res?.aucun) setSuccess('Aucun dossier en attente pour le moment.');
-      refetch();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors de la demande de dossier');
-    } finally {
-      setDemanding(false);
-    }
-  };
-  const handlePrendre = async (dossier: Dossier) => {
-    setErr(null); setSuccess(null); setBusy(true);
-    try {
-      if (dossier.statut === 'en_attente') {
-        await api.prendreEnCharge(dossier.id);
-      } else if (dossier.statut === 'en_cours') {
-        // Dossier déjà attribué (distribution auto) : on confirme la prise en
-        // charge côté serveur pour relever le chrono d'abandon (assigne_le),
-        // afin qu'il ne soit pas repris pendant que l'agent le traite.
-        await api.confirmerPriseEnCharge(dossier.id);
-      }
-      refetch();
-      setTakenIds(prev => { const next = new Set(prev); next.add(dossier.id); return next; });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors de la prise en charge du dossier');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const motifs = motifsQ.data?.motifs ?? [];
   const filteredMotifs = useMemo(() => {
     const query = motifSearch.trim().toLocaleLowerCase('fr-FR');
@@ -599,11 +271,6 @@ export function AgentFileAttente() {
     }
   };
 
-  const handleFinalizeGsm = (dossier: Dossier) => {
-    localStorage.setItem('gsm_dossier_id', dossier.id);
-    window.location.href = '/gsm-saisie?dossier=' + encodeURIComponent(dossier.id);
-  };
-
   useEffect(() => {
     if (rejetTarget) {
       setSelectedMotif('');
@@ -617,262 +284,194 @@ export function AgentFileAttente() {
     if (motifPage > motifPageCount) setMotifPage(motifPageCount);
   }, [motifPage, motifPageCount]);
 
-  // Polling silencieux en arrière-plan - ne recharge que si le lot de dossiers
-  // qui m'est distribué change (nouveau dossier reçu, ou repris par le système
-  // après le délai de 5 minutes).
+  // Polling silencieux en arrière-plan - ne recharge que si dossiers en_attente changent
   const dossiersRef = useRef(dossiers);
   useEffect(() => {
     dossiersRef.current = dossiers;
   }, [dossiers]);
 
-  // Distribution automatique silencieuse : tant qu'aucun dossier n'est assigné
-  // à l'agent, on redemande périodiquement un dossier en arrière-plan, sans
-  // action de sa part — le bouton « Demander un dossier » reste disponible en
-  // secours pour forcer une demande immédiate.
-  const demandingRef = useRef(false);
-  useEffect(() => { demandingRef.current = demanding; }, [demanding]);
-
-  useEffect(() => {
-    if (dossiers.length > 0) return;
-    let cancelled = false;
-    const tryDemanderSilencieux = async () => {
-      if (cancelled || demandingRef.current) return;
-      try {
-        const res = await api.appelerDossier();
-        if (!cancelled && !res?.aucun) refetch();
-      } catch (e) {
-        // Aucun dossier disponible, limite atteinte, ou erreur réseau : on
-        // réessaiera silencieusement au prochain cycle, sans alerter l'agent.
-      }
-    };
-    tryDemanderSilencieux();
-    const interval = setInterval(tryDemanderSilencieux, 6000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [dossiers.length, refetch]);
-
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const newData = await api.getDossiers({ limit: 10, scope: 'mine', statut: 'en_cours' });
-        const newIds = (newData.dossiers ?? []).filter(d => d.statut === 'en_cours').map(d => d.id).sort().join(',');
-        const currentIds = dossiersRef.current.map(d => d.id).sort().join(',');
-        if (newIds !== currentIds) refetch();
+        const newData = await api.getDossiers({ limit: 200 });
+        const newEnAttente = (newData.dossiers ?? []).filter(d => d.statut === 'en_attente').length;
+        const currentEnAttente = dossiersRef.current.filter(d => d.statut === 'en_attente').length;
+        
+        // Ne recharger que si le nombre de dossiers en_attente a changé
+        if (newEnAttente !== currentEnAttente) {
+          refetch();
+        }
       } catch (e) {
         // Silencieusement ignorer les erreurs de polling
       }
-    }, 4000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [refetch]);
 
   return (
     <>
       <div className="page-header">
-        <div><h1 className="page-title">Mon dossier</h1><p className="page-sub">Distribution automatique — les dossiers qui vous sont attribués apparaissent ici.</p></div>
+        <div><h1 className="page-title">File d'attente</h1><p className="page-sub">Vue professionnelle de la file commune, avec les informations utiles au traitement rapide.</p></div>
         <button className="btn btn-ghost btn-sm" onClick={refetch}>↻ Actualiser</button>
       </div>
       {error && <Alert kind="error">{error}</Alert>}
       {err   && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
+      {stats.vieux > 0 && <Alert kind="error">{stats.vieux} dossier(s) en attente depuis plus de 5 minutes.</Alert>}
 
-      {loading ? <LoadingCenter /> : dossiers.length === 0 ? (
-        <div
-          className="card"
-          style={{
-            maxWidth: 440,
-            textAlign: 'center',
-            padding: '2.5rem 2rem',
-            background: 'linear-gradient(160deg, var(--surface-1) 0%, var(--surface-2) 100%)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--r-lg, 16px)',
-            boxShadow: '0 8px 28px rgba(0,0,0,.06)',
-          }}
-        >
-          <div style={{ fontSize: 40, marginBottom: '.5rem' }}>🎯</div>
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: '.35rem' }}>En attente d'un dossier</div>
-          <p style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: '1.25rem' }}>
-            La distribution automatique recherche un dossier pour vous en continu. Vous ne voyez ici que ce qui vous a été assigné personnellement.
-          </p>
-          <button className="btn btn-primary" disabled={demanding} onClick={demanderDossier}>
-            {demanding ? 'Demande en cours…' : '↻ Redemander maintenant'}
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', width: '100%' }}>
-          {dossiers.map(d => {
-            const face = faceSummary(d);
-            const remaining = secondsRemaining(d.assigne_le, now, timeoutSec);
-            const tone = remaining !== null ? countdownTone(remaining, timeoutSec) : 'ok';
-            const toneColor = tone === 'danger' ? '#DC2626' : tone === 'warn' ? '#D97706' : '#16A34A';
-            const isTaken = takenIds.has(d.id);
-            const canReprendreFaciale = d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed');
-            return (
-              <div
-                key={d.id}
-                className="card assigned-dossier-card"
-                style={{
-                  flex: '0 0 420px',
-                  width: 420,
-                  maxWidth: '100%',
-                  alignSelf: 'flex-start',
-                  padding: 0,
-                  overflow: 'hidden',
-                  borderRadius: 16,
-                  border: `1px solid ${isTaken ? '#E2E8F0' : MTN_GOLD}`,
-                  boxShadow: isTaken ? '0 10px 32px rgba(0,0,0,.08)' : '0 12px 34px rgba(255,204,0,.18)',
-                  background: '#fff',
-                  transition: 'box-shadow .2s ease',
-                }}
-              >
-                <div
-                  style={{
-                    padding: '14px 18px',
-                    color: '#fff',
-                    background: `linear-gradient(135deg, ${MTN_BLUE} 0%, #001d5c 100%)`,
-                    borderBottom: `3px solid ${MTN_GOLD}`,
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: '.75rem',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: '.02em' }}>{d.id}</div>
-                    <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,.75)' }}>{d.username_agent || 'Agent terrain'} • pris à {d.heure_prise || '—'}</div>
-                  </div>
-                  {remaining !== null && (
-                    <div
-                      title="Temps restant avant redistribution automatique"
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: '.35rem',
-                        padding: '.3rem .6rem', borderRadius: 999,
-                        background: '#fff', border: `1px solid ${toneColor}`,
-                        color: toneColor, fontWeight: 700, fontSize: 12, fontVariantNumeric: 'tabular-nums',
-                        flexShrink: 0,
-                      }}
-                    >
-                      ⏱ {formatCountdown(remaining)}
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ padding: '1.1rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '.9rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem' }}>
+      {loading ? <LoadingCenter /> : (
+        <>
+          <div className="stats-grid">
+            <StatCard label="Total" value={stats.total} variant="attente" sub="Dossiers visibles" />
+            <StatCard label="En attente" value={stats.en_attente} variant="attente" sub="À prendre" />
+            <StatCard label="En cours" value={stats.en_cours} variant="cours" sub="En traitement" />
+            <StatCard label="Acceptés" value={stats.accepte} variant="accepte" sub="Validés" />
+            <StatCard label="Rejetés" value={stats.rejete} variant="rejete" sub="Refusés" />
+          </div>
+          <div className="agent-dossier-grid">
+            {dossiers.filter(d => d.statut === 'en_attente').map(d => {
+              const face = faceSummary(d);
+              const age = ageMinutes(d.created_at);
+              return (
+                <div key={d.id} className="agent-dossier-card">
+                  <div className="agent-dossier-meta">
                     <div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: MTN_TEXT }}>{d.numero_mtn || 'Numéro masqué'}</div>
-                      <div style={{ fontSize: 12, color: MTN_MUTED }}>{d.zone_agent || 'Zone non renseignée'}</div>
+                      <div className="agent-dossier-id">{d.id}</div>
+                      <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_reception || '—'}</div>
                     </div>
-                    <span style={{
-                      fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 999, whiteSpace: 'nowrap',
-                      background: isTaken ? '#DCFCE7' : '#FEF3C7', color: isTaken ? '#166534' : '#92400E',
-                    }}>
-                      {isTaken ? '🟢 Pris en charge' : '🟡 À prendre en charge'}
-                    </span>
+                    <span className="agent-badge attente">en attente</span>
                   </div>
+                  <div className="agent-dossier-body">
+                    <div className="agent-dossier-actions">
+                      <div>
+                        <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
+                        <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
+                      </div>
+                      <div className="agent-actions-inline">
 
-                  <div className="face-preview-card">
-                    <div className="face-preview-header">
-                      <span>Reconnaissance faciale</span>
-                      <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        </button>
+
+                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
+                      </div>
                     </div>
-                    <div className="face-preview-text">{face.motif}</div>
-                    {d.score_visage !== null && d.score_visage !== undefined && (
-                      <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
+                    <div className="face-preview-card">
+                      <div className="face-preview-header">
+                        <span>Reconnaissance faciale</span>
+                        <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
+                      </div>
+                      <div className="face-preview-text">{face.motif}</div>
+                      {d.score_visage !== null && d.score_visage !== undefined && (
+                        <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
+                      )}
+                    </div>
+                            {(d.photo_recto || d.photo_verso || d.photo_live) && (
+                              <div className="photo-strip">
+                                {(() => {
+                                  const types = ['recto','verso','live'] as const;
+                                  const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
+                                  return types.map(type => {
+                                    const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                                    const path = d[field];
+                                    if (!path) return null;
+                                    const url = api.photoUrlWithToken(d.id, type);
+                                    const idx = imgs.indexOf(url);
+                                    return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                                  });
+                                })()}
+                              </div>
+                            )}
+                  </div>
+                </div>
+              );
+            })}
+            {dossiers.filter(d => d.statut === 'en_cours').map(d => {
+              const face = faceSummary(d);
+              return (
+                <div key={d.id} className="agent-dossier-card">
+                  <div className="agent-dossier-meta">
+                    <div>
+                      <div className="agent-dossier-id">{d.id}</div>
+                      <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_prise || '—'}</div>
+                    </div>
+                    <span className="agent-badge cours">en cours</span>
+                  </div>
+                  <div className="agent-dossier-body">
+                    <div className="agent-dossier-actions">
+                      <div>
+                        <div className="agent-dossier-title">{d.numero_mtn}</div>
+                        <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
+                      </div>
+                      <div className="agent-actions-inline">
+                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        </button>
+                        {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
+                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
+                        )}
+                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
+                        <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
+                          localStorage.setItem('gsm_dossier_id', d.id);
+                          window.location.href = '/gsm-saisie?dossier=' + d.id;
+                        })}>Accepter</button>
+                      </div>
+                    </div>
+                    <div className="face-preview-card">
+                      <div className="face-preview-header">
+                        <span>Reconnaissance faciale</span>
+                        <span className={`face-pill ${face.tone}`}>{face.icon} {face.label}</span>
+                      </div>
+                      <div className="face-preview-text">{face.motif}</div>
+                      {d.score_visage !== null && d.score_visage !== undefined && (
+                        <div className="score-row"><span>Score</span><strong>{d.score_visage.toFixed(1)}%</strong></div>
+                      )}
+                    </div>
+                    {(d.photo_recto || d.photo_verso || d.photo_live) && (
+                      <div className="photo-strip">
+                        {(() => {
+                          const types = ['recto','verso','live'] as const;
+                          const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
+                          return types.map(type => {
+                            const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
+                            const path = d[field];
+                            if (!path) return null;
+                            const url = api.photoUrlWithToken(d.id, type);
+                            const idx = imgs.indexOf(url);
+                            return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
+                          });
+                        })()}
+                      </div>
                     )}
                   </div>
-
-                  {(d.photo_recto || d.photo_verso || d.photo_live) && (
-                    <div className="photo-strip">
-                      {(() => {
-                        const types = ['recto','verso','live'] as const;
-                        const imgs = types.map(t => d[`photo_${t}` as 'photo_recto'|'photo_verso'|'photo_live'] ? api.photoUrlWithToken(d.id, t) : null).filter(Boolean) as string[];
-                        return types.map(type => {
-                          const field = `photo_${type}` as 'photo_recto' | 'photo_verso' | 'photo_live';
-                          const path = d[field];
-                          if (!path) return null;
-                          const url = api.photoUrlWithToken(d.id, type);
-                          const idx = imgs.indexOf(url);
-                          return <img key={type} src={url} alt={type} className="mini-photo" onClick={() => setPreview({ imgs, idx: idx >= 0 ? idx : 0, title: `${d.id} — ${type}` })} />;
-                        });
-                      })()}
-                    </div>
-                  )}
-
-                  {!isTaken && (
-                    <p style={{ margin: 0, fontSize: 12, color: MTN_MUTED, lineHeight: 1.4 }}>
-                      Consultez le <strong>détail complet</strong> du titulaire (identité, filiation, adresse) avant de prendre ce dossier en charge.
-                    </p>
-                  )}
                 </div>
-
-                <div
-                  style={{
-                    padding: '.9rem 1.25rem',
-                    borderTop: '1px solid #E2E8F0',
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '.5rem',
-                    background: '#F8FAFC',
-                  }}
-                >
-                  {!isTaken ? (
-                    <>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setSelected(d)}>🔎 Voir le détail complet</button>
-                      <div style={{ flex: 1 }} />
-                      <button className="btn btn-primary btn-sm" disabled={busy} style={{ background: MTN_BLUE, borderColor: MTN_BLUE, color: '#fff' }} onClick={() => handlePrendre(d)}>
-                        {busy ? 'Prise en charge…' : '📥 Prendre en charge'}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                        {d.wa_agent ? '📞 Appeler terrain' : 'Pas de WA'}
-                      </button>
-                      {canReprendreFaciale && (
-                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
-                      )}
-                      <button className="btn btn-ghost btn-sm" onClick={() => setSelected(d)}>Détails</button>
-                      <div style={{ flex: 1 }} />
-                      <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>✕ Rejeter</button>
-                      <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
-                        localStorage.setItem('gsm_dossier_id', d.id);
-                        window.location.href = '/gsm-saisie?dossier=' + d.id;
-                      })}>✓ Accepter</button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {selected && (
-        <DossierIdentityModal
-          dossier={selected}
-          onClose={() => setSelected(null)}
-          onZoom={(imgs, idx, title) => setPreview({ imgs, idx, title })}
-          footer={
-            !takenIds.has(selected.id) ? (
-              <button className="btn btn-primary" disabled={busy} style={{ background: MTN_BLUE, borderColor: MTN_BLUE, color: '#fff' }} onClick={() => handlePrendre(selected)}>
-                {busy ? 'Prise en charge…' : '📥 Prendre en charge'}
+        <DossierDetailModal dossier={selected} onClose={() => setSelected(null)} actions={
+          selected.statut === 'en_attente' ? (
+            <>
+              <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.prendreEnCharge(selected.id))}>
+                {busy ? 'Traitement…' : 'Prendre en charge'}
               </button>
-            ) : (
-              <>
-                {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
-                  <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
-                )}
-                <button className="btn btn-success" disabled={busy || !selected.wa_agent} onClick={() => handleCallTerrain(selected)}>
-                  {selected.wa_agent ? '📞 Appeler terrain' : 'Pas de WA'}
-                </button>
-                <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>✕ Rejeter</button>
-                <button className="btn btn-primary" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
-                  localStorage.setItem('gsm_dossier_id', selected.id);
-                  window.location.href = '/gsm-saisie?dossier=' + selected.id;
-                })}>✓ Accepter</button>
-              </>
-            )
-          }
-        />
+            </>
+          ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
+            <>
+              {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
+                <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
+              )}
+              <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
+              <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
+                localStorage.setItem('gsm_dossier_id', selected.id);
+                window.location.href = '/gsm-saisie?dossier=' + selected.id;
+              })}>Accepter</button>
+            </>
+          ) : null
+        }/>
       )}
 
       {rejetTarget && (
@@ -991,7 +590,6 @@ export function AgentMesDossiers() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const dSearch = useDebounce(search, 350);
   const [sel, setSel] = useState<Dossier|null>(null);
-  const [preview, setPreview] = useState<{ imgs: string[]; idx: number; title?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -1014,11 +612,6 @@ export function AgentMesDossiers() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const handleFinalizeGsm = (dossier: Dossier) => {
-    localStorage.setItem('gsm_dossier_id', dossier.id);
-    window.location.href = '/gsm-saisie?dossier=' + encodeURIComponent(dossier.id);
   };
 
   const sortedDossiers = useMemo(() => {
@@ -1073,49 +666,15 @@ export function AgentMesDossiers() {
       {err && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
       {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} rowActions={d => (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn btn-success btn-sm" disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
-            {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
-          </button>
-          {(d.statut === 'accepte' && d.gsm_complete !== 1) ? (
-            <button className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); handleFinalizeGsm(d); }}>
-              Finaliser GSM
-            </button>
-          ) : null}
-        </div>
+        <button className="btn btn-success btn-sm" disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
+          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+        </button>
       )} /></div>}
-      {sel && (
-        <DossierIdentityModal
-          dossier={sel}
-          onClose={() => setSel(null)}
-          onZoom={(imgs, idx, title) => setPreview({ imgs, idx, title })}
-          footer={
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn btn-success" disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
-                {sel.wa_agent ? '📞 Appeler terrain' : 'Pas de WA'}
-              </button>
-              {(sel.statut === 'accepte' && sel.gsm_complete !== 1) ? (
-                <button className="btn btn-primary" disabled={busy} onClick={() => handleFinalizeGsm(sel)}>
-                  Finaliser GSM
-                </button>
-              ) : null}
-            </div>
-          }
-        />
-      )}
-      {preview && (
-        <Modal title={preview.title || 'Aperçu'} onClose={() => setPreview(null)}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem', alignItems: 'center' }}>
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <img src={preview.imgs[preview.idx]} alt={preview.title || `Aperçu ${preview.idx+1}`} style={{ maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain' }} />
-            </div>
-            <div style={{ display: 'flex', gap: '.5rem' }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)} disabled={preview.idx <= 0}>← Précédent</button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(p => p ? { ...p, idx: Math.min(p.imgs.length - 1, p.idx + 1) } : p)} disabled={preview.idx >= preview.imgs.length - 1}>Suivant →</button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} actions={
+        <button className="btn btn-success" disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
+          {sel.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+        </button>
+      } />}
     </>
   );
 }

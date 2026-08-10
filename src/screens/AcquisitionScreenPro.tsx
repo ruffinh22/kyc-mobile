@@ -96,14 +96,17 @@ type NativeSignaturePadProps = {
   resetKey: number;
   onChange: (dataUri: string) => void;
   disabled?: boolean;
-  // Notifie le parent qu'un tracé est en cours, pour désactiver le scroll de
-  // la page pendant la signature (voir onInteractionChange plus bas) — sans
-  // ça, un ScrollView englobant peut intercepter le geste comme un scroll
-  // au lieu de le laisser au pad, surtout au tout premier mouvement.
-  onInteractionChange?: (interacting: boolean) => void;
+  // Remontent le début/la fin d'un tracé au parent (ex. pour désactiver le
+  // scroll pendant la signature). Pilotés DIRECTEMENT par le PanResponder du
+  // pad — ne jamais dupliquer ça avec un responder concurrent sur un View
+  // parent : un "ShouldSetResponderCapture" qui renvoie true sur un ancêtre
+  // capture le geste avant qu'il n'atteigne ce PanResponder, et plus aucun
+  // trait ne peut être dessiné (c'était le bug initial).
+  onInteractStart?: () => void;
+  onInteractEnd?: () => void;
 };
 
-function NativeSignaturePad({ mode, resetKey, onChange, disabled, onInteractionChange }: NativeSignaturePadProps) {
+function NativeSignaturePad({ mode, resetKey, onChange, disabled, onInteractStart, onInteractEnd }: NativeSignaturePadProps) {
   const [strokes, setStrokes] = useState<SignaturePoint[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<SignaturePoint[]>([]);
   const [canvasSize, setCanvasSize] = useState({ width: 320, height: 220 });
@@ -143,18 +146,10 @@ function NativeSignaturePad({ mode, resetKey, onChange, disabled, onInteractionC
   }, [captureSignature]);
 
   const panResponder = useMemo(() => PanResponder.create({
-    // Capture dès le "should set" — pas seulement au niveau bulle — pour que
-    // le pad revendique le geste avant le ScrollView englobant. Sans les
-    // variantes *Capture, un ScrollView parent (ou tout ancêtre qui essaie
-    // lui-même d'intercepter le toucher) peut voler le premier mouvement et
-    // le pad ne reçoit alors jamais rien.
     onStartShouldSetPanResponder: () => !disabled,
-    onStartShouldSetPanResponderCapture: () => !disabled,
     onMoveShouldSetPanResponder: () => !disabled,
-    onMoveShouldSetPanResponderCapture: () => !disabled,
-    onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (evt) => {
-      onInteractionChange?.(true);
+      onInteractStart?.();
       const point = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
       currentStrokeRef.current = [point];
       setCurrentStroke([point]);
@@ -166,20 +161,20 @@ function NativeSignaturePad({ mode, resetKey, onChange, disabled, onInteractionC
       setCurrentStroke(next);
     },
     onPanResponderRelease: () => {
+      onInteractEnd?.();
       const nextStrokes = currentStrokeRef.current.length > 0
         ? [...strokesRef.current, currentStrokeRef.current]
         : strokesRef.current;
       finalizeStroke(nextStrokes);
-      onInteractionChange?.(false);
     },
     onPanResponderTerminate: () => {
+      onInteractEnd?.();
       const nextStrokes = currentStrokeRef.current.length > 0
         ? [...strokesRef.current, currentStrokeRef.current]
         : strokesRef.current;
       finalizeStroke(nextStrokes);
-      onInteractionChange?.(false);
     },
-  }), [disabled, finalizeStroke, onInteractionChange]);
+  }), [disabled, finalizeStroke, onInteractStart, onInteractEnd]);
 
   const buildPath = (points: SignaturePoint[]) => {
     if (points.length === 0) return '';
@@ -1396,7 +1391,8 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
                   resetKey={signaturePadKey}
                   onChange={setSignatureData}
                   disabled={loading}
-                  onInteractionChange={setSignatureInteracting}
+                  onInteractStart={() => setSignatureInteracting(true)}
+                  onInteractEnd={() => setSignatureInteracting(false)}
                 />
                 {!signatureData && (
                   <View style={s.sigPadHintOverlay}>

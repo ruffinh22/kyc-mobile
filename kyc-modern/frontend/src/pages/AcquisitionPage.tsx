@@ -38,13 +38,13 @@ const API_BASE = (() => {
   const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
   const runtimeOrigin = window.location.origin;
   if (!envUrl) return runtimeOrigin;
-  if (envUrl.startsWith('http://localhost') || envUrl.startsWith('https://localhost')) {
+  const isLocalConfiguredHost = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(envUrl);
+  if (isLocalConfiguredHost) {
     const host = window.location.hostname;
-    if (host !== 'localhost' && host !== '127.0.0.1') {
-      return runtimeOrigin;
-    }
+    const isRemoteHost = host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0';
+    if (isRemoteHost) return runtimeOrigin;
   }
-  return envUrl;
+  return envUrl.replace(/\/$/, '');
 })();
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1180,7 +1180,7 @@ export function AcquisitionPage() {
         }
       };
       xhr.onerror = () => { setLoading(false); setErreur('Erreur réseau — vérifiez votre connexion'); };
-      xhr.open('POST', `${API_BASE}/api/public/dossiers`);
+      xhr.open('POST', '/api/public/dossiers');
       xhr.send(fd);
     } catch (e: unknown) {
       setLoading(false);

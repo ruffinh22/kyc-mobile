@@ -29,11 +29,11 @@ const API_BASE = (() => {
     return base;
   }
   if (!envUrl) return runtimeOrigin;
-  if (envUrl.startsWith('http://localhost') || envUrl.startsWith('https://localhost')) {
+  const isLocalConfiguredHost = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(envUrl);
+  if (isLocalConfiguredHost) {
     const host = window.location.hostname;
-    if (host !== 'localhost' && host !== '127.0.0.1') {
-      return runtimeOrigin;
-    }
+    const isRemoteHost = host !== 'localhost' && host !== '127.0.0.1' && host !== '0.0.0.0';
+    if (isRemoteHost) return runtimeOrigin;
   }
   return envUrl.replace(/\/$/, '');
 })();

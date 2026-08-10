@@ -1,4 +1,4 @@
-import { Pool } from 'mysql2/promise';
+import type { Pool } from 'mysql2/promise';
 
 export const migration = {
   name: '20260803_add_distribution_timing_config',

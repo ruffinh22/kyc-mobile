@@ -328,7 +328,10 @@ export function AgentFileAttente() {
             <StatCard label="Acceptés" value={stats.accepte} variant="accepte" sub="Validés" />
             <StatCard label="Rejetés" value={stats.rejete} variant="rejete" sub="Refusés" />
           </div>
-          <div className="agent-dossier-grid">
+          <div
+            className="agent-dossier-grid"
+            style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1rem', alignItems: 'start' }}
+          >
             {dossiers.filter(d => d.statut === 'en_attente').map(d => {
               const face = faceSummary(d);
               const age = ageMinutes(d.created_at);
@@ -347,13 +350,13 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
-                      <div className="agent-actions-inline">
-
-                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                      <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
+                        <button className="btn btn-ghost btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          📞 {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
                         </button>
-
-                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))}>Prendre</button>
+                        <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))} style={{ marginLeft: 'auto' }}>
+                          Prendre en charge
+                        </button>
                       </div>
                     </div>
                     <div className="face-preview-card">
@@ -403,18 +406,17 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-title">{d.numero_mtn}</div>
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
-                      <div className="agent-actions-inline">
-                        <button className="btn btn-success btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                      <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
+                        <button className="btn btn-ghost btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          📞 {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
                         </button>
-                        {(d.acquisition_status === 'face_verify_retry' || d.visage_motif?.includes('erreur_rekognition') || d.visage_motif?.includes('failed')) && (
-                          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(d.id))}>↺ Reprendre faciale</button>
-                        )}
-                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
-                        <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
-                          localStorage.setItem('gsm_dossier_id', d.id);
-                          window.location.href = '/gsm-saisie?dossier=' + d.id;
-                        })}>Accepter</button>
+                        <div style={{ display: 'flex', gap: '.5rem', marginLeft: 'auto' }}>
+                          <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
+                          <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
+                            localStorage.setItem('gsm_dossier_id', d.id);
+                            window.location.href = '/gsm-saisie?dossier=' + d.id;
+                          })}>Accepter</button>
+                        </div>
                       </div>
                     </div>
                     <div className="face-preview-card">
@@ -461,9 +463,6 @@ export function AgentFileAttente() {
             </>
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
-              {(selected.acquisition_status === 'face_verify_retry' || selected.visage_motif?.includes('erreur_rekognition') || selected.visage_motif?.includes('failed')) && (
-                <button className="btn btn-ghost" disabled={busy} onClick={() => action(() => api.reprendreFaceVerify(selected.id))}>↺ Reprendre faciale</button>
-              )}
               <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
               <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
                 localStorage.setItem('gsm_dossier_id', selected.id);
@@ -614,6 +613,15 @@ export function AgentMesDossiers() {
     }
   };
 
+  // Renvoie vers la saisie GSM déjà pré-remplie avec ce dossier — même
+  // mécanisme que celui utilisé juste après l'acceptation d'un dossier
+  // (voir handleDossierDecision plus haut) : utile ici pour les dossiers déjà
+  // acceptés dont la saisie GSM n'a pas encore été finalisée.
+  const goToGsmSaisie = (dossierId: string) => {
+    localStorage.setItem('gsm_dossier_id', dossierId);
+    window.location.href = '/gsm-saisie?dossier=' + dossierId;
+  };
+
   const sortedDossiers = useMemo(() => {
     const rows = [...(data?.dossiers ?? [])];
     const weights: Record<string, number> = { en_attente: 0, en_cours: 1, accepte: 2, rejete: 3 };
@@ -666,14 +674,26 @@ export function AgentMesDossiers() {
       {err && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
       {loading ? <LoadingCenter /> : <div className="card"><div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{sortedDossiers.length} résultat(s)</div><DossiersTable dossiers={sortedDossiers} onSelect={setSel} showAgent={false} rowActions={d => (
-        <button className="btn btn-success btn-sm" disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
-          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
-        </button>
+        <div style={{ display:'flex', gap:'.4rem', justifyContent:'flex-end', flexWrap:'wrap' }}>
+          {d.statut === 'accepte' && (
+            <button className="btn btn-primary btn-sm" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} onClick={(e) => { e.stopPropagation(); goToGsmSaisie(d.id); }}>
+              📱 Finaliser GSM
+            </button>
+          )}
+          <button className="btn btn-success btn-sm" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
+            📞 {d.wa_agent ? 'Appeler' : 'Pas de WA'}
+          </button>
+        </div>
       )} /></div>}
       {sel && <DossierDetailModal dossier={sel} onClose={() => setSel(null)} actions={
-        <button className="btn btn-success" disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
-          {sel.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
-        </button>
+        <>
+          {sel.statut === 'accepte' && (
+            <button className="btn btn-primary" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} onClick={() => goToGsmSaisie(sel.id)}>📱 Finaliser GSM</button>
+          )}
+          <button className="btn btn-success" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
+            📞 {sel.wa_agent ? 'Appeler' : 'Pas de WA'}
+          </button>
+        </>
       } />}
     </>
   );

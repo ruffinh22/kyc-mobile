@@ -22,6 +22,18 @@ function captureUrlWithToken(baseUrl: string): string {
   return `${baseUrl}${separator}token=${encodeURIComponent(token)}`;
 }
 
+// Formate une date de capture, qu'elle arrive en "YYYY-MM-DD" ou en horodatage
+// ISO complet ("YYYY-MM-DDTHH:mm:ss.sssZ") — jamais l'heure "00:00:00" brute à l'écran.
+function formatCaptureDate(raw?: string): string {
+  if (!raw) return '—';
+  const str = String(raw).trim();
+  const dateOnly = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return d.toLocaleDateString('fr-FR');
+  return str;
+}
+
 export function AdminCapturesPage() {
   const [captures, setCaptures] = useState<Capture[]>([]);
   const [loading, setLoading] = useState(false);
@@ -29,6 +41,8 @@ export function AdminCapturesPage() {
   const [sortField, setSortField] = useState<'date' | 'type' | 'numero'>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [modalImage, setModalImage] = useState<{ url: string; title: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Capture | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [filters, setFilters] = useState({
     type: 'cni',
     date_from: '',
@@ -71,18 +85,22 @@ export function AdminCapturesPage() {
     window.location.href = `/api/captures/export?${params.toString()}`;
   };
 
-  const deleteCapture = async (id: string) => {
-    if (!confirm('Supprimer cette capture ?')) return;
+  const confirmDeleteCapture = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      const data = await apiFetch<{ success: boolean; error?: string }>(`/api/captures/${id}`, { method: 'DELETE' });
+      const data = await apiFetch<{ success: boolean; error?: string }>(`/api/captures/${deleteTarget.id}`, { method: 'DELETE' });
       if (data.success) {
-        setCaptures(captures.filter(c => c.id !== id));
+        setCaptures(captures.filter(c => c.id !== deleteTarget.id));
+        setDeleteTarget(null);
       } else {
         setError(data.error || 'Erreur lors de la suppression');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur de connexion au serveur');
       console.error('Error deleting capture:', err);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -244,7 +262,7 @@ export function AdminCapturesPage() {
                           {capture.type || '—'}
                         </span>
                       </td>
-                      <td>{capture.date || '—'}</td>
+                      <td>{formatCaptureDate(capture.date)}</td>
                       <td>
                         {capture.recto_url ? (
                           <button
@@ -277,9 +295,9 @@ export function AdminCapturesPage() {
                       </td>
                       <td>
                         <button
-                          onClick={() => deleteCapture(capture.id)}
+                          onClick={() => setDeleteTarget(capture)}
                           className="btn btn-ghost btn-sm"
-                          style={{ color: '#ef4444' }}
+                          style={{ color: 'var(--danger)' }}
                         >
                           🗑 Supprimer
                         </button>
@@ -291,6 +309,22 @@ export function AdminCapturesPage() {
             </div>
           )}
         </div>
+      )}
+
+      {deleteTarget && (
+        <Modal title="Supprimer la capture" onClose={() => setDeleteTarget(null)} footer={
+          <>
+            <button className="btn btn-ghost btn-sm" onClick={() => setDeleteTarget(null)}>Annuler</button>
+            <button className="btn btn-danger btn-sm" disabled={deleting} onClick={confirmDeleteCapture}>
+              {deleting ? 'Suppression…' : 'Supprimer définitivement'}
+            </button>
+          </>
+        }>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>
+            Cette action est irréversible. La capture <strong>{deleteTarget.id}</strong>
+            {deleteTarget.dossier_id ? <> liée au dossier <strong>{deleteTarget.dossier_id}</strong></> : null} sera définitivement supprimée.
+          </p>
+        </Modal>
       )}
 
       {modalImage && (

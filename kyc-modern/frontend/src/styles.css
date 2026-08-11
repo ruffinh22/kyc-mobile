@@ -989,8 +989,13 @@ textarea { resize: vertical; min-height: 80px; }
   border-color: var(--border-2);
 }
 
-.btn-sm  { padding: .36rem .8rem;   font-size: 12px; }
+.btn-sm  { padding: .36rem .8rem;   font-size: 12px; min-height: 28px; }
 .btn-lg  { padding: .7rem 1.5rem;   font-size: 14.5px; }
+
+.btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .btn-icon {
   padding: .4rem;

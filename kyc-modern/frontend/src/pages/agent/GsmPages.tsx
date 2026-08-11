@@ -10,6 +10,39 @@ const MTN_GOLD = '#FFCC00';
 const MTN_TEXT = '#0F172A';
 const MTN_MUTED = '#64748B';
 
+function formatGsmDateValue(value?: string | null): string {
+  if (!value) return '—';
+  const text = String(value).trim();
+  if (!text) return '—';
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${day}/${month}/${year}`;
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  return text;
+}
+
+function formatGsmEvolutionLabel(value?: string | null): string {
+  if (!value) return '—';
+  const text = String(value).trim();
+  if (!text) return '—';
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${day}/${month}/${year}`;
+  }
+
+  return formatGsmDateValue(text);
+}
+
 function SectionLabel({ children, accent = MTN_BLUE }: { children: ReactNode; accent?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '2px 0 4px' }}>
@@ -124,10 +157,11 @@ function GsmRecordDetailModal({ record, onClose, footer }: {
         {GSM_DETAIL_FIELDS.map(([label, key]) => {
           const value = record[key];
           if (!value) return null;
+          const displayValue = key === 'date_saisie' ? formatGsmDateValue(String(value)) : String(value);
           return (
             <div className="detail-item" key={String(key)}>
               <span className="detail-label">{label}</span>
-              <span className="detail-value">{String(value)}</span>
+              <span className="detail-value">{displayValue}</span>
             </div>
           );
         })}
@@ -184,7 +218,7 @@ export function GsmMonTableau() {
                     {data.dernieres.map(g => (
                       <tr key={g.id}>
                         <td><strong>{g.numero}</strong></td>
-                        <td>{g.date_saisie}</td>
+                        <td>{formatGsmDateValue(g.date_saisie)}</td>
                         <td><Chip value={g.constat} /></td>
                         <td><Chip value={g.statut_final} /></td>
                       </tr>
@@ -692,7 +726,7 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
                 {filteredSaisies.length ? filteredSaisies.map(g => (
                   <tr key={g.id} className="clickable" onClick={() => setDetailSel(g)} style={{ cursor: 'pointer' }}>
                     <td><strong>{g.numero}</strong></td>
-                    <td>{g.date_saisie}</td>
+                    <td>{formatGsmDateValue(g.date_saisie)}</td>
                     <td><Chip value={g.constat} /></td>
                     <td><Chip value={g.piece} /></td>
                     <td><Chip value={g.action} /></td>
@@ -774,7 +808,7 @@ export function GsmHistorique() {
                   {filtered.map(g => (
                     <tr key={g.id} className="clickable" onClick={() => setSel(g)} style={{ cursor: 'pointer' }}>
                       <td><strong>{g.numero}</strong></td>
-                      <td>{g.date_saisie}</td>
+                      <td>{formatGsmDateValue(g.date_saisie)}</td>
                       <td><Chip value={g.type_id} /></td>
                       <td><Chip value={g.constat} /></td>
                       <td><Chip value={g.statut_final} /></td>
@@ -811,7 +845,7 @@ export function GsmHistorique() {
             <button className="btn btn-danger btn-sm" disabled={busy} onClick={handleDelete}>Confirmer</button>
           </>
         }>
-          <p style={{ fontSize: 13.5 }}>Supprimer la saisie <strong>{delTarget.numero}</strong> du {delTarget.date_saisie} ?</p>
+          <p style={{ fontSize: 13.5 }}>Supprimer la saisie <strong>{delTarget.numero}</strong> du {formatGsmDateValue(delTarget.date_saisie)} ?</p>
         </Modal>
       )}
     </>
@@ -853,7 +887,7 @@ export function GsmPerfs() {
               <div className="bar-chart">
                 {evolution.map(e => (
                   <div className="bar-row" key={e.jour}>
-                    <span className="bar-label">{e.jour.slice(5)}</span>
+                    <span className="bar-label">{formatGsmEvolutionLabel(e.jour)}</span>
                     <div className="bar-track"><div className="bar-fill" style={{ width: `${(e.n / max) * 100}%` }} /></div>
                     <span className="bar-val">{e.n}</span>
                   </div>

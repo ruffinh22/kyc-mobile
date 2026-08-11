@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Dossier } from '../types';
-import { StatutBadge, Modal, EmptyState } from './ui';
+import { StatutBadge, Modal, EmptyState, StatCard } from './ui';
 import { photoUrlWithToken } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -32,10 +32,15 @@ function formatProcessingDuration(dossier: Dossier, now = Date.now()): string {
 
   if (!startCandidate) return '—';
 
-  const end = dossier.statut === 'en_cours' ? now : parseDossierTime(dossier.heure_cloture);
-  if (!end || end < startCandidate) return '—';
+  const endCandidate = dossier.statut === 'en_cours'
+    ? now
+    : (dossier.closed_at && dossier.closed_at > 0
+      ? dossier.closed_at * 1000
+      : parseDossierTime(dossier.heure_cloture));
 
-  const totalSeconds = Math.floor((end - startCandidate) / 1000);
+  if (!endCandidate || endCandidate < startCandidate) return '—';
+
+  const totalSeconds = Math.floor((endCandidate - startCandidate) / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
 
   const minutes = Math.floor(totalSeconds / 60);
@@ -78,19 +83,15 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
 
   return (
     <div className="dossier-table-shell">
-      <div className="dossier-table-toolbar">
-        <div>
-          <div className="dossier-table-title">Vue dossiers</div>
-          <div className="dossier-table-sub">Synthèse rapide du flux actuel</div>
-        </div>
-        <div className="dossier-table-pills">
-          <span className="dossier-pill dossier-pill-total">Total {dossiers.length}</span>
-          <span className="dossier-pill dossier-pill-attente">En attente {counts.en_attente}</span>
-          <span className="dossier-pill dossier-pill-cours">En cours {counts.en_cours}</span>
-        </div>
+      <div className="stats-grid" style={{ marginBottom: '1.25rem' }}>
+        <StatCard label="Total" value={dossiers.length} />
+        <StatCard label="En attente" value={counts.en_attente} variant="attente" />
+        <StatCard label="En cours" value={counts.en_cours} variant="cours" />
+        <StatCard label="Acceptés" value={counts.accepte} variant="accepte" />
+        <StatCard label="Rejetés" value={counts.rejete} variant="rejete" />
       </div>
       <div className="table-wrap">
-        <table className="dossier-table">
+        <table>
           <thead>
             <tr>
               <th>Référence</th>
@@ -98,27 +99,28 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
               {showAgent && <th>Agent</th>}
               {showDate  && <th>Date</th>}
               <th>Réception</th>
-              <th>Temps</th>
+              <th>Temps de traitement</th>
               <th>Statut</th>
-              {rowActions && <th>Actions</th>}
+              {rowActions && <th style={{ textAlign: 'right' }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {dossiers.map(d => (
-              <tr key={d.id} className={`clickable dossier-row ${d.statut}`} onClick={() => onSelect(d)}>
-                <td>
-                  <div className="dossier-cell-primary">
-                    <span className="dossier-ref-badge">{d.id}</span>
-                    <span className="dossier-ref-sub">{formatDossierDate(d.date)}</span>
-                  </div>
-                </td>
-                <td><span className="dossier-cell-value">{d.masque ? '***' : d.numero_mtn || '—'}</span></td>
-                {showAgent && <td><span className="dossier-cell-value">{d.agent_saisie || '—'}</span></td>}
-                {showDate  && <td><span className="dossier-cell-value">{formatDossierDate(d.date)}</span></td>}
-                <td><span className="dossier-cell-value">{d.heure_reception || '—'}</span></td>
-                <td><span className="dossier-cell-value">{formatProcessingDuration(d, now)}</span></td>
+              <tr key={d.id} className="clickable" onClick={() => onSelect(d)} style={{ cursor: 'pointer' }}>
+                <td style={{ fontFamily: 'monospace', fontSize: 12.5 }}>{d.id}</td>
+                <td style={{ fontFamily: 'monospace' }}>{d.masque ? '•••••••••' : (d.numero_mtn || '—')}</td>
+                {showAgent && <td>{d.agent_saisie || '—'}</td>}
+                {showDate  && <td>{formatDossierDate(d.date)}</td>}
+                <td>{d.heure_reception || '—'}</td>
+                <td>{formatProcessingDuration(d, now)}</td>
                 <td><StatutBadge statut={d.statut} /></td>
-                {rowActions && <td className="dossier-actions-cell" onClick={e => e.stopPropagation()}>{rowActions(d)}</td>}
+                {rowActions && (
+                  <td onClick={e => e.stopPropagation()} style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {rowActions(d)}
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -158,11 +160,17 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
   return (
     <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions}>
       <div className="form-grid">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
           <StatutBadge statut={dossier.statut} />
-          {dossier.score_visage !== null && (
-            <span style={{ fontSize: 12, color: dossier.visage_match ? 'var(--success)' : 'var(--danger)' }}>
-              Visage : {dossier.score_visage}% {dossier.visage_match ? '✓' : '✗'}
+          {dossier.score_visage !== null && dossier.score_visage !== undefined && (
+            <span
+              className="badge"
+              style={{
+                background: dossier.visage_match ? 'var(--success-soft)' : 'var(--danger-soft)',
+                color: dossier.visage_match ? 'var(--success)' : 'var(--danger)',
+              }}
+            >
+              Visage {dossier.score_visage}% {dossier.visage_match ? '✓' : '✗'}
             </span>
           )}
         </div>

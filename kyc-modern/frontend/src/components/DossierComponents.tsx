@@ -26,19 +26,22 @@ function formatDossierDate(value: string | null): string {
 }
 
 function formatProcessingDuration(dossier: Dossier, now = Date.now()): string {
-  const startCandidate = dossier.assigne_le && dossier.assigne_le > 0
-    ? dossier.assigne_le * 1000
+  const assignedAt = Number(dossier.assigne_le ?? 0);
+  const closedAt = Number(dossier.closed_at ?? 0);
+  const startCandidate = assignedAt > 0
+    ? assignedAt * 1000
     : parseDossierTime(dossier.heure_prise) ?? (dossier.created_at ? dossier.created_at * 1000 : null);
 
-  if (!startCandidate) return '—';
+  if (dossier.statut === 'en_attente' && assignedAt <= 0) return 'En attente';
+  if (!startCandidate) return 'Non calculable';
 
   const endCandidate = dossier.statut === 'en_cours'
     ? now
-    : (dossier.closed_at && dossier.closed_at > 0
-      ? dossier.closed_at * 1000
+    : (closedAt > 0
+      ? closedAt * 1000
       : parseDossierTime(dossier.heure_cloture));
 
-  if (!endCandidate || endCandidate < startCandidate) return '—';
+  if (!endCandidate || endCandidate < startCandidate) return 'Non calculable';
 
   const totalSeconds = Math.floor((endCandidate - startCandidate) / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -154,7 +157,7 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
               <tr key={d.id} className="clickable" onClick={() => onSelect(d)} style={{ cursor: 'pointer' }}>
                 <td style={{ fontFamily: 'monospace', fontSize: 12.5 }}>{d.id}</td>
                 <td style={{ fontFamily: 'monospace' }}>{d.masque ? '•••••••••' : (d.numero_mtn || '—')}</td>
-                {showAgent && <td>{d.agent_saisie || '—'}</td>}
+                {showAgent && <td>{d.agent_saisie || (d.statut === 'en_attente' ? 'Non attribué' : '—')}</td>}
                 {showDate  && <td>{formatDossierDate(d.date)}</td>}
                 <td>{d.heure_reception || '—'}</td>
                 <td>{formatProcessingDuration(d, now)}</td>

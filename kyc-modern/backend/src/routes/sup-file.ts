@@ -32,6 +32,7 @@ export async function supFileRoutes(app: any): Promise<void> {
     const { rows, total } = await db.getDossiers({
       date: q.date || new Date().toISOString().slice(0, 10),
       statut: q.statut || null,
+      includePendingAll: true,
       limit: 500,
     });
     return reply.send({ success: true, total, dossiers: rows });

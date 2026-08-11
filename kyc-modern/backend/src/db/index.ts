@@ -384,12 +384,24 @@ export async function getDossierById(id: string): Promise<Dossier | null> {
 export async function getDossiers(params: {
   date?: string | null; debut?: string | null; fin?: string | null;
   statut?: string | null; agent?: string | null; search?: string | null;
-  scope?: string | null; limit?: number; offset?: number;
+  scope?: string | null; includePendingAll?: boolean; limit?: number; offset?: number;
 }): Promise<{ rows: Dossier[]; total: number }> {
   let where = 'WHERE 1=1';
   const p: unknown[] = [];
 
-  if (params.date) { where += ' AND date=?'; p.push(params.date); }
+  if (params.date) {
+    if (params.includePendingAll && (!params.statut || params.statut === 'en_attente')) {
+      if (params.statut === 'en_attente') {
+        where += " AND statut='en_attente'";
+      } else {
+      where += " AND (date=? OR statut='en_attente')";
+      p.push(params.date);
+      }
+    } else {
+      where += ' AND date=?';
+      p.push(params.date);
+    }
+  }
   if (params.debut) { where += ' AND date>=?'; p.push(params.debut); }
   if (params.fin)   { where += ' AND date<=?'; p.push(params.fin); }
   if (params.statut) { where += ' AND statut=?'; p.push(params.statut); }

@@ -38,6 +38,39 @@ function formatFaceScore(value: number | string | null | undefined) {
   return `${num.toFixed(1)}%`;
 }
 
+function formatCountdown(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function getAutoDistributionRemainingSeconds(dossier: Dossier, now: number, abandonSec: number): number | null {
+  if (dossier.statut !== 'en_cours' || !dossier.assigne_le || dossier.assigne_le <= 0) return null;
+  const remaining = Math.floor(abandonSec - ((now / 1000) - dossier.assigne_le));
+  return remaining > 0 ? remaining : 0;
+}
+
+function AutoDistributionCountdown({ dossier, abandonSec, now }: { dossier: Dossier; abandonSec: number; now: number }) {
+  const remaining = getAutoDistributionRemainingSeconds(dossier, now, abandonSec);
+  if (remaining === null) return null;
+
+  const isCritical = remaining <= 30;
+  return (
+    <span
+      className="badge"
+      title={`Redistribution automatique dans ${remaining}s`}
+      style={{
+        background: isCritical ? 'rgba(220, 38, 38, 0.14)' : 'rgba(249, 115, 22, 0.16)',
+        color: isCritical ? 'var(--danger)' : 'var(--warning)',
+        border: isCritical ? '1px solid rgba(220, 38, 38, 0.22)' : '1px solid rgba(249, 115, 22, 0.2)',
+      }}
+    >
+      ⏳ {formatCountdown(remaining)}
+    </span>
+  );
+}
+
 const formatPhoneLike = (val: string, country: string, maxDigits: number) => {
   const digits = val.replace(/\D/g, '').slice(0, maxDigits);
   if (!digits) return '';
@@ -72,6 +105,24 @@ export function AgentDashboard() {
   const { data, loading, error } = useFetch(() => api.getDossierStats(), []);
   const { data: gsmData, loading: gsmLoading, error: gsmError } = useFetch(() => api.getGsmMonTableau(), []);
   const { data: planningData, loading: planningLoading, error: planningError } = useFetch(() => api.getPlanningMon(today, tomorrowISO), [today, tomorrowISO]);
+  const [now, setNow] = useState(Date.now());
+  const [abandonSec, setAbandonSec] = useState(120);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    api.getDistributionTiming().then((data) => {
+      if (!mounted) return;
+      setAbandonSec(data?.abandon_sec ?? 120);
+    }).catch(() => {
+      if (mounted) setAbandonSec(120);
+    });
+    return () => { mounted = false; };
+  }, []);
 
   const planningToday = planningData?.entrees.filter(e => e.date === today) ?? [];
   const planningTomorrow = planningData?.entrees.filter(e => e.date === tomorrowISO) ?? [];
@@ -225,12 +276,30 @@ export function AgentFileAttente() {
   const [rejetTarget, setRejetTarget] = useState<Dossier | null>(null);
   const [livenessDossier, setLivenessDossier] = useState<Dossier | null>(null);
   const [selectedMotif, setSelectedMotif] = useState('');
+  const [now, setNow] = useState(Date.now());
+  const [abandonSec, setAbandonSec] = useState(120);
   const [customMotif, setCustomMotif] = useState('');
   const [motifSearch, setMotifSearch] = useState('');
   const [motifPage, setMotifPage] = useState(1);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string|null>(null);
   const { data, loading, error, refetch } = useFetch(() => api.getDossiers({ limit: 200, scope: 'queue' }), []);
   const motifsQ = useFetch(() => api.getRejectionMotifs(), []);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    api.getDistributionTiming().then((data) => {
+      if (!mounted) return;
+      setAbandonSec(data?.abandon_sec ?? 120);
+    }).catch(() => {
+      if (mounted) setAbandonSec(120);
+    });
+    return () => { mounted = false; };
+  }, []);
 
   const dossiers = data?.dossiers ?? [];
   const stats = useMemo(() => ({
@@ -293,12 +362,12 @@ export function AgentFileAttente() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const newData = await api.getDossiers({ limit: 200 });
-        const newEnAttente = (newData.dossiers ?? []).filter(d => d.statut === 'en_attente').length;
-        const currentEnAttente = dossiersRef.current.filter(d => d.statut === 'en_attente').length;
-        
-        // Ne recharger que si le nombre de dossiers en_attente a changé
-        if (newEnAttente !== currentEnAttente) {
+        const newData = await api.getDossiers({ limit: 200, scope: 'queue' });
+        const currentSnapshot = dossiersRef.current.map(d => `${d.id}:${d.statut}:${d.agent_saisie ?? ''}:${d.assigne_le ?? ''}`).join('|');
+        const nextSnapshot = (newData.dossiers ?? []).map(d => `${d.id}:${d.statut}:${d.agent_saisie ?? ''}:${d.assigne_le ?? ''}`).join('|');
+
+        // Recharger uniquement si la vue de file a réellement changé.
+        if (currentSnapshot !== nextSnapshot) {
           refetch();
         }
       } catch (e) {
@@ -351,8 +420,11 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
-                        <button className="btn btn-ghost btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          📞 {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: 'inline-block', marginRight: '.35rem', verticalAlign: 'middle' }}>
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.87.33 1.72.63 2.55l-1.2 1.2a15.9 15.9 0 0 0 6 6l1.2-1.2c.83.3 1.68.51 2.55.63A2 2 0 0 1 22 16.92Z" />
+                          </svg>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
                         </button>
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))} style={{ marginLeft: 'auto' }}>
                           Prendre en charge
@@ -398,7 +470,10 @@ export function AgentFileAttente() {
                       <div className="agent-dossier-id">{d.id}</div>
                       <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_prise || '—'}</div>
                     </div>
-                    <span className="agent-badge cours">en cours</span>
+                    <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <AutoDistributionCountdown dossier={d} abandonSec={abandonSec} now={now} />
+                      <span className="agent-badge cours">en cours</span>
+                    </div>
                   </div>
                   <div className="agent-dossier-body">
                     <div className="agent-dossier-actions">
@@ -407,12 +482,15 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
-                        <button className="btn btn-ghost btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
-                          📞 {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: 'inline-block', marginRight: '.35rem', verticalAlign: 'middle' }}>
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.87.33 1.72.63 2.55l-1.2 1.2a15.9 15.9 0 0 0 6 6l1.2-1.2c.83.3 1.68.51 2.55.63A2 2 0 0 1 22 16.92Z" />
+                          </svg>
+                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
                         </button>
                         <div style={{ display: 'flex', gap: '.5rem', marginLeft: 'auto' }}>
-                          <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
-                          <button className="btn btn-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
+                          <button className="btn btn-cta-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
+                          <button className="btn btn-cta-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
                             localStorage.setItem('gsm_dossier_id', d.id);
                             window.location.href = '/gsm-saisie?dossier=' + d.id;
                           })}>Accepter</button>
@@ -463,8 +541,8 @@ export function AgentFileAttente() {
             </>
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
-              <button className="btn btn-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
-              <button className="btn btn-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
+              <button className="btn btn-cta-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
+              <button className="btn btn-cta-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
                 localStorage.setItem('gsm_dossier_id', selected.id);
                 window.location.href = '/gsm-saisie?dossier=' + selected.id;
               })}>Accepter</button>

@@ -12,6 +12,12 @@ interface ConfigRow {
   valeur: string;
 }
 
+export function shouldRequeueDossier(assignedAt: number | null, now: number, abandonSec: number): boolean {
+  if (assignedAt == null) return false;
+  const timeoutSec = Math.max(30, abandonSec);
+  return now - assignedAt >= timeoutSec;
+}
+
 export async function distribuerMaintenant(): Promise<void> {
   try {
     // Vérifier le mode de distribution
@@ -26,21 +32,27 @@ export async function distribuerMaintenant(): Promise<void> {
     const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
     // ---- FILET DE SÉCURITÉ ----
-    // Récupérer les dossiers en_cours dont l'agent n'a pas ping depuis le délai d'abandon configuré
+    // Récupérer les dossiers en_cours qui ont dépassé le délai d'abandon
+    // soit parce que l'agent n'a pas donné signe de vie, soit parce qu'ils
+    // sont restés trop longtemps assignés sans action.
     const orphelins = await query<{ id: string } & RowDataPacket>(
       `SELECT d.id FROM dossiers d 
        WHERE d.statut='en_cours' AND d.agent_saisie IS NOT NULL
-       AND d.agent_saisie NOT IN (
-         SELECT matricule FROM presence WHERE ts >= ?
+       AND (
+         (d.assigne_le IS NOT NULL AND d.assigne_le <= ?)
+         OR (d.assigne_le IS NULL AND d.updated_at IS NOT NULL AND d.updated_at <= ?)
+         OR d.agent_saisie NOT IN (
+           SELECT matricule FROM presence WHERE ts >= ?
+         )
        )`,
-      [seuilAbandon]
+      [seuilAbandon, seuilAbandon, seuilAbandon]
     );
 
     for (const o of orphelins) {
       await exec(
         `UPDATE dossiers 
-         SET statut='en_attente', assigne_a=NULL, agent_saisie=NULL, 
-             heure_prise=NULL, updated_at=? 
+         SET statut='en_attente', assigne_a=NULL, agent_saisie=NULL,
+             assigne_le=NULL, heure_prise=NULL, updated_at=? 
          WHERE id=? AND statut='en_cours'`,
         [maintenant, o.id]
       );

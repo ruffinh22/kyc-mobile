@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Dossier } from '../types';
 import { StatutBadge, Modal, EmptyState, StatCard } from './ui';
-import { photoUrlWithToken } from '../services/api';
+import { photoUrlWithToken, getDistributionTiming } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 function parseDossierTime(value: string | null): number | null {
@@ -60,15 +60,60 @@ function formatProcessingDuration(dossier: Dossier, now = Date.now()): string {
   return remHours > 0 ? `${days}j ${remHours}h` : `${days}j`;
 }
 
+function formatCountdown(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function getAutoDistributionRemainingSeconds(dossier: Dossier, now: number, abandonSec: number): number | null {
+  if (dossier.statut !== 'en_cours' || !dossier.assigne_le || dossier.assigne_le <= 0) return null;
+  const remaining = Math.floor(abandonSec - ((now / 1000) - dossier.assigne_le));
+  return remaining > 0 ? remaining : 0;
+}
+
+function AutoDistributionCountdown({ dossier, abandonSec, now }: { dossier: Dossier; abandonSec: number; now: number }) {
+  const remaining = getAutoDistributionRemainingSeconds(dossier, now, abandonSec);
+  if (remaining === null) return null;
+
+  const isCritical = remaining <= 30;
+  return (
+    <span
+      className="badge"
+      title={`Redistribution automatique dans ${remaining}s`}
+      style={{
+        background: isCritical ? 'rgba(220, 38, 38, 0.14)' : 'rgba(249, 115, 22, 0.16)',
+        color: isCritical ? 'var(--danger)' : 'var(--warning)',
+        border: isCritical ? '1px solid rgba(220, 38, 38, 0.22)' : '1px solid rgba(249, 115, 22, 0.2)',
+      }}
+    >
+      ⏳ {formatCountdown(remaining)}
+    </span>
+  );
+}
+
 // ── Dossiers Table ─────────────────────────────────────────────────────────────
 export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate = true, rowActions }: {
   dossiers: Dossier[]; onSelect(d: Dossier): void; showAgent?: boolean; showDate?: boolean; rowActions?: (dossier: Dossier) => React.ReactNode;
 }) {
   const [now, setNow] = useState(Date.now());
+  const [abandonSec, setAbandonSec] = useState(120);
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    getDistributionTiming().then((data) => {
+      if (!mounted) return;
+      setAbandonSec(data?.abandon_sec ?? 120);
+    }).catch(() => {
+      if (mounted) setAbandonSec(120);
+    });
+    return () => { mounted = false; };
   }, []);
 
   if (!dossiers.length) return <EmptyState icon="📭" title="Aucun dossier" body="Aucun résultat ne correspond aux filtres." />;
@@ -113,7 +158,12 @@ export function DossiersTable({ dossiers, onSelect, showAgent = true, showDate =
                 {showDate  && <td>{formatDossierDate(d.date)}</td>}
                 <td>{d.heure_reception || '—'}</td>
                 <td>{formatProcessingDuration(d, now)}</td>
-                <td><StatutBadge statut={d.statut} /></td>
+                <td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+                    <StatutBadge statut={d.statut} />
+                    <AutoDistributionCountdown dossier={d} abandonSec={abandonSec} now={now} />
+                  </div>
+                </td>
                 {rowActions && (
                   <td onClick={e => e.stopPropagation()} style={{ textAlign: 'right' }}>
                     <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -138,10 +188,22 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
   const [errPhoto, setErrPhoto] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<{ imgs: string[]; idx: number } | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [abandonSec, setAbandonSec] = useState(120);
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    getDistributionTiming().then((data) => {
+      if (!mounted) return;
+      setAbandonSec(data?.abandon_sec ?? 120);
+    }).catch(() => {
+      if (mounted) setAbandonSec(120);
+    });
+    return () => { mounted = false; };
   }, []);
   useEffect(() => {
     if (!preview) return;
@@ -162,6 +224,7 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
       <div className="form-grid">
         <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
           <StatutBadge statut={dossier.statut} />
+          <AutoDistributionCountdown dossier={dossier} abandonSec={abandonSec} now={now} />
           {dossier.score_visage !== null && dossier.score_visage !== undefined && (
             <span
               className="badge"

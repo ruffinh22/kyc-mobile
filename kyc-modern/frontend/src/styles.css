@@ -963,6 +963,42 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .btn-danger:hover:not(:disabled) { background: var(--danger-muted); border-color: rgba(217,30,24,.28); }
 
+.btn-cta {
+  background: linear-gradient(135deg, var(--mtn-blue) 0%, #0b74c7 100%);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 14px rgba(0, 87, 168, 0.2);
+  font-size: 13.5px;
+}
+.btn-cta:hover:not(:disabled) {
+  filter: brightness(1.04);
+  box-shadow: 0 8px 16px rgba(0, 87, 168, 0.25);
+}
+
+.btn-cta-success {
+  background: linear-gradient(135deg, #0f9d5d 0%, #0b7a46 100%);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 14px rgba(15, 157, 93, 0.2);
+  font-size: 13.5px;
+}
+.btn-cta-success:hover:not(:disabled) {
+  filter: brightness(1.04);
+  box-shadow: 0 8px 16px rgba(15, 157, 93, 0.25);
+}
+
+.btn-cta-danger {
+  background: linear-gradient(135deg, #e54d3b 0%, #c52f22 100%);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 14px rgba(197, 47, 34, 0.2);
+  font-size: 13.5px;
+}
+.btn-cta-danger:hover:not(:disabled) {
+  filter: brightness(1.04);
+  box-shadow: 0 8px 16px rgba(197, 47, 34, 0.25);
+}
+
 .btn-warn {
   background: var(--warn-soft);
   color: #92400E;

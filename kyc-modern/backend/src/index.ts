@@ -77,6 +77,20 @@ async function main(): Promise<void> {
       };
 
   await app.register(cors, corsConfig);
+  // Handler global pour les préflight OPTIONS : renvoyer 204 immédiatement
+  // Tentative prudente : si une autre registration (ex: @fastify/cors) a
+  // déjà déclaré la route, on ignore l'erreur de duplication.
+  try {
+    app.options('/*', async (_req, reply) => {
+      return reply.code(204).send();
+    });
+  } catch (err: any) {
+    if (err && err.code === 'FST_ERR_DUPLICATED_ROUTE') {
+      app.log.warn('[CORS] global OPTIONS route already registered, skipping');
+    } else {
+      throw err;
+    }
+  }
   await app.register(cookie, { secret: process.env.JWT_SECRET || 'kyc-cookie' });
   await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024, files: 5 } });
   await app.register(websocket as any);

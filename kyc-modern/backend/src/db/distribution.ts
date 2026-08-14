@@ -15,7 +15,7 @@
 // seconde fois — c'est la cause du bug "2 dossiers auto au lieu de 1".
 // ============================================================================
 
-import { query, exec, nowSec, getConfig } from '../db';
+import { query, exec, nowSec, getConfig, nextSeq } from '../db';
 import { RowDataPacket } from 'mysql2';
 import { appelerProchainDossier, releaseAgentLock, reconcileAgentLocks } from '../db/locks';
 
@@ -87,16 +87,30 @@ export async function distribuerMaintenant(): Promise<void> {
     const limite = maintenant - Math.max(30, Math.floor(abandonSec / 2));
     const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
-    // Poser dispo_depuis pour les agents devenus éligibles
-    await exec(
-      `UPDATE presence 
-       SET dispo_depuis = ? 
-       WHERE statut='online' AND ts >= ? AND dispo_depuis IS NULL 
+    // Poser dispo_depuis et dispo_seq pour les agents devenus éligibles.
+    // On lit la liste et on assigne un `dispo_seq` atomique par agent via
+    // `nextSeq('dispo_seq')` pour garantir un ordre FIFO déterministe.
+    const candidats = await query<{ matricule: string } & RowDataPacket>(
+      `SELECT matricule FROM presence
+       WHERE statut='online' AND ts >= ? AND dispo_depuis IS NULL
        AND matricule NOT IN (
          SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL
        )`,
-      [maintenant, limite]
+      [limite]
     );
+
+    for (const c of candidats) {
+      try {
+        const seq = await nextSeq('dispo_seq');
+        await exec(
+          `UPDATE presence SET dispo_depuis = ?, dispo_seq = ?
+           WHERE matricule = ? AND dispo_depuis IS NULL`,
+          [maintenant, seq, c.matricule]
+        );
+      } catch (e) {
+        // Ignorer les erreurs individuelles; le worker réessaiera au prochain cycle
+      }
+    }
 
     // Le worker ne relance pas la distribution plus vite que l'intervalle configuré.
     if (intervalSec > 1) {
@@ -106,10 +120,10 @@ export async function distribuerMaintenant(): Promise<void> {
       );
     }
 
-    // Effacer dispo_depuis pour les non éligibles
+    // Effacer dispo_depuis et dispo_seq pour les non éligibles
     await exec(
       `UPDATE presence 
-       SET dispo_depuis = NULL 
+       SET dispo_depuis = NULL, dispo_seq = NULL
        WHERE dispo_depuis IS NOT NULL AND (
          statut!='online' OR ts < ? OR matricule IN (
            SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL
@@ -118,14 +132,14 @@ export async function distribuerMaintenant(): Promise<void> {
       [limite]
     );
 
-    // Agents disponibles, FIFO (triés par dispo_depuis = temps d'attente)
+    // Agents disponibles, FIFO — tri déterministe par `dispo_seq`, fallback sur `dispo_depuis`.
     const agents = await query<{ matricule: string } & RowDataPacket>(
       `SELECT matricule FROM presence 
        WHERE statut='online' AND ts >= ? AND dispo_depuis IS NOT NULL 
        AND matricule NOT IN (
          SELECT agent_saisie FROM dossiers WHERE statut='en_cours' AND agent_saisie IS NOT NULL
        )
-       ORDER BY dispo_depuis ASC`,
+       ORDER BY (dispo_seq IS NULL), dispo_seq ASC, dispo_depuis ASC`,
       [limite]
     );
 
@@ -138,8 +152,8 @@ export async function distribuerMaintenant(): Promise<void> {
       const res = await appelerProchainDossier(ag.matricule);
       if (res.result !== 'ok') continue;
 
-      // Attribution réussie: l'agent devient occupé
-      await exec("UPDATE presence SET dispo_depuis=NULL WHERE matricule=?", [ag.matricule]);
+      // Attribution réussie: l'agent devient occupé — effacer dispo_depuis et dispo_seq
+      await exec("UPDATE presence SET dispo_depuis=NULL, dispo_seq=NULL WHERE matricule=?", [ag.matricule]);
 
       // Notifier via SSE
       try {

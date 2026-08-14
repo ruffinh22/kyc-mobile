@@ -618,14 +618,24 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
 
   const Sel = ({ k, label, opts, req }: { k: string; label: string; opts?: string[]; req?: boolean }) => {
     const value = (f as Record<string,string>)[k] || '';
-    const customText = opts?.length && value && !opts.includes(value);
+    const hasOpts = Array.isArray(opts) && opts.length > 0;
+
+    // Si l'agent a fourni une valeur qui n'existe pas dans le référentiel,
+    // on l'insère en tête de la liste pour qu'elle soit visible et
+    // pré-sélectionnée dans le <select> plutôt que de basculer sur un input.
+    const existingOpts = hasOpts ? opts! : [];
+    const isCustom = hasOpts && value && !existingOpts.includes(value);
+    const selectOptions = isCustom ? [value, ...existingOpts] : existingOpts;
+
     return (
       <div className="field">
         <label>{label}{req && <span className="req">*</span>}{autoFilled.has(k) && <AutoTag />}</label>
-        {opts?.length && !customText ? (
+        {hasOpts ? (
           <select value={value} onChange={e => chg(k, e.target.value)}>
             <option value="">Sélectionner…</option>
-            {opts.map(o => <option key={o} value={o}>{o}</option>)}
+            {selectOptions.map(o => (
+              <option key={o} value={o}>{o}{isCustom && o === value ? ' (pré-rempli)' : ''}</option>
+            ))}
           </select>
         ) : (
           <input value={value} onChange={e => chg(k, e.target.value)} placeholder={label} />
@@ -699,7 +709,7 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
             className="btn btn-primary btn-lg"
             disabled={loading || dossierNonDecide}
             title={dossierNonDecide ? "Validez ou rejetez le dossier ci-dessus avant d'enregistrer" : undefined}
-            style={{ background: dossierNonDecide ? '#94A3B8' : MTN_BLUE, borderColor: dossierNonDecide ? '#94A3B8' : MTN_BLUE }}
+            style={{ background: dossierNonDecide ? '#94A3B8' : MTN_BLUE, borderColor: dossierNonDecide ? '#94A3B8' : MTN_BLUE, color: '#fff' }}
           >
             {loading ? 'Enregistrement…' : dossierNonDecide ? '⏳ En attente de décision sur le dossier' : '✓ Enregistrer la saisie'}
           </button>

@@ -79,6 +79,26 @@ export async function gsmRoutes(app: any): Promise<void> {
       capture_a: null, capture_p: null, capture_aa: null,
     });
     db.audit(req.user.matricule,'GSM_CREE',`id=${id}`,req.ip);
+    // Enregistrer les valeurs inconnues (si l'agent a envoyé une option
+    // qui n'existe pas dans les référentiels), pour réconciliation ultérieure.
+    try {
+      const refs = await db.getReferentiels();
+      const checkFields: { key: string; fieldName: string }[] = [
+        { key: 'type_id', fieldName: 'type_id' },
+        { key: 'piece', fieldName: 'piece' },
+        { key: 'constat', fieldName: 'constat' },
+        { key: 'verbatim', fieldName: 'verbatim' },
+        { key: 'action', fieldName: 'action' },
+        { key: 'statut_final', fieldName: 'statut_final' },
+      ];
+      for (const f of checkFields) {
+        const val = body[f.key];
+        if (val && Array.isArray(refs[f.fieldName]) && !refs[f.fieldName].includes(val)) {
+          await db.insertUnknownReferentiel({ agent: req.user.matricule, field: f.fieldName, value: val, gsmId: id, dossierId: null });
+        }
+      }
+    } catch (e) {}
+
     return reply.code(201).send({ success: true, id });
   });
 

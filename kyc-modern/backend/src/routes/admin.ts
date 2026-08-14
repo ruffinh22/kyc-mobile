@@ -221,4 +221,38 @@ export async function adminRoutes(app: any): Promise<void> {
       return reply.code(403).send({ error: err instanceof Error ? err.message : 'Erreur' });
     }
   });
+
+    // ── Valeurs inconnues (référentiels) ──────────────────────────────────────
+    app.get('/api/admin/unknown-referentiels', async (req, reply) => {
+      const q = req.query as Record<string, string | undefined>;
+      const field = q.field || undefined;
+      const limit = Math.min(parseInt(q.limit || '200', 10), 2000);
+      const offset = parseInt(q.offset || '0', 10) || 0;
+      const { rows, total } = await db.getUnknownReferentielValues({ field, limit, offset });
+      return reply.send({ success: true, total, count: rows.length, rows });
+    });
+
+    app.post('/api/admin/unknown-referentiels/:id/accept', async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'id invalide' });
+      try {
+        await db.acceptUnknownReferentielById(id);
+        db.audit(req.user.matricule, 'UNKNOWN_REFERENTIEL_ACCEPT', `id=${id}`, req.ip);
+        return reply.send({ success: true });
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Erreur' });
+      }
+    });
+
+    app.post('/api/admin/unknown-referentiels/:id/ignore', async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return reply.code(400).send({ error: 'id invalide' });
+      try {
+        await db.deleteUnknownReferentielById(id);
+        db.audit(req.user.matricule, 'UNKNOWN_REFERENTIEL_DELETE', `id=${id}`, req.ip);
+        return reply.send({ success: true });
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Erreur' });
+      }
+    });
 }

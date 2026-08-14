@@ -11,3 +11,33 @@ adb install -r android/app/build/outputs/apk/debug/kyc-mobile-1.0.0-debug-arm64-
 curl -s -X POST http://127.0.0.1:3001/api/call/test -H 'Content-Type: application/json' -d '{"numero":"0167376539","numeroMtn":"0700000000"}'
 
 cd /home/lidruf/kyc-mobile/kyc-modern/backend && echo 'FCM vars:' && env | grep -E 'FCM|GOOGLE' | sed 's/=.*$/=<set>/' || true && echo '---' && curl -s -X POST http://127.0.0.1:3001/api/call/test -H 'Content-Type: application/json' -d '{"numero":"0167376539","numeroMtn":"0700000000"}'
+
+
+
+export DB_HOST=... DB_USER=... DB_PASS=... DB_NAME=...
+export FORCE_MIGRATIONS_CONFIRM=1
+yarn migrate:force --name=20260815_add_unknown_referentiel_gsm
+
+
+
+curl -X POST -H "Authorization: Bearer $TOKEN" "http://localhost:3001/api/admin/unknown-referentiels/123/ignore"
+
+
+
+
+export DB_HOST=127.0.0.1
+export DB_PORT=3306
+export DB_USER=root
+export DB_PASS='your_db_password'
+export DB_NAME=kyc_v4
+export FORCE_MIGRATIONS_CONFIRM=1
+yarn migrate:force --name=20260814_add_dispo_seq
+
+
+
+
+FORCE_MIGRATIONS_CONFIRM=1 \
+DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=root DB_PASS='your_db_password' DB_NAME=kyc_v4 \
+yarn migrate:force --name=20260814_add_dispo_seq
+
+

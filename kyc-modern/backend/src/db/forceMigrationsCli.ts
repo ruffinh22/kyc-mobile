@@ -75,7 +75,11 @@ async function main(): Promise<void> {
     console.error('[FORCE MIGRATIONS] Error:', err?.message || err);
     process.exit(10);
   } finally {
-    try { await (pool as Pool).end(); } catch (_) {}
+    try {
+      // mysql2 Pool typings in this project may not expose `end` on the
+      // imported `Pool` type; cast to any to call end() safely.
+      if (typeof (pool as any).end === 'function') await (pool as any).end();
+    } catch (_) {}
   }
 }
 

@@ -958,12 +958,69 @@ export async function setHabilitations(data: Record<string, Record<string, strin
 
 export async function getReferentiels(): Promise<Record<string, string[]>> {
   const val = await getConfig('referentiels_gsm');
-  if (!val) return {};
-  try { return JSON.parse(val); } catch { return {}; }
+  let base: Record<string, string[]> = {};
+  if (val) {
+    try { base = JSON.parse(val); } catch { base = {}; }
+  }
+
+  // Fusionner avec les valeurs rapportées par les agents (unknown_referentiel_values)
+  try {
+    const rows = await query<RowDataPacket>('SELECT DISTINCT field_name, value FROM unknown_referentiel_values WHERE value IS NOT NULL');
+    for (const r of rows) {
+      const f = String(r['field_name']);
+      const v = String(r['value']);
+      if (!v) continue;
+      if (!Array.isArray(base[f])) base[f] = [];
+      if (!base[f].includes(v)) base[f].push(v);
+    }
+  } catch (err) {
+    // si la table n'existe pas encore, on ignore silencieusement
+  }
+
+  return base;
 }
 
 export async function setReferentiels(data: Record<string, string[]>): Promise<void> {
   await setConfig('referentiels_gsm', JSON.stringify(data));
+}
+
+export async function getUnknownReferentielValues(opts?: { field?: string; limit?: number; offset?: number }): Promise<{ rows: any[]; total: number }> {
+  const where: string[] = [];
+  const p: unknown[] = [];
+  if (opts?.field) { where.push('field_name = ?'); p.push(opts.field); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const activePool = getPoolOrThrow();
+  const [countRows] = await activePool.execute<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM unknown_referentiel_values ${whereSql}`, p as P);
+  const total = (countRows[0] as RowDataPacket)['n'] as number;
+
+  const limit = opts?.limit ?? 200;
+  const offset = opts?.offset ?? 0;
+  const rows = await query<RowDataPacket & any>(
+    `SELECT * FROM unknown_referentiel_values ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    [...p, limit, offset]
+  );
+  return { rows, total };
+}
+
+export async function acceptUnknownReferentielById(id: number): Promise<void> {
+  const row = await queryOne<RowDataPacket & any>('SELECT * FROM unknown_referentiel_values WHERE id=?', [id]);
+  if (!row) throw new Error('Entrée introuvable');
+  const field = String(row.field_name);
+  const value = String(row.value);
+  if (!value) return;
+
+  const refs = await getReferentiels();
+  if (!Array.isArray(refs[field])) refs[field] = [];
+  if (!refs[field].includes(value)) refs[field].push(value);
+  await setReferentiels(refs);
+
+  // Supprimer toutes les occurrences identiques après acceptation
+  await exec('DELETE FROM unknown_referentiel_values WHERE field_name=? AND value=?', [field, value]);
+}
+
+export async function deleteUnknownReferentielById(id: number): Promise<void> {
+  await exec('DELETE FROM unknown_referentiel_values WHERE id=?', [id]);
 }
 
 // ── Purge ─────────────────────────────────────────────────────────────────────
@@ -1031,6 +1088,18 @@ export async function purgeExecute(
       throw new Error('Action inconnue');
   }
   return { count: r.affectedRows };
+}
+
+// Enregistrer une valeur inconnue envoyée par un agent pour réconciliation
+export async function insertUnknownReferentiel(opts: {
+  agent?: string | null; field: string; value: string; gsmId?: number | null; dossierId?: string | null;
+}): Promise<void> {
+  const now = nowSec();
+  await exec(
+    `INSERT INTO unknown_referentiel_values (agent, field_name, value, gsm_id, dossier_id, created_at)
+     VALUES (?,?,?,?,?,?)`,
+    [opts.agent ?? null, opts.field, opts.value, opts.gsmId ?? null, opts.dossierId ?? null, now]
+  );
 }
 
 // ── Stockage ──────────────────────────────────────────────────────────────────

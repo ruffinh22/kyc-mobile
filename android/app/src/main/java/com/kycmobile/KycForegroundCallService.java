@@ -18,6 +18,15 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.Process;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import android.os.Process;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Log;
@@ -85,6 +94,8 @@ public class KycForegroundCallService extends Service {
         if (intent == null) return START_NOT_STICKY;
 
         String action = intent.getAction();
+        Log.i(TAG, "onStartCommand action=" + action + " pid=" + Process.myPid());
+        appendDiagnosticLog("I", "onStartCommand action=" + action, null);
 
         if (ACTION_START.equals(action) || ACTION_RING.equals(action)) {
             currentNumero = intent.getStringExtra(EXTRA_NUMBER);
@@ -169,18 +180,39 @@ public class KycForegroundCallService extends Service {
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build());
-            ringtonePlayer.setDataSource(this, ringtoneUri);
+            try {
+                ringtonePlayer.setDataSource(this, ringtoneUri);
+            } catch (Exception e) {
+                Log.e(TAG, "Échec setDataSource pour la sonnerie: " + ringtoneUri, e);
+                stopNativeRingtone();
+                return;
+            }
             ringtonePlayer.setLooping(true);
             ringtonePlayer.setOnErrorListener((mp, what, extra) -> {
                 Log.e(TAG, "Erreur lecture sonnerie (what=" + what + ", extra=" + extra + ")");
                 stopNativeRingtone();
                 return true;
             });
-            ringtonePlayer.prepare();
-            ringtonePlayer.start();
-            Log.i(TAG, "Sonnerie native démarrée: " + ringtoneUri);
-        } catch (Exception e) {
+            // Copie finale : ringtoneUri est réassignée plus haut (repli custom →
+            // système → valide), donc pas "effectively final" — un lambda ne peut
+            // capturer qu'une variable qui ne change plus jamais après son
+            // initialisation. On fige sa valeur ici pour le listener async.
+            final Uri finalRingtoneUri = ringtoneUri;
+            ringtonePlayer.setOnPreparedListener(mp -> {
+                try {
+                    mp.start();
+                    Log.i(TAG, "Sonnerie native démarrée (async): " + finalRingtoneUri);
+                    appendDiagnosticLog("I", "Sonnerie native démarrée (async): " + finalRingtoneUri, null);
+                } catch (Exception e) {
+                    Log.e(TAG, "Erreur démarrage sonnerie après préparation", e);
+                    stopNativeRingtone();
+                }
+            });
+            // Préparer de façon asynchrone pour éviter blocage/ANR sur certains appareils
+            ringtonePlayer.prepareAsync();
+            } catch (Exception e) {
             Log.e(TAG, "Impossible de démarrer la sonnerie native", e);
+            appendDiagnosticLog("E", "Impossible de démarrer la sonnerie native", e);
             ringtonePlayer = null;
         }
     }
@@ -245,18 +277,26 @@ public class KycForegroundCallService extends Service {
     // rien avant que l'appel soit décroché (voir upgradeForegroundToMediaCapture).
     private void startForegroundCompat(Notification notif) {
         try {
+            Log.i(TAG, "startForegroundCompat invoked (SDK=" + Build.VERSION.SDK_INT + ") - preparing to call startForeground");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Log.i(TAG, "Calling startForeground with type PHONE_CALL");
                 startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL);
             } else {
+                Log.i(TAG, "Calling startForeground without type");
                 startForeground(NOTIF_ID, notif);
             }
         } catch (Exception e) {
-            // Un échec ici n'est plus censé arriver (phoneCall n'est pas soumis à la
-            // restriction background camera/micro/location) — on ne retente donc
-            // plus un startForeground() sans type, qui échouerait pour la même
-            // raison à cause des types déclarés dans le manifest (camera|microphone).
-            Log.e(TAG, "startForeground (phoneCall) a échoué — arrêt du service", e);
-            stopSelf();
+            // Si startForeground échoue, on logge en détail mais on évite
+            // d'arrêter immédiatement le service : sur certains OEM le
+            // throw provient d'un problème de permission/type et tuer le
+            // service silencieusement empêche toute collecte de logs utiles.
+            Log.e(TAG, "startForeground (phoneCall) a échoué — fallback notification (service laissé actif)", e);
+            try {
+                NotificationManager mgr = getSystemService(NotificationManager.class);
+                if (mgr != null && notif != null) mgr.notify(NOTIF_ID, notif);
+            } catch (Exception ne) {
+                Log.w(TAG, "Impossible d'afficher la notification de fallback après échec de startForeground", ne);
+            }
         }
     }
 
@@ -303,6 +343,7 @@ public class KycForegroundCallService extends Service {
             Log.i(TAG, "Activity d’appel entrant lancée depuis le service foreground");
         } catch (Exception e) {
             Log.w(TAG, "Impossible de lancer l’activité d’appel entrant", e);
+            appendDiagnosticLog("W", "Impossible de lancer l’activité d’appel entrant", e);
         }
     }
 
@@ -387,6 +428,29 @@ public class KycForegroundCallService extends Service {
         }
     }
 
+    // Écrire une trace diagnostique append-only dans le dossier externe spécifique à l'app
+    private void appendDiagnosticLog(String level, String message, Throwable t) {
+        try {
+            File dir = getExternalFilesDir("logs");
+            if (dir == null) return;
+            if (!dir.exists()) dir.mkdirs();
+            File f = new File(dir, "kyc_service_trace.log");
+            BufferedWriter bw = new BufferedWriter(new FileWriter(f, true));
+            String ts = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date());
+            bw.write(ts + " " + level + " pid=" + Process.myPid() + " " + message);
+            bw.newLine();
+            if (t != null) {
+                StringWriter sw = new StringWriter();
+                t.printStackTrace(new PrintWriter(sw));
+                bw.write(sw.toString());
+                bw.newLine();
+            }
+            bw.close();
+        } catch (Exception e) {
+            Log.w(TAG, "Impossible d'écrire trace diagnostique", e);
+        }
+    }
+
     // ── WakeLock : empêche le CPU de dormir pendant l'appel ──────────────
     private void acquireWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) return;
@@ -409,6 +473,7 @@ public class KycForegroundCallService extends Service {
 
     @Override
     public void onDestroy() {
+        Log.w(TAG, "onDestroy called, releasing resources. pid=" + Process.myPid());
         stopNativeRingtone();
         stopNativeVibration();
         releaseWakeLock();

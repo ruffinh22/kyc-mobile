@@ -60,6 +60,24 @@ export async function initDb(): Promise<void> {
   }
 }
 
+/**
+ * Renvoie la prochaine valeur d'un compteur nommé, atomiquement.
+ * Idiome MySQL classique : UPDATE ... SET value = LAST_INSERT_ID(value + 1)
+ * puis SELECT LAST_INSERT_ID(). Atomique sous InnoDB (la ligne est verrouillée
+ * le temps de l'UPDATE), ne fait grossir aucune table, et LAST_INSERT_ID()
+ * est local à la connexion donc deux appels concurrents ne peuvent jamais
+ * lire la même valeur.
+ */
+export async function nextSeq(name: string): Promise<number> {
+  const activePool = getPoolOrThrow();
+  await activePool.query(
+    `UPDATE seq_counter SET value = LAST_INSERT_ID(value + 1) WHERE id = ?`,
+    [name]
+  );
+  const [rows] = await activePool.query<RowDataPacket[]>(`SELECT LAST_INSERT_ID() AS v`);
+  return Number(rows[0]?.v ?? 0);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

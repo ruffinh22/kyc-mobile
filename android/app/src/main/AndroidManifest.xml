@@ -64,6 +64,11 @@
   <uses-permission android:name="android.permission.CALL_PHONE" />
   <uses-permission android:name="android.permission.READ_CALL_LOG" />
   <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+  <!-- Requis par TelecomManager.getPhoneAccount(), appelé en interne par
+       VoiceConnectionService.createConnection() (react-native-callkeep).
+       Absente = SecurityException à CHAQUE appel entrant → crash immédiat
+       → "crashed too many times, killing!" côté ActivityManager (voir bugreport). -->
+  <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
 
   <!-- ═══ CARACTÉRISTIQUES MATÉRIELLES ═══ -->
   <uses-feature android:name="android.hardware.camera"        android:required="true" />

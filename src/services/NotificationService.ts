@@ -8,7 +8,7 @@
 
 import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import CallKeep from 'react-native-callkeep';
-import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { callSessionService } from './CallSessionService';
 
@@ -35,7 +35,12 @@ const KycCallModule = (): KycCallNativeModule | undefined =>
 // au-delà de la simple gestion Doze standard d'Android (voir openAutoStartSettings
 // côté natif). Sans leur écran "autostart" propre, un appel peut ne jamais
 // sonner sur ces marques même avec l'exemption Doze acceptée.
-const AGGRESSIVE_OEMS = ['xiaomi', 'redmi', 'poco', 'oppo', 'oneplus', 'realme', 'vivo', 'iqoo', 'huawei', 'honor'];
+const AGGRESSIVE_OEMS = [
+  'xiaomi', 'redmi', 'poco', 'oppo', 'oneplus', 'realme', 'vivo', 'iqoo', 'huawei', 'honor',
+  // Transsion (Infinix/Tecno/Itel) — très répandues en Afrique/marché MTN, tout aussi
+  // agressives que Xiaomi/Oppo sur le kill des process en arrière-plan (HiOS/XOS).
+  'infinix', 'tecno', 'itel',
+];
 const getManufacturer = (): string => {
   try {
     const raw = (NativeModules as unknown as { KycCallModule?: { MANUFACTURER?: string } }).KycCallModule?.MANUFACTURER;
@@ -59,7 +64,7 @@ const CALLKEEP_OPTIONS = {
     cancelButton:        'Annuler',
     okButton:            'OK',
     imageName:           'phone_account_icon',
-    additionalPermissions: [PermissionsAndroid.PERMISSIONS.READ_CALL_LOG],
+    additionalPermissions: [PermissionsAndroid.PERMISSIONS.READ_CALL_LOG, PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS],
     // selfManaged: true → l'app gère elle-même l'UI d'appel (notre IncomingCallScreen +
     // écran natif CallKeep en verrouillé) au lieu de déléguer à l'UI Telecom par défaut
     // du téléphone. C'est le mode utilisé par WhatsApp/Messenger : sans lui, certains
@@ -97,6 +102,12 @@ class NotificationService {
   private initialized = false;
   private callKeepConfigured = false;
   private fcmConfigured = false;
+  // Dernier état connu du PhoneAccount CallKeep (voir checkPhoneAccountEnabled
+  // ci-dessous). Rafraîchi à chaque appel entrant — c'est un compte système
+  // (Réglages > Comptes d'appel) qui peut être désactivé par l'utilisateur ou
+  // le constructeur à tout moment après le setup initial, donc on ne peut pas
+  // se fier une fois pour toutes à l'état constaté lors du premier setup().
+  private phoneAccountEnabled = false;
 
   // ── Filet de sécurité contre un verrou d'appel qui resterait bloqué ──────
   // activeCallUuid est le verrou central qui empêche un doublon d'écraser un
@@ -267,14 +278,129 @@ class NotificationService {
     if (this.callKeepConfigured) return;
 
     try {
+      // Demande runtime de READ_PHONE_NUMBERS pour éviter que la librairie
+      // CallKeep déclenche une SecurityException côté Telecom (getPhoneAccount)
+      if (Platform.OS === 'android') {
+        try {
+          const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS, {
+            title: 'Accès numéro de téléphone',
+            message: 'Nécessaire pour initialiser correctement l\'intégration CallKeep sur certains appareils',
+            buttonPositive: 'Autoriser',
+            buttonNegative: 'Refuser',
+          });
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            console.warn('[CallKeep] Permission READ_PHONE_NUMBERS non accordée — CallKeep peut se comporter de façon dégradée');
+          }
+        } catch (permErr) {
+          console.warn('[CallKeep] Erreur demande permission READ_PHONE_NUMBERS:', permErr);
+        }
+      }
       await CallKeep.setup(CALLKEEP_OPTIONS);
       CallKeep.setAvailable(true);
       this.bindCallKeepEvents();
       this.callKeepConfigured = true;
       console.log('[CallKeep] Setup successful');
+
+      // ── Vérification PhoneAccount ────────────────────────────────────────
+      // CallKeep.setup() qui résout SANS erreur ne garantit PAS que le
+      // PhoneAccount système est activé. Sur beaucoup d'appareils (surtout
+      // les OEM listés dans AGGRESSIVE_OEMS), l'utilisateur doit l'activer
+      // une fois manuellement dans Réglages > Comptes d'appel. Tant que ce
+      // n'est pas fait, TOUT appel à CallKeep.displayIncomingCall() plante le
+      // process natif : TelecomManager.addNewIncomingCall() ne crée jamais de
+      // Connection, et VoiceConnectionService (react-native-callkeep) appelle
+      // quand même setRinging() dessus → NullPointerException →
+      // "Process has crashed too many times, killing!" côté ActivityManager.
+      // On vérifie ICI, au setup, pour logguer/agir avant qu'un appel réel
+      // n'arrive plutôt que de le découvrir pendant un crash-loop en prod.
+      await this.checkPhoneAccountEnabled();
     } catch (e) {
       console.warn('[CallKeep] Setup failed:', e);
     }
+  }
+
+  // ── Vérifie si le PhoneAccount Telecom de l'app est activé côté système ─
+  // Rafraîchit this.phoneAccountEnabled et le retourne. Ne lève jamais —
+  // en cas d'erreur/API absente sur cette version de react-native-callkeep,
+  // on considère prudemment "non activé" pour forcer le repli sur le
+  // foreground service natif plutôt que de risquer le crash.
+  async checkPhoneAccountEnabled (): Promise<boolean> {
+    if (Platform.OS !== 'android') {
+      this.phoneAccountEnabled = true;
+      return true;
+    }
+    try {
+      const enabled = await (CallKeep as unknown as {
+        checkPhoneAccountEnabled?: () => Promise<boolean>;
+      }).checkPhoneAccountEnabled?.();
+      this.phoneAccountEnabled = enabled === true;
+      if (!this.phoneAccountEnabled) {
+        console.warn('[CallKeep] PhoneAccount NON activé — displayIncomingCall sera sauté pour éviter le crash natif (setRinging sur null)');
+      }
+      return this.phoneAccountEnabled;
+    } catch (e) {
+      console.warn('[CallKeep] checkPhoneAccountEnabled indisponible, on suppose non activé par prudence:', e);
+      this.phoneAccountEnabled = false;
+      return false;
+    }
+  }
+
+  // ── Ouvre l'écran système "Comptes d'appel" pour que l'agent active
+  // manuellement le compte KYC — throttlé (24h) comme openAutoStartSettings,
+  // pour ne pas rouvrir cet écran système à chaque appel entrant tant que
+  // l'agent n'a pas eu l'occasion de le faire.
+  // force=true bypasse le throttle : réservé à l'appel explicite depuis
+  // l'onboarding (ensurePhoneAccountEnabled ci-dessous), où on VEUT rouvrir
+  // l'écran à chaque tentative tant que le compte n'est pas activé.
+  private async promptEnablePhoneAccount (force = false): Promise<void> {
+    try {
+      if (!force) {
+        const lastPromptRaw = await AsyncStorage.getItem('phone_account_last_prompt_at');
+        const lastPrompt = lastPromptRaw ? Number(lastPromptRaw) : 0;
+        const dayMs = 24 * 60 * 60 * 1000;
+        if (Date.now() - lastPrompt < dayMs) return;
+        await AsyncStorage.setItem('phone_account_last_prompt_at', String(Date.now()));
+      }
+      (CallKeep as unknown as { openPhoneAccounts?: () => void }).openPhoneAccounts?.();
+    } catch (e) {
+      console.warn('[CallKeep] Ouverture écran comptes d\'appel échouée:', e);
+    }
+  }
+
+  // ── Étape d'onboarding : à appeler depuis l'écran de login/connexion
+  // agent, AVANT de le laisser passer "en ligne" — pas seulement de manière
+  // réactive au moment d'un appel raté. Ouvre l'écran système sans throttle
+  // si nécessaire, puis se réabonne à AppState pour revérifier dès que
+  // l'agent revient des Réglages (sans attendre un appel entrant).
+  //
+  // Retourne true si le compte est activé. Retourne false après 60s sans
+  // action (l'app reste utilisable via le foreground service natif, mais
+  // sans écran d'appel Telecom natif — voir showIncomingCall) : à afficher
+  // comme bandeau "config incomplète" non bloquant plutôt que d'empêcher
+  // l'agent de travailler.
+  async ensurePhoneAccountEnabled (): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+
+    const enabled = await this.checkPhoneAccountEnabled();
+    if (enabled) return true;
+
+    void this.promptEnablePhoneAccount(true);
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        sub.remove();
+        clearTimeout(timeoutId);
+        resolve(result);
+      };
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state !== 'active') return;
+        this.checkPhoneAccountEnabled().then(finish).catch(() => finish(false));
+      });
+      const timeoutId = setTimeout(() => finish(this.phoneAccountEnabled), 60000);
+    });
   }
 
   // ── Branchement des événements natifs CallKeep vers les callbacks JS ────
@@ -564,6 +690,9 @@ class NotificationService {
       // Sur Android, démarre le service foreground natif qui joue lui-même
       // la sonnerie (sonneriekyc.mp3 ou repli système) + vibration, en boucle,
       // indépendamment de l'état du moteur JS — voir KycForegroundCallService.
+      // C'EST CE CHEMIN, et lui seul, qui réveille fiablement le téléphone :
+      // il pose son propre wake lock + full-screen intent vers MainActivity
+      // (voir applyLockScreenWakeFlags), sans dépendre de CallKeep/Telecom.
       if (nativeCallModule?.startForegroundWithCallData) {
         nativeCallModule.startForegroundWithCallData(numeroMtn, callUuid);
       } else {
@@ -573,13 +702,40 @@ class NotificationService {
       console.warn('[Notif] startForeground failed:', e);
     }
 
-    CallKeep.displayIncomingCall(
-      callUuid,
-      numeroMtn,
-      `KYC — ${numeroMtn}`,
-      'number',
-      true,   // supportsVideo
-    );
+    // ── CallKeep : uniquement si le PhoneAccount est bien activé ────────────
+    // Ne JAMAIS appeler displayIncomingCall() à l'aveugle : si le compte
+    // n'est pas activé côté système, ça plante nativement (NPE dans
+    // VoiceConnectionService.setRinging(), non interceptable par un try/catch
+    // JS car l'erreur survient dans un callback Telecom asynchrone hors pile
+    // JS) — et c'est exactement l'origine du crash-loop qui tue l'app à
+    // chaque appel entrant. Le foreground service natif démarré ci-dessus
+    // suffit à lui seul à faire sonner/vibrer/réveiller l'écran ; CallKeep
+    // n'est qu'un "plus" (écran d'appel Telecom natif) quand disponible.
+    this.checkPhoneAccountEnabled()
+      .then((enabled) => {
+        // Un autre appel a pu entre-temps changer/nettoyer l'appel affiché
+        // (fin d'appel très rapide, doublon WS/FCM) — on ne relance pas
+        // CallKeep pour un callUuid qui n'est plus l'appel courant affiché.
+        if (this.displayedCallUuid !== callUuid) return;
+
+        if (!enabled) {
+          void this.promptEnablePhoneAccount();
+          return;
+        }
+
+        try {
+          CallKeep.displayIncomingCall(
+            callUuid,
+            numeroMtn,
+            `KYC — ${numeroMtn}`,
+            'number',
+            true,   // supportsVideo
+          );
+        } catch (e) {
+          console.warn('[CallKeep] displayIncomingCall failed:', e);
+        }
+      })
+      .catch((e) => console.warn('[CallKeep] checkPhoneAccountEnabled a échoué, CallKeep sauté:', e));
   }
 
   // ── Décrocher l'appel : arrête sonnerie/vibration natives SANS tuer le
@@ -590,12 +746,23 @@ class NotificationService {
   async answerNativeCall (callUuid?: string): Promise<void> {
     const id = callUuid ?? this.activeCallUuid;
     if (id) {
-      CallKeep.setCurrentCallActive(id);
+      // CallKeep n'est touché que si le PhoneAccount est activé — sinon
+      // l'appel entrant a été géré uniquement par le foreground service
+      // natif (voir showIncomingCall) et il n'y a pas de Connection Telecom
+      // sur laquelle agir ; appeler setCurrentCallActive() dessus planterait.
+      if (this.phoneAccountEnabled) {
+        try {
+          CallKeep.setCurrentCallActive(id);
+        } catch (e) {
+          console.warn('[CallKeep] setCurrentCallActive failed:', e);
+        }
+      }
       // On décroche : le watchdog "sonnerie non résolue" (65s) n'a plus lieu
       // d'être. On le remplace par un filet de sécurité beaucoup plus long
       // (durée max d'appel raisonnable), qui ne gênera jamais un appel KYC
       // normal mais empêchera quand même un verrou bloqué à vie si aucun
-      // chemin de fin d'appel n'est jamais rappelé explicitement.
+      // chemin de fin d'appel n'est jamais rappelé explicitement. Ceci
+      // s'applique que CallKeep soit actif ou non.
       this.armWatchdog(id, this.MAX_CALL_DURATION_MS);
     }
     this.displayedCallUuid = null;

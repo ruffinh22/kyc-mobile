@@ -31,22 +31,21 @@ export function shouldRequeueDossier(assignedAt: number | null, now: number, aba
 
 export async function distribuerMaintenant(): Promise<void> {
   try {
-    // Vérifier le mode de distribution
-    const configs = await query<ConfigRow & RowDataPacket>("SELECT valeur FROM config WHERE cle='distribution_mode'");
-    if (!configs.length || configs[0].valeur !== 'auto') return;
-
     const maintenant = nowSec();
-    const intervalMs = parseInt((await getConfig('distribution_interval_ms')) ?? '2000', 10);
     const abandonSec = parseInt((await getConfig('distribution_abandon_sec')) ?? '120', 10);
-    const limite = maintenant - Math.max(30, Math.floor(abandonSec / 2));
     const seuilAbandon = maintenant - Math.max(30, abandonSec);
-    const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
-    // Filet de sécurité de base : répare tout verrou désynchronisé avant de
-    // calculer les agents "libres" ci-dessous (peu coûteux, tables indexées).
+    // ---- FILET DE SÉCURITÉ (INCONDITIONNEL) ----
+    // Doit tourner que distribution_mode soit 'auto' ou non : un dossier
+    // abandonné par un agent ne doit JAMAIS rester bloqué à 00:00 juste
+    // parce que le mode de distribution automatique est désactivé. C'est
+    // la garantie "un dossier non traité dans les temps repart en file",
+    // indépendante de la logique de push ci-dessous.
+
+    // Répare tout verrou désynchronisé avant de calculer les agents
+    // "libres" plus bas (peu coûteux, tables indexées).
     await reconcileAgentLocks();
 
-    // ---- FILET DE SÉCURITÉ ----
     // Récupérer les dossiers en_cours qui ont dépassé le délai d'abandon
     // soit parce que l'agent n'a pas donné signe de vie, soit parce qu'ils
     // sont restés trop longtemps assignés sans action.
@@ -76,6 +75,17 @@ export async function distribuerMaintenant(): Promise<void> {
       if (o.agent_saisie) await releaseAgentLock(o.agent_saisie);
     }
     // ---- fin filet ----
+
+    // ---- PUSH AUTOMATIQUE (gated par distribution_mode='auto') ----
+    // Seule la distribution proactive vers les agents libres est
+    // conditionnée au mode auto ; le filet de sécurité ci-dessus, lui,
+    // s'est déjà exécuté quel que soit le mode.
+    const configs = await query<ConfigRow & RowDataPacket>("SELECT valeur FROM config WHERE cle='distribution_mode'");
+    if (!configs.length || configs[0].valeur !== 'auto') return;
+
+    const intervalMs = parseInt((await getConfig('distribution_interval_ms')) ?? '2000', 10);
+    const limite = maintenant - Math.max(30, Math.floor(abandonSec / 2));
+    const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
     // Poser dispo_depuis pour les agents devenus éligibles
     await exec(

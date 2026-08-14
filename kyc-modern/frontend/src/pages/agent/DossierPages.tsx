@@ -331,10 +331,13 @@ export function AgentFileAttente() {
     setSuccess(null);
     setBusy(true);
     try {
-      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
-      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
+      // Aller directement sur la page d'appel vidéo et lancer l'appel automatiquement
+      const params = new URLSearchParams();
+      params.set('terrain', dossier.wa_agent);
+      if (dossier.numero_mtn) params.set('mtn', dossier.numero_mtn);
+      if (dossier.id) params.set('dossier', dossier.id);
+      params.set('autocall', '1');
+      window.location.href = '/video-call?' + params.toString();
     } finally {
       setBusy(false);
     }
@@ -682,10 +685,12 @@ export function AgentMesDossiers() {
     setSuccess(null);
     setBusy(true);
     try {
-      const result = await api.callTerrain(dossier.wa_agent, dossier.numero_mtn);
-      setSuccess(result.message || 'Appel lancé vers l’agent terrain.');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors du lancement de l’appel.');
+      const params = new URLSearchParams();
+      params.set('terrain', dossier.wa_agent);
+      if (dossier.numero_mtn) params.set('mtn', dossier.numero_mtn);
+      if (dossier.id) params.set('dossier', dossier.id);
+      params.set('autocall', '1');
+      window.location.href = '/video-call?' + params.toString();
     } finally {
       setBusy(false);
     }

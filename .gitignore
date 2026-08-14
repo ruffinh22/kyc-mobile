@@ -102,3 +102,22 @@ deploy.sh
 
 GIT_DEPLOYMENT.md
 
+# Local secrets folder (DO NOT COMMIT)
+secrets/
+
+# Environment files (production/dev local overrides)
+.env.production
+.env.production.local
+.env.kyc
+
+# Mobile local env
+mobile/.env
+
+# Ignore any backend .env files in nested folders
+**/backend/.env
+
+KYC_PROJECT.md 
+DATABASE_KYC.md 
+Guide_Mobile_KYC_Setup_to_APK.md 
+SERVER_KYC.md 
+STARTUP_KYC.md

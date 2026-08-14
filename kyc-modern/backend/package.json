@@ -13,6 +13,7 @@
     "create-superviseur": "ts-node ./src/scripts/create-superviseur.ts",
     "create-user": "ts-node ./src/scripts/create-user.ts",
     "create-migration": "ts-node ./src/db/createMigrationCli.ts",
+    "migrate:force": "ts-node ./src/db/forceMigrationsCli.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

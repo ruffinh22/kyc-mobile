@@ -39,7 +39,6 @@ function resolveCNIPath(relative: string): string | null {
 
 function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
-function nowSec()  { return Math.floor(Date.now() / 1000); }
 
 // ── Lazy-load Rekognition ─────────────────────────────────────────────────────
 
@@ -113,7 +112,7 @@ export async function verifierVisageAuto(dossierId: string): Promise<void> {
       score_visage: score,
       visage_match: match,
       visage_motif: motif,
-      visage_verifie_le: nowSec(),
+      visage_verifie_le: db.nowSec(),
     });
 
     db.audit(null, 'FACE_VERIFY_AUTO', `id=${dossierId} score=${score} match=${match} motif=${motif}`);
@@ -263,7 +262,7 @@ export async function faceVerifyRoutes(app: any): Promise<void> {
     }
 
     const sessionId = crypto.randomBytes(24).toString('hex');
-    const now       = nowSec();
+    const now       = db.nowSec();
 
     const session: VerifySession = {
       sessionId,
@@ -311,7 +310,7 @@ export async function faceVerifyRoutes(app: any): Promise<void> {
       if (!session) {
         return reply.code(404).send({ error: 'Session expirée ou introuvable' });
       }
-      if (session.expires_at < nowSec()) {
+      if (session.expires_at < db.nowSec()) {
         verifySessions.delete(req.params.id);
         return reply.code(410).send({ error: 'Session expirée' });
       }
@@ -436,7 +435,7 @@ export async function faceVerifyRoutes(app: any): Promise<void> {
           score_visage: score ?? null,
           visage_match: matchVal ?? null,
           visage_motif: motif,
-          visage_verifie_le: nowSec(),
+          visage_verifie_le: db.nowSec(),
         });
         db.audit(null, 'DOSSIER_FACE_VERIFY_MISE_A_JOUR', `id=${dossierId} score=${score} match=${matchVal}`, req.ip);
         return reply.code(200).send({
@@ -470,7 +469,7 @@ export async function faceVerifyRoutes(app: any): Promise<void> {
         score_visage:   score ?? null,
         visage_match:   matchVal ?? null,
         visage_motif:   motif,
-        visage_verifie_le: nowSec(),
+        visage_verifie_le: db.nowSec(),
       });
 
       db.audit(null, 'DOSSIER_FACE_VERIFY_CREE', `id=${id} score=${score} match=${matchVal}`, req.ip);

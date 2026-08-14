@@ -454,7 +454,6 @@ async function sendIncomingCallPush(params: {
 
 function nowDate() { return new Date().toLocaleDateString('en-CA'); }
 function nowTime() { return new Date().toTimeString().slice(0, 5); }
-function nowSec()  { return Math.floor(Date.now() / 1000); }
 
 // ── Persistance write-through des tokens FCM terrain ─────────────────────────
 // Met à jour le cache mémoire IMMÉDIATEMENT (synchrone, pour ne jamais
@@ -854,7 +853,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             score_visage:      score,
             visage_match:      matchVal,
             visage_motif:      motif,
-            visage_verifie_le: nowSec(),
+            visage_verifie_le: db.nowSec(),
           });
 
           db.audit(

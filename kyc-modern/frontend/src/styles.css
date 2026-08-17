@@ -239,6 +239,7 @@ body {
   border-right: none;
   padding: 1.1rem 0 2rem;
   height: 100%;
+  min-height: 0; /* voir .main : empêche l'item de grid de dépasser sa piste */
   overflow-y: auto;
   scrollbar-width: none;
 }
@@ -352,6 +353,14 @@ body {
 .main {
   padding: 1.75rem 2rem;
   height: 100%;
+  /* CRITIQUE : un item de CSS Grid a par défaut min-height:auto, c'est-à-dire
+     qu'il refuse de rétrécir en dessous de la taille de SON CONTENU, même si
+     la piste de grid ('1fr') est plus petite que l'écran. Résultat sans ce
+     min-height:0 : sur une page longue (GSM, avec formulaire + sections +
+     tableau), .main dépasse silencieusement la hauteur de .shell (fixée à
+     100vh) et se fait couper net par le overflow:hidden du shell au lieu de
+     scroller — d'où des sections invisibles / page qui semble "bloquée". */
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;

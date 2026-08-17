@@ -29,7 +29,7 @@ export DB_HOST=127.0.0.1
 export DB_PORT=3306
 export DB_USER=kyc_user
 export DB_PASS='Genereux@55'
-export DB_NAME=kyc_v4
+export DB_NAME=kyc_prod
 export FORCE_MIGRATIONS_CONFIRM=1
 yarn migrate:force --name=20260814_add_dispo_seq
 

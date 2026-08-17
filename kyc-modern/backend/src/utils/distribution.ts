@@ -6,6 +6,7 @@
 // ============================================================================
 
 import { query, exec, nowSec, getConfig } from '../db';
+import { releaseAgentLock, reconcileAgentLocks } from '../db/locks';
 import { RowDataPacket } from 'mysql2';
 
 interface ConfigRow {
@@ -20,6 +21,16 @@ export function shouldRequeueDossier(assignedAt: number | null, now: number, aba
 
 export async function distribuerMaintenant(): Promise<void> {
   try {
+    // Filet de sécurité générique, indépendant du mode auto/manuel : répare
+    // tout verrou (agent_dossier_lock) qui aurait pu se désynchroniser de la
+    // réalité de `dossiers` par un chemin qu'on n'aurait pas couvert
+    // explicitement (crash en cours de route, ancien bug déjà corrigé côté
+    // /accepter, /rejeter et filet de sécurité ci-dessous, déploiement...).
+    // Appelée à chaque cycle du worker (toutes les 2s), comme documenté dans
+    // db/locks.ts — jusqu'ici cet appel manquait et le seul rattrapage
+    // possible était un redémarrage complet du serveur.
+    await reconcileAgentLocks();
+
     // Vérifier le mode de distribution
     const configs = await query<ConfigRow & RowDataPacket>("SELECT valeur FROM config WHERE cle='distribution_mode'");
     if (!configs.length || configs[0].valeur !== 'auto') return;
@@ -56,8 +67,8 @@ export async function distribuerMaintenant(): Promise<void> {
     // plus jamais un dossier qu'il a réellement commencé tant qu'il donne
     // signe de vie — seul un agent VRAIMENT parti (onglet fermé, réseau
     // coupé, crash) au-delà du délai déclenche la reprise.
-    const orphelins = await query<{ id: string } & RowDataPacket>(
-      `SELECT d.id FROM dossiers d 
+    const orphelins = await query<{ id: string; agent_saisie: string } & RowDataPacket>(
+      `SELECT d.id, d.agent_saisie FROM dossiers d 
        WHERE d.statut='en_cours' AND d.agent_saisie IS NOT NULL
        AND (
          (
@@ -83,13 +94,27 @@ export async function distribuerMaintenant(): Promise<void> {
     );
 
     for (const o of orphelins) {
-      await exec(
+      const result = await exec(
         `UPDATE dossiers 
          SET statut='en_attente', assigne_a=NULL, agent_saisie=NULL,
              assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL, updated_at=? 
          WHERE id=? AND statut='en_cours'`,
         [maintenant, o.id]
       );
+      // Le dossier vient de quitter en_cours pour cet agent : il FAUT libérer
+      // son verrou (agent_dossier_lock) ici, sinon la ligne reste en base avec
+      // un dossier_id pointant vers un dossier redevenu en_attente. Résultat
+      // sans ce releaseAgentLock : appelerProchainDossier()/prendre() pour cet
+      // agent échouent en boucle sur 'agent_occupe' (INSERT bloqué par la PK
+      // matricule) — l'agent reste bloqué indéfiniment, même après que son
+      // dossier a été correctement remis en file, jusqu'au prochain
+      // reconcileAgentLocks() (typiquement seulement au redémarrage serveur).
+      // On ne libère que si l'UPDATE a effectivement eu lieu (affectedRows===1)
+      // pour éviter de libérer un verrou qui viendrait d'être repris entre-temps
+      // par une autre attribution concurrente sur ce même dossier.
+      if (result.affectedRows === 1) {
+        await releaseAgentLock(o.agent_saisie);
+      }
     }
     // ---- fin filet ----
 

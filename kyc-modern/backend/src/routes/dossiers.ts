@@ -336,6 +336,10 @@ export async function dossiersRoutes(app: any): Promise<void> {
     if (d.agent_saisie !== req.user.matricule) return reply.code(403).send({ error: 'Pas votre dossier' });
     const body = req.body as { resultat_crm?: string }|null;
     await db.updateDossier(params.id, { statut: 'accepte', heure_cloture: nowTime(), closed_at: db.nowSec(), resultat_crm: body?.resultat_crm??null });
+    // Le dossier quitte en_cours pour cet agent : libérer son verrou, sinon
+    // il reste "occupé" pour appelerProchainDossier()/prendre() jusqu'à la
+    // prochaine réconciliation, malgré un dossier bien clôturé.
+    await releaseAgentLock(req.user.matricule);
     db.audit(req.user.matricule,'DOSSIER_ACCEPTE',`id=${params.id}`,req.ip);
     return reply.send({ success: true });
   });
@@ -351,6 +355,9 @@ export async function dossiersRoutes(app: any): Promise<void> {
     const body = req.body as { raison?: string }|null;
     if (!body?.raison?.trim()) return reply.code(400).send({ error: 'Raison obligatoire' });
     await db.updateDossier(params.id, { statut: 'rejete', heure_cloture: nowTime(), closed_at: db.nowSec(), raison_rejet: body.raison.trim() });
+    // Même remarque que /accepter : le dossier quitte en_cours, le verrou
+    // de l'agent doit être libéré ici, pas seulement en pause.
+    await releaseAgentLock(req.user.matricule);
     db.audit(req.user.matricule,'DOSSIER_REJETE',`id=${params.id} raison=${body.raison}`,req.ip);
     return reply.send({ success: true });
   });

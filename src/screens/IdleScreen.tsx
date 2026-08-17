@@ -28,21 +28,18 @@
  *  - Aucune logique métier modifiée : mêmes hooks, mêmes effets, mêmes
  *    animations sous-jacentes (r1/r2/r3, o1/o2/o3), seul l'habillage change.
  */
-import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  Animated, Easing, StatusBar, ScrollView, useWindowDimensions,
+  Animated, Easing, StatusBar, ScrollView, useWindowDimensions, AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { keepAwake } from '../utils/keepAwake';
 import { useAgentStore, useCallStore } from '../store/callStore';
-import { signalingService }   from '../services/SignalingService';
 import { notificationService } from '../services/NotificationService';
-import { callHistoryService } from '../services/CallHistoryService';
 import { C, R, T } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 import { BottomTabBar } from '../components/BottomTabBar';
-import { ensureHttpBase } from '../utils/serverUrl';
 
 type IdleScreenProps = {
   navigation: {
@@ -73,8 +70,14 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
     return () => keepAwake.deactivate();
   }, []);
 
-  const { numeroAgent, serverUrl, setConnected, isConnected } = useAgentStore();
-  const callStore = useCallStore();
+  // numeroAgent reste lu ici pour l'affichage (en-tête, etc.) ; isConnected
+  // reflète l'état posé par le bootstrap centralisé dans App.tsx (voir
+  // setConnected là-bas) — IdleScreen ne fait plus que le lire, il ne pilote
+  // plus lui-même la connexion WS (voir plus bas).
+  const { numeroAgent, isConnected } = useAgentStore();
+  // Champ aligné sur callStore.ts (errorMessage), qui est la source de
+  // vérité pour cette version du store — voir callStore.setFailed(), posé
+  // désormais par le bootstrap centralisé dans App.tsx.
   const errorMessage = useCallStore((s) => s.errorMessage);
 
   const scale = useResponsiveScale();
@@ -116,15 +119,6 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
     pulse(r3, o3, 800);
   }, []);
 
-  // ── Appel entrant ───────────────────────────────────────────────────────
-  const handleIncomingCall = useCallback((callUuid: string, numeroMtn: string) => {
-    console.log('[Idle] navigation vers IncomingCall', { callUuid, numeroMtn });
-    callStore.setIncomingCall(numeroMtn, callUuid);
-    setTimeout(() => {
-      navigation.navigate('IncomingCall', { numeroMtn, callUuid });
-    }, 120);
-  }, [navigation, callStore]);
-
   // ── Exemption batterie (une seule fois, dès que l'app est au premier plan) ──
   // Doit se faire ici (écran monté, Activity disponible) et pas dans le chemin
   // headless de registerBackgroundHandlers, qui n'a pas d'Activity pour afficher
@@ -138,68 +132,34 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
     })();
   }, []);
 
-  const registerFcmTokenWithBackend = useCallback(async (token: string) => {
-    if (!serverUrl || !numeroAgent || !token) return;
-
-    const apiBase = ensureHttpBase(serverUrl || '');
-
-    try {
-      const res = await fetch(`${apiBase}/api/device/register-fcm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numero: numeroAgent, token }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        console.warn('[Idle] FCM registration failed', res.status, text);
-      }
-    } catch (err) {
-      console.warn('[Idle] FCM registration error', err);
-    }
-  }, [numeroAgent, serverUrl]);
-
-  // ── Init FCM → WS ────────────────────────────────────────────────────────
+  // ── Alerte "notifications plein écran" non accordées (Android 14+) ──────
+  // Sans cette permission, un appel entrant se dégrade TOUJOURS en simple
+  // notification (même écran verrouillé, où le plein écran devrait
+  // normalement s'afficher seul) — c'est la cause n°1 de "l'écran d'appel
+  // ne s'ouvre jamais tout seul". On la revérifie à chaque retour au
+  // premier plan (l'agent a pu l'activer entre-temps depuis les Réglages).
+  const [fullScreenIntentGranted, setFullScreenIntentGranted] = useState(true);
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const fcmToken = (await notificationService.ensureFCMToken()) ?? '';
-      if (cancelled) return;
-      await registerFcmTokenWithBackend(fcmToken);
-      signalingService.init(serverUrl, numeroAgent, fcmToken, {
-        onConnected:    () => setConnected(true),
-        onDisconnected: () => setConnected(false),
-        onIncomingCall: (numeroMtn, serverCallUuid) => {
-          console.log('[Idle] onIncomingCall callback reçu', { numeroMtn, serverCallUuid, status: callStore.status });
-          // Réutilise le callUuid émis par le serveur quand il est présent
-          // (voir public-dossiers.ts) : c'est le MÊME identifiant que celui
-          // que le push FCM utilisera pour cet appel, donc on ignore les doublons
-          // si le même appel est déjà traité.
-          const uuid = serverCallUuid || `ws-${Date.now()}`;
-          // Le serveur peut émettre plusieurs 'incoming-call' avec des uuid
-          // DIFFÉRENTS pour le même appel logique (redial back-office pendant
-          // que ça sonne déjà) — la seule dédup fiable est : un appel est-il
-          // déjà en cours de traitement, peu importe son uuid ?
-          if (callStore.status !== 'idle') {
-            console.log('[Idle] appel déjà en cours, navigation IncomingCall ignorée', { statut: callStore.status, callUuid: uuid, numeroMtn });
-            return;
-          }
-          console.log('[Idle] traitement incoming-call : registerIncomingCall', { callUuid: uuid, numeroMtn });
-          void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
-          notificationService.registerIncomingCall(uuid, numeroMtn);
-          // Pas de navigation.navigate ici : App.tsx observe callStore.status
-          // et force seul l'ouverture de IncomingCall/Call. Avant, ce handler
-          // ET App.tsx (chemin push/CallKeep) naviguaient chacun de leur
-          // côté pour le même appel — deux autorités concurrentes qui se
-          // marchaient dessus selon l'ordre d'arrivée des événements.
-        },
-        onCallEnded: () => { if (!cancelled) navigation.replace('Idle'); },
-        onError:     (msg) => console.warn('[Signal]', msg),
-        onMediaError:(msg) => { console.warn('[Signal] Média:', msg); callStore.setFailed(msg); },
-      });
-    })();
-    return () => { cancelled = true; };
-  }, [serverUrl, numeroAgent]);
+    const check = () => setFullScreenIntentGranted(notificationService.isFullScreenIntentGranted());
+    check();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') check();
+    });
+    return () => sub.remove();
+  }, []);
+
+  // ── Connexion WS (signalingService) ──────────────────────────────────────
+  // BUG CORRIGÉ : signalingService.init() était appelé ICI, dans IdleScreen.
+  // App.tsx pouvant rediriger directement vers IncomingCall dès le
+  // cold-start (ex. tap sur la notification d'appel entrant, avant même
+  // qu'IdleScreen n'ait la moindre chance de monter), IdleScreen était alors
+  // totalement sauté et la connexion WS n'était JAMAIS établie pour cet
+  // appel — l'agent tapait "Accepter" mais aucune offer n'avait pu arriver
+  // et aucune answer ne pouvait partir. Le bootstrap vit désormais dans
+  // App.tsx (voir l'effet "Bootstrap signalisation"), déclenché dès que la
+  // session agent est connue, indépendamment de l'écran affiché. IdleScreen
+  // n'a plus qu'à LIRE l'état de connexion (isConnected, ci-dessous) pour
+  // l'affichage — il ne le PILOTE plus.
 
   const handleAccount = () => {
     navigation.navigate('Account');
@@ -294,6 +254,25 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
               {errorMessage}
             </Text>
           </View>
+        ) : null}
+
+        {!fullScreenIntentGranted ? (
+          <TouchableOpacity
+            style={s.alertBanner}
+            activeOpacity={0.85}
+            onPress={() => { void notificationService.ensureFullScreenIntentPermission(); }}
+            accessibilityRole="button"
+            accessibilityLabel="Activer les notifications plein écran pour les appels"
+          >
+            <Text style={s.alertIcon}>⚠️</Text>
+            <Text
+              style={s.alertText}
+              numberOfLines={2}
+              allowFontScaling={false}
+            >
+              Notifications plein écran désactivées — les appels risquent de ne pas s'afficher automatiquement. Touchez pour activer.
+            </Text>
+          </TouchableOpacity>
         ) : null}
       </ScrollView>
 

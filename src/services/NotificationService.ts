@@ -8,7 +8,7 @@
 
 import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import CallKeep from 'react-native-callkeep';
-import { Platform, PermissionsAndroid, NativeModules, AppState } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules, AppState, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { callSessionService } from './CallSessionService';
 
@@ -20,7 +20,7 @@ import { callSessionService } from './CallSessionService';
 interface KycCallNativeModule {
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestIgnoreBatteryOptimizations?: () => void;
-  openAutoStartSettings?: () => void;
+  openAutoStartSettings?: () => boolean;
   canUseFullScreenIntent?: () => boolean;
   requestFullScreenIntentPermission?: () => void;
   startForegroundWithCallData?: (numeroMtn: string, callUuid: string) => void;
@@ -192,7 +192,26 @@ class NotificationService {
 
     await AsyncStorage.setItem('autostart_last_prompt_at', String(Date.now()));
     try {
-      KycCallModule()?.openAutoStartSettings?.();
+      const openedSpecific = KycCallModule()?.openAutoStartSettings?.();
+      const resultObj = { manufacturer: getManufacturer(), openedSpecific: !!openedSpecific, ts: Date.now() };
+      try {
+        await AsyncStorage.setItem('autostart_last_result', JSON.stringify(resultObj));
+      } catch (e) {
+        console.warn('[Notif] Impossible de sauvegarder autostart_last_result', e);
+      }
+      console.log('[Notif] autostart prompt result', resultObj);
+
+      // Si la méthode native retourne false, cela signifie qu'aucun écran
+      // constructeur spécifique n'a été ouvert et que nous sommes retombés
+      // sur l'écran générique "Infos de l'application". Afficher une aide
+      // concise et plus professionnelle pour guider l'utilisateur.
+      if (openedSpecific === false) {
+        Alert.alert(
+          'Paramètres de l\'application',
+          "Pour garantir la réception des appels :\n1) Ouvrez 'Infos de l'application' → 2) Autorisations avancées → 3) Activez 'Démarrage automatique' et 'Afficher les fenêtres en arrière-plan'.",
+          [{ text: 'Compris' }]
+        );
+      }
     } catch (e) {
       console.warn('[Notif] Ouverture écran autostart échouée:', e);
     }
@@ -229,6 +248,26 @@ class NotificationService {
 
       KycCallModule()?.requestFullScreenIntentPermission?.();
       return false;
+    } catch (e) {
+      console.warn('[Notif] Vérification full screen intent impossible:', e);
+      return true;
+    }
+  }
+
+  // ── Vérification SEULE (sans ouvrir les réglages) ────────────────────────
+  // Sur Android 14+, sans USE_FULL_SCREEN_INTENT accordée manuellement par
+  // l'utilisateur (Réglages → Accès spécial → Notifications plein écran),
+  // l'appel entrant se dégrade systématiquement en simple notification —
+  // même écran verrouillé, où le plein écran devrait normalement s'afficher
+  // seul. C'est le seul des deux cas (verrouillé / arrière-plan écran
+  // allumé) qu'on peut réellement garantir côté app : d'où l'intérêt d'un
+  // contrôle visible et répété (IdleScreen), plutôt qu'une simple demande
+  // ponctuelle silencieuse au démarrage (voir ensureFullScreenIntentPermission
+  // ci-dessus, toujours utilisée pour la demande initiale).
+  isFullScreenIntentGranted (): boolean {
+    if (Platform.OS !== 'android' || Platform.Version < 34) return true;
+    try {
+      return KycCallModule()?.canUseFullScreenIntent?.() === true;
     } catch (e) {
       console.warn('[Notif] Vérification full screen intent impossible:', e);
       return true;
@@ -295,6 +334,27 @@ class NotificationService {
           console.warn('[CallKeep] Erreur demande permission READ_PHONE_NUMBERS:', permErr);
         }
       }
+      // ── Désactivation CallKeep sur OEMs agressifs (Transsion/Xiaomi/Oppo...) ─
+      // Ces constructeurs (HiOS/XOS/MIUI/ColorOS) ont une pile Telecom
+      // suffisamment instable pour que registerPhoneAccount(), appelé deux
+      // fois rapprochées (une fois depuis la tâche headless FCM, une fois
+      // depuis l'instance JS principale relancée par le fullScreenIntent —
+      // deux contextes JS distincts, donc callKeepConfigured ne les protège
+      // pas l'un de l'autre), crée une race : VoiceConnectionService reçoit
+      // une Connection null pendant la ré-inscription et appelle setRinging()
+      // dessus → NullPointerException fatale, hors pile JS, impossible à
+      // rattraper avec un try/catch. KycForegroundCallService suffit à lui
+      // seul (sonnerie + vibration + réveil écran), donc on saute purement
+      // et simplement CallKeep sur ces marques plutôt que de risquer ce crash.
+      const manufacturer = getManufacturer();
+      const isAggressiveOem = AGGRESSIVE_OEMS.some((m) => manufacturer.includes(m));
+      if (Platform.OS === 'android' && isAggressiveOem) {
+        console.warn('[CallKeep] OEM agressif détecté (' + manufacturer + ') — CallKeep désactivé, repli sur KycForegroundCallService seul');
+        this.phoneAccountEnabled = false;
+        this.callKeepConfigured = true;
+        return;
+      }
+
       await CallKeep.setup(CALLKEEP_OPTIONS);
       CallKeep.setAvailable(true);
       this.bindCallKeepEvents();
@@ -584,7 +644,19 @@ class NotificationService {
     const data = msg.data;
     if (!data || data.type !== 'incoming-call') return;
 
-    const numeroMtn = String(data.numeroMtn ?? '');
+    // Tolère les deux noms de champ : le serveur envoie parfois "numero"
+    // au lieu de "numeroMtn" — sans ce fallback, l'appelant s'affichait vide
+    // ("KYC — ") côté notification/CallKeep.
+    //
+    // BUG CORRIGÉ : `??` ne se déclenche que sur null/undefined, jamais sur
+    // une chaîne vide. Or le serveur envoie parfois numeroMtn: "" (chaîne
+    // vide, pas absente) EN MÊME TEMPS que numero rempli — cas confirmé en
+    // prod (payload observé : {"numero":"0167376539","numeroMtn":""}). Avec
+    // `??`, ce fallback ne se déclenchait donc JAMAIS dans ce cas précis, et
+    // numeroMtn restait vide tout au long du flux d'appel (notification,
+    // CallKeep, IncomingCallScreen, historique...). `||` traite aussi la
+    // chaîne vide comme "absente", donc bascule correctement sur `numero`.
+    const numeroMtn = String(data.numeroMtn || data.numero || '');
     // Utilise le callUuid fourni par le serveur, ou en génère un local
     const callUuid  = String(data.callUuid ?? `fcm-${Date.now()}`);
 

@@ -1,0 +1,25 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://www.w3.org/ns/cid/v1",
+    "https://w3id.org/nostr/context"
+  ],
+  "id": "did:nostr:cae9a8681bfe452ac43af3f2594a22c0ca088d873efde5c3df9a4eafa871706a",
+  "type": "DIDNostr",
+  "seeAlso": "https://init-agent.com/SKILL.md",
+  "verificationMethod": [
+    {
+      "id": "did:nostr:cae9a8681bfe452ac43af3f2594a22c0ca088d873efde5c3df9a4eafa871706a#key1",
+      "type": "Multikey",
+      "controller": "did:nostr:cae9a8681bfe452ac43af3f2594a22c0ca088d873efde5c3df9a4eafa871706a",
+      "publicKeyMultibase": "fe70102cae9a8681bfe452ac43af3f2594a22c0ca088d873efde5c3df9a4eafa871706a"
+    }
+  ],
+  "authentication": [
+    "#key1"
+  ],
+  "assertionMethod": [
+    "#key1"
+  ],
+  "service": []
+}

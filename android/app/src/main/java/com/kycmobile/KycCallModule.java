@@ -185,37 +185,67 @@ public class KycCallModule extends ReactContextBaseJavaModule {
      * premier qui réussit à démarrer une Activity, et on se rabat sur l'écran
      * de détails de l'app si aucun n'est reconnu ou disponible sur ce build.
      */
-    @ReactMethod
-    public void openAutoStartSettings() {
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    public boolean openAutoStartSettings() {
         String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase();
         String pkg = getReactApplicationContext().getPackageName();
 
         String[][] candidates;
-        if (manufacturer.contains("xiaomi")) {
+        if (manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")) {
             candidates = new String[][]{
                 {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
                 {"com.miui.securitycenter", "com.miui.securitycenter.permission.AutoStartManagementActivity"},
             };
-        } else if (manufacturer.contains("oppo")) {
+        } else if (manufacturer.contains("oppo") || manufacturer.contains("realme")) {
+            // "realme" tourne sur ColorOS (comme Oppo) mais les modèles récents ont
+            // basculé la marque interne des écrans système de coloros → heytap : on
+            // tente les deux familles de composants avant de renoncer.
             candidates = new String[][]{
                 {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
                 {"com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"},
                 {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"},
+                {"com.heytap.safecenter", "com.heytap.safecenter.startupapp.StartupAppListActivity"},
+                {"com.heytap.safecenter", "com.heytap.safecenter.permission.startup.StartupAppListActivity"},
             };
-        } else if (manufacturer.contains("vivo")) {
+        } else if (manufacturer.contains("vivo") || manufacturer.contains("iqoo")) {
             candidates = new String[][]{
                 {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
                 {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"},
+            };
+        } else if (manufacturer.contains("oneplus")) {
+            candidates = new String[][]{
+                {"com.oneplus.security", "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"},
+                {"com.oneplus.security", "com.oneplus.security.startupapp.StartupAppListActivity"},
             };
         } else if (manufacturer.contains("huawei") || manufacturer.contains("honor")) {
             candidates = new String[][]{
                 {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
                 {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
             };
+        } else if (manufacturer.contains("infinix") || manufacturer.contains("tecno") || manufacturer.contains("itel")
+                || manufacturer.contains("transsion")) {
+            // Transsion (HiOS/XOS — Infinix/Tecno/Itel) : AUCUNE API officielle, et
+            // contrairement à Xiaomi/Oppo/Huawei ces noms de classe ne sont PAS
+            // stables d'une version d'XOS/HiOS à l'autre — cette table est du
+            // best-effort, pas une garantie. Sur le device de test, `pm list
+            // packages | grep -i trans` n'a rien remonté : soit ce build n'expose
+            // pas ce gestionnaire sous ce nom de package, soit il est absent sur ce
+            // modèle. Dans les deux cas, AUCUNE combinaison package/activité ne
+            // fonctionnera ici quoi qu'on écrive — le code retombe alors
+            // automatiquement sur l'écran générique (voir plus bas), qui LUI
+            // fonctionne sur 100% des Android quel que soit le modèle.
+            candidates = new String[][]{
+                {"com.transsion.phonemanager", "com.transsion.phonemanager.ui.appmanage.autobootmanage.AutoBootManageActivity"},
+                {"com.transsion.phonemanager", "com.transsion.phonemanager.ui.autobootmanage.AutoBootManageActivity"},
+                {"com.transsion.phonemanager", "com.transsion.phonemanager.ui.viewmodel.activity.AutoBootManagerActivity"},
+                {"com.itel.autobootmanager", "com.itel.autobootmanager.AutoBootManagerActivity"},
+                {"com.transsion.phonemanager", "com.transsion.phonemanager.MainActivity"},
+            };
         } else {
             candidates = new String[0][];
         }
 
+        boolean openedSpecific = false;
         for (String[] c : candidates) {
             try {
                 Intent intent = new Intent();
@@ -223,7 +253,8 @@ public class KycCallModule extends ReactContextBaseJavaModule {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 getReactApplicationContext().startActivity(intent);
                 Log.i(TAG, "Écran autostart ouvert: " + c[0] + "/" + c[1]);
-                return;
+                openedSpecific = true;
+                return true;
             } catch (Exception e) {
                 Log.d(TAG, "Écran autostart indisponible (" + c[0] + "), tentative suivante", e);
             }
@@ -239,6 +270,10 @@ public class KycCallModule extends ReactContextBaseJavaModule {
         } catch (Exception e) {
             Log.e(TAG, "Impossible d'ouvrir un écran de paramètres pour l'autostart", e);
         }
+
+        // Retourne true si un écran constructeur spécifique a été ouvert,
+        // false si on est tombé sur le repli générique (app details) ou en erreur.
+        return openedSpecific;
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)

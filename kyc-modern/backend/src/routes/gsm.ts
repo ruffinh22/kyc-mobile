@@ -20,6 +20,61 @@ export async function gsmRoutes(app: any): Promise<void> {
     return reply.send({ success: true, referentiels: refs });
   });
 
+  // PUT /api/gsm/referentiels/:field – remplace toute la liste d'un champ
+  // (sup/admin uniquement). Permet au superviseur d'ajouter/retirer autant
+  // de valeurs qu'il veut pour constat/verbatim/action/piece/... — pas de
+  // limite côté serveur, la seule contrainte est que ce soit un tableau de
+  // chaînes non vides.
+  app.put('/api/gsm/referentiels/:field',
+    { preHandler: requireRole(['superviseur','admin']) },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const field = (req.params as any).field as string;
+      const body = req.body as { values?: unknown } | null;
+      if (!Array.isArray(body?.values) || !body.values.every(v => typeof v === 'string')) {
+        return reply.code(400).send({ error: 'values doit être un tableau de chaînes' });
+      }
+      const cleaned = Array.from(new Set(body.values.map(v => v.trim()).filter(Boolean)));
+      const refs = await db.getReferentiels();
+      refs[field] = cleaned;
+      await db.setReferentiels(refs);
+      db.audit(req.user.matricule,'GSM_REFERENTIEL_MODIFIE',`field=${field} n=${cleaned.length}`,req.ip);
+      return reply.send({ success: true, field, values: cleaned });
+    }
+  );
+
+  // POST /api/gsm/referentiels/:field – ajoute une seule valeur (sup/admin).
+  // Pratique pour l'écran d'admin : pas besoin de renvoyer toute la liste à
+  // chaque ajout.
+  app.post('/api/gsm/referentiels/:field',
+    { preHandler: requireRole(['superviseur','admin']) },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const field = (req.params as any).field as string;
+      const body = req.body as { value?: string } | null;
+      const value = (body?.value || '').trim();
+      if (!value) return reply.code(400).send({ error: 'value requis' });
+      const refs = await db.getReferentiels();
+      if (!Array.isArray(refs[field])) refs[field] = [];
+      if (!refs[field].includes(value)) refs[field].push(value);
+      await db.setReferentiels(refs);
+      db.audit(req.user.matricule,'GSM_REFERENTIEL_AJOUT',`field=${field} value=${value}`,req.ip);
+      return reply.code(201).send({ success: true, field, values: refs[field] });
+    }
+  );
+
+  // DELETE /api/gsm/referentiels/:field/:value – retire une valeur (sup/admin).
+  app.delete('/api/gsm/referentiels/:field/:value',
+    { preHandler: requireRole(['superviseur','admin']) },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const { field, value } = req.params as { field: string; value: string };
+      const decoded = decodeURIComponent(value);
+      const refs = await db.getReferentiels();
+      refs[field] = (refs[field] || []).filter(v => v !== decoded);
+      await db.setReferentiels(refs);
+      db.audit(req.user.matricule,'GSM_REFERENTIEL_SUPPR',`field=${field} value=${decoded}`,req.ip);
+      return reply.send({ success: true, field, values: refs[field] });
+    }
+  );
+
   // GET /api/gsm/mon-tableau
   app.get('/api/gsm/mon-tableau', async (req: FastifyRequest, reply: FastifyReply) => {
     const stats = await db.getGsmStats(req.user.matricule);

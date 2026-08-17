@@ -11,7 +11,10 @@
  *   ENVOI   : ping
  *
  *   REÇOIT  : registered
- *   REÇOIT  : incoming-call { numeroMtn }
+ *   REÇOIT  : incoming-call { numeroMtn, callUuid?, agentAppelantMatricule?, agentAppelantNom? }
+ *             (les 2 derniers champs identifient l'agent back-office qui a
+ *             déclenché l'appel — voir VideoCallPage.tsx / public-dossiers.ts.
+ *             Optionnels pour compat ascendante.)
  *   REÇOIT  : webrtc        { payload: { kind:'offer'|'answer'|'ice', ... } }
  *   REÇOIT  : refus
  *   REÇOIT  : hangup
@@ -56,7 +59,7 @@ const STUN_SERVERS = [
 // ── Types protocole ──────────────────────────────────────────────────────────
 type SignalMsg =
   | { type: 'registered' }
-  | { type: 'incoming-call'; numeroMtn: string; callUuid?: string }
+  | { type: 'incoming-call'; numeroMtn: string; callUuid?: string; agentAppelantMatricule?: string; agentAppelantNom?: string }
   | { type: 'webrtc';        payload: WebRTCPayload }
   | { type: 'refus' }
   | { type: 'hangup' }
@@ -97,7 +100,10 @@ export type SignalingCallbacks = {
   // callUuid : identifiant réel émis par le serveur (voir public-dossiers.ts).
   // Optionnel pour compat ascendante si un ancien build serveur ne l'envoie
   // pas encore — dans ce cas l'appelant doit générer un uuid de secours.
-  onIncomingCall: (numeroMtn: string, callUuid?: string) => void;
+  // agentAppelantMatricule/Nom : identité de l'agent back-office à l'origine
+  // de l'appel, elle aussi optionnelle pour compat ascendante (ancien build
+  // serveur qui ne les transmet pas encore).
+  onIncomingCall: (numeroMtn: string, callUuid?: string, agentAppelantMatricule?: string, agentAppelantNom?: string) => void;
   onCallEnded:    () => void;
   onError:        (msg: string) => void;
   onMediaError?:  (msg: string) => void;  // caméra/micro indisponible
@@ -188,7 +194,22 @@ class SignalingService {
   // l'utilisateur ait tranché, endCallCleanup() vide ce champ : l'offer
   // en attente est alors simplement jetée, jamais traitée.
   private pendingOfferSdp: string | null = null;
+  // Horodatage de mise en attente — sert de garde-fou de fraîcheur (voir
+  // BUG CORRIGÉ ci-dessous) : une offer bufferée trop longtemps ne doit
+  // jamais être rejouée pour un appel sans rapport.
+  private pendingOfferSdpAt = 0;
+  private static readonly PENDING_OFFER_MAX_AGE_MS = 15000;
   private localStream: MediaStream | null = null;
+  // ── Garde-fou "caméra fantôme" ────────────────────────────────────────────
+  // Incrémenté à chaque endCallCleanup(). getUserMedia() (ensureLocalStream)
+  // peut prendre 1 à 3s sur du matériel terrain ; si un hangup/refus distant
+  // arrive PENDANT cette fenêtre, endCallCleanup() tourne et remet tout à
+  // zéro AVANT que la promesse getUserMedia() ne se résolve. Sans ce
+  // compteur, la caméra qui finit par s'ouvrir plus tard se rattachait quand
+  // même à un PeerConnection flambant neuf, pour un appel déjà terminé — une
+  // caméra restait allumée "pour rien" et bloquait le décroché de l'appel
+  // suivant (matériel caméra déjà occupé par ce flux orphelin).
+  private callGeneration = 0;
   private facingMode: 'user' | 'environment' = 'environment'; // Caméra arrière par défaut (terrain)
 
   private normalizeIceCandidate (candidate: any): { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null } | null {
@@ -282,6 +303,25 @@ class SignalingService {
       this.reconnectTimer = null;
     }
 
+    // BUG CORRIGÉ : connect() créait toujours un `new WebSocket(...)` sans
+    // jamais fermer une éventuelle connexion précédente encore ouverte.
+    // init() peut être appelé plusieurs fois par session (IdleScreen se
+    // remonte à chaque retour à l'accueil après un appel) — sans ce
+    // nettoyage, chaque remontage laissait une ancienne socket orpheline
+    // ouverte en parallèle de la nouvelle : double 'register' envoyé au
+    // serveur, doublons potentiels de tout message entrant (dont
+    // 'incoming-call'/'offer') traités deux fois côté client.
+    if (this.ws) {
+      try {
+        this.ws.onopen = null;
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.close();
+      } catch {}
+      this.ws = null;
+    }
+
     // Garde la présence terrain active même si l'app reste longtemps en arrière-plan.
     // On ne veut pas que la connexion WebSocket se perde en silence et fasse croire
     // que l'agent n'est plus disponible.
@@ -343,7 +383,10 @@ class SignalingService {
 
       // ── Appel entrant : back-office appelle le terrain ─────────────────────
       case 'incoming-call':
-        console.log('[Signal] incoming-call reçu', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
+        console.log('[Signal] incoming-call reçu', {
+          numeroMtn: msg.numeroMtn, callUuid: msg.callUuid,
+          agentAppelantMatricule: msg.agentAppelantMatricule, agentAppelantNom: msg.agentAppelantNom,
+        });
         // IMPORTANT : on ne doit pas mettre à jour le callStore directement ici
         // car ce chemin est un canal de livraison parmi d'autres (WS vs FCM).
         // La centralisation de la déduplication et de l'affichage natif doit se
@@ -358,7 +401,7 @@ class SignalingService {
         if (this.callbacks?.onIncomingCall) {
           setTimeout(() => {
             console.log('[Signal] déclenche onIncomingCall', { numeroMtn: msg.numeroMtn, callUuid: msg.callUuid });
-            this.callbacks?.onIncomingCall(msg.numeroMtn, msg.callUuid);
+            this.callbacks?.onIncomingCall(msg.numeroMtn, msg.callUuid, msg.agentAppelantMatricule, msg.agentAppelantNom);
           }, 80);
         }
         break;
@@ -443,12 +486,29 @@ class SignalingService {
 
         const status = useCallStore.getState().status;
 
-        // L'utilisateur n'a pas encore répondu à l'appel entrant : on ne
-        // touche à rien (pas de SDP, pas de caméra/micro), on retient
-        // l'offer pour la rejouer si/quand acceptCall() est appelé.
-        if (status === 'incoming') {
-          console.log('[Signal] offer reçue avant acceptation utilisateur, mise en attente (aucune answer envoyée)');
+        // BUG CORRIGÉ : cette branche ne bufferisait l'offer QUE si status
+        // === 'incoming'. Or le serveur envoie l'offer quasiment en même
+        // temps que le signal "appel entrant" (push FCM + message WS), alors
+        // que côté client callStore.status ne passe à 'incoming' qu'après
+        // ~220ms de délais volontaires enchaînés (100ms dans
+        // NotificationService.registerIncomingCall, puis 120ms dans
+        // App.tsx — anti-doublon WS/FCM). Si l'offer arrivait dans cette
+        // fenêtre, status valait encore 'idle', et la branche du bas
+        // ("offer hors contexte, ignorée") la jetait — pensant à tort qu'il
+        // s'agissait d'un appel déjà refusé/terminé. Résultat observé en
+        // prod : acceptCall() ne trouvait plus jamais d'offer à rejouer,
+        // aucune answer n'était envoyée au serveur, et l'appel restait
+        // bloqué (remoteDescriptionReady toujours false) jusqu'au timeout.
+        // On bufferise donc aussi sur 'idle' — sans risque de réintroduire
+        // l'ancien bug (répondre à un appel explicitement refusé) car
+        // refuseCall()/hangUp() appellent endCallCleanup(), qui vide déjà
+        // pendingOfferSdp immédiatement ; le garde-fou de fraîcheur
+        // (PENDING_OFFER_MAX_AGE_MS, vérifié dans acceptCall()) couvre en
+        // plus le cas résiduel d'une offer bufferée trop longtemps.
+        if (status === 'incoming' || status === 'idle') {
+          console.log('[Signal] offer reçue avant acceptation utilisateur, mise en attente (aucune answer envoyée)', { status });
           this.pendingOfferSdp = payload.sdp;
+          this.pendingOfferSdpAt = Date.now();
           break;
         }
 
@@ -460,10 +520,11 @@ class SignalingService {
           break;
         }
 
-        // 'idle' / 'declined' / 'failed' / 'ended' / etc. : cette offer
-        // concerne un appel déjà refusé/terminé côté client (race avec le
-        // serveur). On ne répond surtout pas — sinon on rouvre une caméra
-        // et on accepte un appel que l'utilisateur a explicitement refusé.
+        // 'declined' / 'failed' / 'ended' / etc. (mais plus 'idle', bufferisé
+        // ci-dessus) : cette offer concerne un appel déjà refusé/terminé
+        // côté client (race avec le serveur). On ne répond surtout pas —
+        // sinon on rouvre une caméra et on accepte un appel que
+        // l'utilisateur a explicitement refusé.
         console.warn('[Signal] offer reçue hors contexte d’appel actif, ignorée', { status });
         break;
       }
@@ -561,6 +622,8 @@ class SignalingService {
     if (this.localStream) return Promise.resolve(this.localStream);
     if (this.ensureLocalStreamPromise) return this.ensureLocalStreamPromise;
 
+    const generationAtStart = this.callGeneration;
+
     this.ensureLocalStreamPromise = (async () => {
       await this.ensurePeerConnection();
 
@@ -585,6 +648,19 @@ class SignalingService {
           this.ensureLocalStreamPromise = null;
           throw audioErr;
         }
+      }
+
+      // L'appel pour lequel on vient d'ouvrir la caméra a pu se terminer
+      // (hangup/refus distant, timeout) PENDANT que getUserMedia() tournait
+      // — endCallCleanup() a alors déjà tout nettoyé et bumped callGeneration.
+      // On refuse de rattacher ce flux "orphelin" : on le ferme tout de
+      // suite au lieu de le stocker comme this.localStream / l'ajouter au
+      // PeerConnection (potentiellement déjà celui d'un TOUT nouvel appel).
+      if (this.callGeneration !== generationAtStart) {
+        console.warn('[Signal] flux local obtenu pour un appel déjà terminé — abandon (caméra fantôme évitée)');
+        stream.getTracks().forEach((t: MediaStreamTrack) => t.stop());
+        if (this.ensureLocalStreamPromise) this.ensureLocalStreamPromise = null;
+        throw new Error('call-superseded');
       }
 
       this.localStream = stream;
@@ -614,9 +690,21 @@ class SignalingService {
     // createAnswer, envoi de l'answer. Avant ce point, aucune answer n'a
     // jamais été envoyée au serveur pour cet appel.
     if (this.pendingOfferSdp) {
-      const sdp = this.pendingOfferSdp;
-      this.pendingOfferSdp = null;
-      await this.handleOffer(sdp);
+      const age = Date.now() - this.pendingOfferSdpAt;
+      if (age > SignalingService.PENDING_OFFER_MAX_AGE_MS) {
+        // Garde-fou de fraîcheur : une offer bufferée pendant l'état 'idle'
+        // (voir handleWebRTC ci-dessus) peut, dans un cas résiduel très rare,
+        // concerner un appel déjà abandonné dont endCallCleanup() n'a pas
+        // encore eu l'occasion de vider pendingOfferSdp. On refuse de la
+        // rejouer si elle date de trop longtemps plutôt que de risquer de
+        // répondre au mauvais appel.
+        console.warn('[Signal] pendingOfferSdp trop ancienne, abandonnée plutôt que rejouée', { ageMs: age });
+        this.pendingOfferSdp = null;
+      } else {
+        const sdp = this.pendingOfferSdp;
+        this.pendingOfferSdp = null;
+        await this.handleOffer(sdp);
+      }
     }
 
     return stream;
@@ -773,22 +861,36 @@ class SignalingService {
       const incoming: MediaStream | undefined = e.stream ?? e.streams?.[0];
       if (!incoming && !e.track) return;
 
-      const merged = this.lastRemoteStream ?? new MediaStream();
-      if (!this.lastRemoteStream) {
-        this.lastRemoteStream = merged;
-      }
+      // BUG CORRIGÉ : muter this.lastRemoteStream EN PLACE (addTrack sur le
+      // même objet) puis réémettre CE MÊME objet cassait l'affichage vidéo.
+      // L'audio arrive quasi toujours avant la vidéo (2 événements 'track'
+      // séparés) : au 1er événement, CallScreen fait setRemoteStream(merged)
+      // → vraie transition null→objet → re-render → RTCView s'affiche (avec
+      // l'audio seul). Au 2e événement (piste vidéo ajoutée), on rappelait
+      // setRemoteStream(merged) avec EXACTEMENT LA MÊME référence d'objet
+      // JS : React voit `Object.is(prev, next) === true` et ne re-render
+      // JAMAIS. Le `useMemo` de remoteStreamUrl (et le `key` du RTCView qui
+      // en dépend) n'est donc jamais recalculé — RTCView ne se remonte pas
+      // pour prendre en compte la piste vidéo pourtant bien arrivée côté
+      // WebRTC (l'appel se connecte, le son passe, mais l'image reste vide).
+      // Correctif : reconstruire un MediaStream FLAMBANT NEUF à chaque piste
+      // reçue, en reprenant les pistes déjà connues + la nouvelle. Un nouvel
+      // objet à chaque évolution garantit une vraie transition d'état React
+      // (donc un re-render) à chaque piste ajoutée, pas seulement à la 1re.
+      const previousTracks = this.lastRemoteStream?.getTracks() ?? [];
+      const nextTracks = [...previousTracks];
+      const addIfNew = (track: MediaStreamTrack) => {
+        if (!nextTracks.some((t) => t.id === track.id)) nextTracks.push(track);
+      };
 
       if (incoming) {
-        incoming.getTracks?.().forEach((track: MediaStreamTrack) => {
-          if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === track.id)) {
-            merged.addTrack(track);
-          }
-        });
+        incoming.getTracks?.().forEach(addIfNew);
       } else if (e.track) {
-        if (!merged.getTracks().some((existingTrack: MediaStreamTrack) => existingTrack.id === e.track.id)) {
-          merged.addTrack(e.track);
-        }
+        addIfNew(e.track);
       }
+
+      const merged = new MediaStream(nextTracks);
+      this.lastRemoteStream = merged;
 
       console.log('[Signal] flux distant reçu', {
         trackCount: merged.getTracks?.().length ?? 0,
@@ -823,18 +925,25 @@ class SignalingService {
 
       if (pc.connectionState === 'disconnected') {
         // Souvent transitoire (perte réseau brève) — on laisse une chance de
-        // reprise avant de considérer l'appel comme terminé, surtout si un
-        // flux distant est déjà présent.
-        if (this.lastRemoteStream?.getTracks().length) {
-          console.log('[Signal] ICE disconnected mais flux distant déjà présent, on garde l’appel actif');
-          this.emitStream({ type: 'reconnecting' });
-          return;
-        }
-        if (this.iceGraceTimer) return; // grâce déjà en cours
+        // reprise avant de considérer l'appel comme terminé.
+        //
+        // BUG CORRIGÉ : la présence d'un flux distant (this.lastRemoteStream)
+        // faisait auparavant `return` immédiatement ICI, sans jamais armer
+        // iceGraceTimer ni appeler restartIce(). Or lastRemoteStream reste
+        // rempli pour le reste de l'appel dès la première piste reçue — ça
+        // ne dit rien sur l'état ACTUEL de la connexion. Résultat : dès
+        // qu'un appel avait été connecté une fois, une coupure réseau réelle
+        // en plein appel n'était plus jamais détectée comme telle : pas de
+        // tentative de reprise ICE, pas de timeout, l'agent restait bloqué
+        // indéfiniment sur un écran d'appel figé (caméra/micro jamais
+        // libérés, onCallEnded() jamais déclenché). On traite maintenant
+        // 'disconnected' de façon uniforme, qu'un flux ait déjà existé ou
+        // non : on tente toujours restartIce() et on arme toujours la grâce.
         this.emitStream({ type: 'reconnecting' });
         if (typeof (pc as any).restartIce === 'function') {
           try { (pc as any).restartIce(); } catch {}
         }
+        if (this.iceGraceTimer) return; // grâce déjà en cours, ne pas la redémarrer
         this.iceGraceTimer = setTimeout(() => {
           this.iceGraceTimer = null;
           if (pc.connectionState !== 'connected') {
@@ -847,11 +956,13 @@ class SignalingService {
       }
 
       if (pc.connectionState === 'failed') {
-        if (this.lastRemoteStream?.getTracks().length) {
-          console.log('[Signal] ICE failed mais flux distant déjà présent, on ne coupe pas l’appel');
-          return;
-        }
-        // Échec définitif — pas de grâce
+        // BUG CORRIGÉ : 'failed' est l'état TERMINAL du protocole ICE — par
+        // définition, aucun média ne peut plus circuler sur cette
+        // PeerConnection, qu'un flux distant ait ou non déjà existé par le
+        // passé. Le même `if (lastRemoteStream) return` qu'en 'disconnected'
+        // ci-dessus laissait alors l'appel bloqué à vie dès qu'un flux avait
+        // été vu une fois : plus aucun nettoyage possible pour cet appel.
+        // 'failed' met donc toujours fin à l'appel, sans exception.
         if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
         this.endCallCleanup('ice-failed');
         this.emitStream({ type: 'ended' });
@@ -921,6 +1032,7 @@ class SignalingService {
 
   // ── Nettoyage fin d'appel ─────────────────────────────────────────────────
   private endCallCleanup (reason?: string) {
+    this.callGeneration += 1;
     if (this.iceGraceTimer) { clearTimeout(this.iceGraceTimer); this.iceGraceTimer = null; }
     try {
       console.log('[Signal] endCallCleanup invoked', {
@@ -971,9 +1083,29 @@ class SignalingService {
       if (this.awaitingPong) {
         this.missedPongs += 1;
         if (this.missedPongs >= 2) {
-          console.warn('[Signal] Watchdog : pas de pong reçu, maintien de la session malgré tout');
-          this.awaitingPong = false;
-          this.missedPongs = 0;
+          // BUG CORRIGÉ : cette branche se contentait auparavant de logguer un
+          // avertissement puis de réinitialiser silencieusement les compteurs
+          // ("maintien de la session malgré tout") — le watchdog ne watchait
+          // donc jamais rien. Sur une socket "zombie" (readyState OPEN mais
+          // plus aucune donnée ne circule, cas fréquent sur réseau mobile
+          // instable), l'agent restait indéfiniment enregistré comme
+          // disponible côté serveur sans jamais recevoir le moindre message,
+          // y compris 'incoming-call' — silencieusement, jusqu'au prochain
+          // redémarrage manuel de l'app. On force maintenant la fermeture
+          // pour déclencher onclose() → scheduleReconnect(), comme le
+          // décrivait déjà le commentaire au-dessus de startPing().
+          console.warn('[Signal] Watchdog : pas de pong après 2 tentatives, fermeture forcée pour reconnexion', {
+            missedPongs: this.missedPongs,
+          });
+          this.pingTimer = null;
+          try {
+            this.ws?.close();
+          } catch (e) {
+            console.warn('[Signal] Watchdog : échec fermeture socket zombie, reconnexion forcée manuellement', e);
+            this.stopPing();
+            this.scheduleReconnect();
+          }
+          return; // onclose (ou le catch ci-dessus) prend le relais — pas de nouveau ping ici
         }
       }
 

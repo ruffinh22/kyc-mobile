@@ -97,7 +97,7 @@ export async function appelerProchainDossier(matricule: string): Promise<AppelRe
     await conn.execute(
       `UPDATE dossiers
        SET statut='en_cours', agent_saisie=?, assigne_a=?, assigne_le=?,
-           heure_prise=?, updated_at=?
+           heure_prise=?, traitement_demarre_le=NULL, updated_at=?
        WHERE id=? AND statut='en_attente'`,
       [matricule, matricule, maintenant, nowHHMM(), maintenant, dossier.id]
     );
@@ -145,7 +145,7 @@ export async function prendreDossierSpecifique(matricule: string, dossierId: str
     const maintenant = nowSec();
     const [result] = await conn.execute(
       `UPDATE dossiers
-       SET statut='en_cours', agent_saisie=?, assigne_a=?, assigne_le=?, heure_prise=?, updated_at=?
+       SET statut='en_cours', agent_saisie=?, assigne_a=?, assigne_le=?, heure_prise=?, traitement_demarre_le=NULL, updated_at=?
        WHERE id=? AND statut='en_attente'`,
       [matricule, matricule, maintenant, nowHHMM(), maintenant, dossierId]
     ) as [ResultSetHeader, any];
@@ -212,7 +212,7 @@ export async function transferDossierToAgent(
     await conn.execute(
       `UPDATE dossiers
        SET statut='en_cours', agent_saisie=?, assigne_a=?, assigne_le=?, heure_prise=?,
-           transfert_message=?, transfert_par=?, updated_at=?
+           transfert_message=?, transfert_par=?, traitement_demarre_le=NULL, updated_at=?
        WHERE id=?`,
       [cible, cible, maintenant, nowHHMM(), extra.message ?? null, extra.transferePar, maintenant, dossierId]
     );

@@ -24,8 +24,15 @@ interface CallState {
   isCameraOn:   boolean;
   callDuration: number;   // secondes
   lastError:    string | null;
+  // Identité de l'agent back-office qui a déclenché l'appel ENTRANT (voir
+  // public-dossiers.ts → SignalingService/NotificationService). Vide pour un
+  // appel sortant. Stocké ici (plutôt que transmis via route.params) pour que
+  // n'importe quel écran (IncomingCallScreen, CallHistoryScreen après coup...)
+  // puisse le lire sans dépendre du câblage de navigation d'App.tsx.
+  agentAppelantMatricule: string;
+  agentAppelantNom:       string;
 
-  setIncomingCall: (numeroMtn: string, uuid?: string) => void;
+  setIncomingCall: (numeroMtn: string, uuid?: string, agentMatricule?: string, agentNom?: string) => void;
   setOutgoingCall: (numeroMtn: string) => void;
   setConnecting:   () => void;
   setCallActive:   (active: boolean) => void;
@@ -47,6 +54,8 @@ export const useCallStore = create<CallState>((set) => ({
   isCameraOn:   true,
   callDuration: 0,
   lastError:    null,
+  agentAppelantMatricule: '',
+  agentAppelantNom:       '',
 
   // uuid est optionnel : absent sur le chemin WebSocket, présent sur le chemin FCM
   //
@@ -62,7 +71,7 @@ export const useCallStore = create<CallState>((set) => ({
   // mettant dans le store, c'est structurellement impossible à contourner :
   // tant qu'un appel est en cours (status !== 'idle'), tout nouvel appel
   // entrant est un no-op silencieux.
-  setIncomingCall: (numeroMtn, uuid = '') =>
+  setIncomingCall: (numeroMtn, uuid = '', agentMatricule = '', agentNom = '') =>
     set((state) => {
       if (state.status !== 'idle') {
         console.log('[CallStore] appel déjà en cours, setIncomingCall ignoré', {
@@ -70,7 +79,10 @@ export const useCallStore = create<CallState>((set) => ({
         });
         return state;
       }
-      return { status: 'incoming', numeroMtn, callUuid: uuid, lastError: null };
+      return {
+        status: 'incoming', numeroMtn, callUuid: uuid, lastError: null,
+        agentAppelantMatricule: agentMatricule, agentAppelantNom: agentNom,
+      };
     }),
 
   // Même principe pour l'appel sortant : on ne repart pas d'un état non-idle.
@@ -104,6 +116,7 @@ export const useCallStore = create<CallState>((set) => ({
   resetCall: () => set({
     status: 'idle', numeroMtn: '', callUuid: '',
     isCallActive: false, isMicOn: true, isCameraOn: true, callDuration: 0, lastError: null,
+    agentAppelantMatricule: '', agentAppelantNom: '',
   }),
 }));
 

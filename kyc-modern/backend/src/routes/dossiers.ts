@@ -71,8 +71,30 @@ export async function dossiersRoutes(app: any): Promise<void> {
   // GET /api/dossiers/:id
   app.get('/api/dossiers/:id', async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id: string };
-    const d = await db.getDossierById(params.id);
+    const d = await db.getDossierById(params.id) as (Dossier & { traitement_demarre_le?: number | null });
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
+
+    // Marque le DÉBUT RÉEL du traitement par l'agent assigné — la toute
+    // première fois que CE dossier précis est effectivement consulté par
+    // l'agent qui en est responsable (concrètement : l'arrivée sur l'écran
+    // de saisie GSM, voir GsmSaisie dans GsmPages.tsx, qui charge le dossier
+    // via cette même route). C'est un signal beaucoup plus précis que la
+    // présence générale (heartbeat ping-dispo) pour le filet de sécurité de
+    // utils/distribution.ts : un dossier attribué mais jamais ouvert doit
+    // repartir en file dès que le délai est dépassé, MÊME si l'agent est
+    // par ailleurs en ligne (autre onglet, occupé ailleurs...) — alors qu'un
+    // dossier réellement en cours de traitement doit être protégé tant que
+    // l'agent reste joignable. Idempotent (WHERE ... IS NULL côté SQL) : ne
+    // se déclenche qu'une seule fois par attribution, jamais réécrit ensuite.
+    if (req.user.role === 'agent' && d.agent_saisie === req.user.matricule && d.statut === 'en_cours' && !d.traitement_demarre_le) {
+      const maintenant = db.nowSec();
+      d.traitement_demarre_le = maintenant;
+      db.exec(
+        `UPDATE dossiers SET traitement_demarre_le=? WHERE id=? AND agent_saisie=? AND statut='en_cours' AND traitement_demarre_le IS NULL`,
+        [maintenant, d.id, req.user.matricule]
+      ).catch(() => {});
+    }
+
     return reply.send({ success: true, dossier: maskDossier(normalizeDossier(d), req.user.matricule, req.user.role) });
   });
 
@@ -177,6 +199,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
   // déjà un dossier en_cours (peu importe par quel chemin), l'attribution
   // échoue proprement au lieu de créer un doublon.
   //
+  //
   // NOTE : le verrou (agent_dossier_lock, PK matricule) ne peut structurellement
   // contenir qu'UN dossier par agent. L'ancienne limite `distribution_max_total`
   // (qui autorisait >1 dossier en_cours simultané par agent) n'est donc plus
@@ -184,6 +207,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
   // comportement "plusieurs dossiers en parallèle par agent" est réellement
   // voulu, il faut revoir le schéma du verrou (clé composite matricule+slot)
   // plutôt que de le contourner.
+
   app.post('/api/dossiers/appeler', async (req: FastifyRequest, reply: FastifyReply) => {
     if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
     const { matricule } = req.user;
@@ -243,7 +267,7 @@ export async function dossiersRoutes(app: any): Promise<void> {
       const remis = await db.exec(
         `UPDATE dossiers 
          SET statut='en_attente', agent_saisie=NULL, assigne_a=NULL, 
-             assigne_le=NULL, heure_prise=NULL, updated_at=? 
+             assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL, updated_at=? 
          WHERE agent_saisie=? AND statut='en_cours'`,
         [maintenant, matricule]
       );

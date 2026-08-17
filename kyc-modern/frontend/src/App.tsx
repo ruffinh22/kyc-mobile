@@ -20,6 +20,7 @@ import {
   SupPerformance, SupDistribution, SupDonneesHeures, SupFlux,
   SupCompilationGsm, SupNotesQualite, SupPlanning, SupReporting,
 } from './pages/sup/SupPages';
+import { SupReferentielsGsm } from './pages/sup/ReferentielsGsmPage';
 import { SupCapturesPage } from './pages/sup/CapturesPage';
 import { SupPlanningManagersPage } from './pages/sup/PlanningManagersPage';
 
@@ -120,6 +121,7 @@ function SupApp({ page }: { page: string }) {
     case 'donnees-heures':    return <SupDonneesHeures />;
     case 'flux':              return <SupFlux />;
     case 'compilation-gsm':   return <SupCompilationGsm />;
+    case 'referentiels':       return <SupReferentielsGsm />;
     case 'notes-qualite':     return <SupNotesQualite />;
     case 'planning':          return <SupPlanning />;
     case 'planning-managers': return <SupPlanningManagersPage />;

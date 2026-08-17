@@ -23,6 +23,7 @@ import { AccountScreen }           from './src/screens/AccountScreen';
 import { useAgentStore, useCallStore } from './src/store/callStore';
 import { notificationService } from './src/services/NotificationService';
 import { signalingService } from './src/services/SignalingService';
+import { callHistoryService } from './src/services/CallHistoryService';
 import { ensureHttpBase } from './src/utils/serverUrl';
 
 const Stack = createStackNavigator();
@@ -31,6 +32,12 @@ export default function App() {
   const [initialRoute, setInitialRoute] = useState<string | null>(null);
   const [isNavReady, setIsNavReady] = useState(false);
   const setAgent = useAgentStore(s => s.setAgent);
+  const setConnected = useAgentStore(s => s.setConnected);
+  // Lus individuellement (pas de sélecteur d'objet) pour ne réagir QUE quand
+  // l'un de ces deux champs change réellement — voir l'effet "Bootstrap
+  // signalisation" plus bas, qui en dépend directement.
+  const numeroAgent = useAgentStore(s => s.numeroAgent);
+  const serverUrl   = useAgentStore(s => s.serverUrl);
   const navigationRef = useRef<NavigationContainerRef<any>>(null);
 
   // ── Autorité UNIQUE de navigation d'appel ────────────────────────────────
@@ -169,6 +176,75 @@ export default function App() {
       }
     })();
   }, []);
+
+  // ── Bootstrap signalisation (WS) — indépendant de tout écran ─────────────
+  // BUG CORRIGÉ : signalingService.init() (connexion WS + register serveur)
+  // était appelé UNIQUEMENT depuis IdleScreen.tsx. Or l'effet de navigation
+  // ci-dessus peut reset directement sur 'IncomingCall' dès le cold-start —
+  // typiquement quand l'agent tape sur la notification d'appel entrant pour
+  // ouvrir l'app (voir restorePendingCallFromNative ci-dessous) : callStore.
+  // status passe à 'incoming' AVANT même qu'IdleScreen n'ait eu une seule
+  // chance de monter. IdleScreen est alors purement et simplement sauté par
+  // le nav.reset(), et sans lui, aucune connexion WS n'était jamais établie
+  // pour toute la durée de l'appel. L'agent tapait "Accepter" : la caméra
+  // s'ouvrait, mais il n'y avait jamais eu de canal pour recevoir l'offer
+  // WebRTC ni pour envoyer l'answer — négociation qui ne démarre jamais.
+  //
+  // En rattachant ce bootstrap ICI (dès que la session agent — numero +
+  // serveur — est connue, quel que soit l'écran affiché), la WS est
+  // garantie active avant même que le premier "incoming-call" ne puisse
+  // arriver, peu importe l'écran sur lequel l'utilisateur atterrit.
+  // IdleScreen n'a plus besoin d'appeler signalingService.init() lui-même.
+  useEffect(() => {
+    if (!serverUrl || !numeroAgent) return;
+    let cancelled = false;
+
+    (async () => {
+      const fcmToken = (await notificationService.ensureFCMToken()) ?? '';
+      // Contrairement à l'ancien code dans IdleScreen, ce garde ne bloque
+      // QUE l'enregistrement du token FCM côté backend (un aller-retour
+      // réseau accessoire) — jamais l'appel à signalingService.init()
+      // lui-même, qui doit rester indépendant du cycle de vie d'un écran.
+      if (!cancelled) await registerFcmTokenWithBackend(serverUrl, numeroAgent, fcmToken);
+
+      signalingService.init(serverUrl, numeroAgent, fcmToken, {
+        onConnected:    () => setConnected(true),
+        onDisconnected: () => setConnected(false),
+        onIncomingCall: (numeroMtn, serverCallUuid) => {
+          const uuid = serverCallUuid || `ws-${Date.now()}`;
+          // Même garde-fou que partout ailleurs : un appel déjà en cours de
+          // traitement (peu importe son uuid) ignore tout nouvel entrant.
+          if (useCallStore.getState().status !== 'idle') {
+            console.log('[App] appel déjà en cours, incoming-call (WS) ignoré', { statut: useCallStore.getState().status, callUuid: uuid, numeroMtn });
+            return;
+          }
+          console.log('[App] traitement incoming-call (WS) : registerIncomingCall', { callUuid: uuid, numeroMtn });
+          void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
+          // registerIncomingCall pose l'affichage natif (notification/
+          // foreground service) ET, via ses propres callbacks, in fine
+          // callStore.setIncomingCall (voir handleIncomingFromAppStart plus
+          // bas) — c'est donc bien lui l'unique point d'entrée, quel que
+          // soit le canal d'origine (WS ici, FCM via handleHeadlessMessage).
+          notificationService.registerIncomingCall(uuid, numeroMtn);
+        },
+        onCallEnded: () => {
+          // L'état pilote l'écran (voir l'effet de navigation en tête de
+          // composant) : on se contente de nettoyer le store, le reset vers
+          // Idle est géré automatiquement par cet effet unique si on est
+          // encore sur IncomingCall/Call.
+          if (cancelled) return;
+          useCallStore.getState().resetCall();
+        },
+        onError: (msg) => console.warn('[Signal]', msg),
+        onMediaError: (msg) => {
+          console.warn('[Signal] Média:', msg);
+          useCallStore.getState().setFailed(msg);
+        },
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [serverUrl, numeroAgent]);
 
   useEffect(() => {
     let cancelled = false;

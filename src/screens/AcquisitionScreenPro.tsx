@@ -237,6 +237,9 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const [loading, setLoading]         = useState(false);
   const [progress, setProgress]       = useState(0);
   const [error, setError]             = useState('');
+  // true quand un envoi a échoué (réseau/timeout 5s) et attend une action
+  // explicite de l'agent plutôt qu'un retry automatique silencieux.
+  const [canRetrySubmit, setCanRetrySubmit] = useState(false);
   const [success, setSuccess]         = useState(false);
   const [signatureInteracting, setSignatureInteracting] = useState(false);
   const [activeStep, setActiveStep]   = useState(1);
@@ -437,8 +440,19 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   // natif (expo-image-manipulator) est quasi instantané (<300ms) et réduit
   // le fichier de 80-90% sans perte visible, ce qui est déterminant sur un
   // réseau terrain instable (voir logs "Upload échoué : erreur réseau").
-  const MAX_PHOTO_WIDTH = 1600;
-  const PHOTO_JPEG_QUALITY = 0.72;
+  // ── Compression photo ────────────────────────────────────────────────────
+  // BUG DE PERF CORRIGÉ : la soumission finale pouvait dépasser 1 minute sur
+  // le terrain (signal LTE faible, souvent -97 à -108 dBm observé). Deux
+  // leviers resserrés ici :
+  //   1. Poids du payload réduit (1600px/0.72 → 1280px/0.6) : sur une photo
+  //      de CNI, 1280px reste largement suffisant pour la lisibilité/OCR,
+  //      et réduit le poids typique de 30-40% par photo.
+  //   2. Le traitement se fait DÉJÀ au moment de la capture (capturePhoto,
+  //      plus bas), donc AVANT que l'agent n'arrive à l'écran de
+  //      soumission — à l'envoi, les fichiers sont déjà prêts, aucun travail
+  //      CPU ne bloque plus l'appui sur "Soumettre".
+  const MAX_PHOTO_WIDTH = 1280;
+  const PHOTO_JPEG_QUALITY = 0.6;
 
   const compressPhoto = async (uri: string) => {
     try {
@@ -597,14 +611,48 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return fileUri;
   };
 
-  const submitAttemptRef = useRef(0);
+  // ── Pré-conversion de la signature EN ARRIÈRE-PLAN ───────────────────────
+  // BUG DE PERF CORRIGÉ : cette conversion (écriture disque du PNG base64)
+  // se faisait auparavant DANS submitDossier(), donc pile au moment où
+  // l'agent tape "Soumettre" — un délai de plus, ajouté à un moment où on
+  // veut au contraire que l'envoi parte immédiatement. Elle est maintenant
+  // déclenchée dès que le tracé s'arrête (onInteractEnd du pad, plus bas) :
+  // le temps que l'agent finisse de remplir le reste du formulaire, le
+  // fichier est déjà prêt sur disque. submitDossier() n'a plus qu'à le
+  // réutiliser — repli sur une conversion à la volée seulement si l'agent
+  // soumet plus vite que cette préparation n'a eu le temps de finir.
+  const signatureFileCacheRef = useRef<{ dataUri: string; fileUri: string } | null>(null);
+
+  useEffect(() => {
+    if (signatureInteracting) return; // tracé encore en cours, on attend la pause
+    if (!signatureData) return;
+    if (signatureFileCacheRef.current?.dataUri === signatureData) return; // déjà prêt
+    let cancelled = false;
+    (async () => {
+      try {
+        const fileUri = await signatureDataUriToFile(signatureData);
+        if (!cancelled) signatureFileCacheRef.current = { dataUri: signatureData, fileUri };
+      } catch (e) {
+        // Non bloquant : submitDossier() refera la conversion à la volée si
+        // ce cache n'est pas prêt à temps.
+        console.warn('[Acquisition] Pré-conversion signature échouée (repli au submit) :', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [signatureInteracting, signatureData]);
 
   const handleSubmit = async () => {
     const err = validate();
     if (err) { setError(err); shake(); return; }
-    submitAttemptRef.current = 0;
     setActiveStep(4);
-    setLoading(true); setError(''); setProgress(0);
+    setLoading(true); setError(''); setProgress(0); setCanRetrySubmit(false);
+    void submitDossier();
+  };
+
+  // Relance explicite après échec (bouton "Réessayer"), sans repasser par
+  // validate() : le formulaire n'a pas changé, seul l'envoi réseau a échoué.
+  const retrySubmit = () => {
+    setError(''); setLoading(true); setProgress(0); setCanRetrySubmit(false);
     void submitDossier();
   };
 
@@ -640,12 +688,32 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       // ── Signature titulaire (voir SERVER_SPEC.md — signature_mode / photo_signature) ──
       fd.append('signature_mode', signatureMode);
       if (signatureData) {
-        const sigUri = await signatureDataUriToFile(signatureData);
+        // Réutilise le fichier pré-converti en arrière-plan (voir l'effet
+        // juste au-dessus de signatureFileCacheRef, déclenché dès la fin du
+        // tracé) — sinon la conversion se refait ici, pile au moment de
+        // l'envoi, ce que la pré-conversion est censée éviter. Repli sur une
+        // conversion à la volée seulement si l'agent soumet plus vite que
+        // cette préparation n'a eu le temps de finir (cas rare).
+        const sigUri = signatureFileCacheRef.current?.dataUri === signatureData
+          ? signatureFileCacheRef.current.fileUri
+          : await signatureDataUriToFile(signatureData);
         fd.append('photo_signature', { uri: sigUri, type: 'image/png', name: 'signature.png' } as any);
       }
 
       const xhr = new XMLHttpRequest();
-      xhr.timeout = 30_000; // réseau terrain instable : ne pas rester bloqué indéfiniment
+      // Plafond dur à 5s, demandé explicitement (soumission "hyper rapide"),
+      // vs 30s avant. Les photos/signature sont déjà compressées et écrites
+      // sur disque AVANT ce point (voir capturePhoto / pré-conversion
+      // signature plus haut), donc ces 5s ne couvrent que le transfert réseau
+      // lui-même — pas de traitement en attente au moment de l'envoi.
+      // Sur un réseau vraiment très faible (LTE -97/-108 dBm observé sur ce
+      // terrain), 5s peut ne pas suffire à faire passer ~200-400 Ko : c'est
+      // une limite physique du lien radio, pas quelque chose que le code peut
+      // contourner. Dans ce cas on ne relance PAS automatiquement (voir
+      // 'error'/'timeout' plus bas) — on affiche un bouton "Réessayer"
+      // explicite, pour ne jamais doubler silencieusement l'attente de
+      // l'agent avec une seconde tentative cachée.
+      xhr.timeout = 5_000;
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
       });
@@ -692,24 +760,21 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         }
       });
       xhr.addEventListener('error', () => {
-        // Réseau terrain instable : une coupure ponctuelle pendant l'envoi
-        // (et pas un refus serveur) mérite une seconde tentative silencieuse
-        // avant d'ennuyer l'agent avec une erreur.
-        if (submitAttemptRef.current < 1) {
-          submitAttemptRef.current += 1;
-          console.warn('[Acquisition] Upload échoué : erreur réseau — nouvelle tentative automatique');
-          setProgress(0);
-          void submitDossier();
-          return;
-        }
-        console.warn('[Acquisition] Upload échoué : erreur réseau (après tentative de reprise)');
-        setError('Erreur réseau pendant l’envoi. Vérifie la connexion puis réessaie.');
+        // Plus de retry automatique caché : sur un réseau faible, relancer
+        // tout l'envoi en silence double l'attente sans que l'agent
+        // comprenne pourquoi ça traîne. On affiche à la place un bouton
+        // "Réessayer" explicite (voir canRetrySubmit / bouton dans le JSX) —
+        // c'est l'agent qui décide de retenter, pas nous en cachette.
+        console.warn('[Acquisition] Upload échoué : erreur réseau');
+        setError('Erreur réseau pendant l’envoi.');
+        setCanRetrySubmit(true);
         shake();
         setLoading(false);
       });
       xhr.addEventListener('timeout', () => {
-        console.warn('[Acquisition] Upload échoué : délai dépassé (30s)');
-        setError('Le serveur met trop de temps à répondre. Vérifie ta connexion et réessaie.');
+        console.warn('[Acquisition] Upload échoué : délai dépassé (5s)');
+        setError('Envoi trop lent (réseau faible). Réessaie quand tu as du signal.');
+        setCanRetrySubmit(true);
         shake();
         setLoading(false);
       });
@@ -722,6 +787,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     } catch (e: any) {
       console.warn('[Acquisition] submitDossier a échoué :', e);
       setError(e.message || 'Erreur');
+      setCanRetrySubmit(true);
       shake();
       setLoading(false);
     }
@@ -1064,6 +1130,17 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
             <Animated.View style={[s.errBox, { transform: [{ translateX: shakeAnim }] }]}>
               <Text style={s.errIcon}>⚠</Text>
               <Text style={s.errTxt}>{error}</Text>
+              {canRetrySubmit && (
+                <TouchableOpacity
+                  onPress={retrySubmit}
+                  style={s.retryBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Réessayer l'envoi du dossier"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={s.retryBtnTxt}>↻ Réessayer</Text>
+                </TouchableOpacity>
+              )}
             </Animated.View>
           )}
 
@@ -1695,6 +1772,11 @@ const s = StyleSheet.create({
   },
   errIcon: { fontSize: T.base, color: C.dangerText },
   errTxt:  { fontSize: T.sm, color: C.dangerText, flex: 1 },
+  retryBtn: {
+    backgroundColor: C.dangerText, paddingVertical: 7, paddingHorizontal: 14,
+    borderRadius: 999,
+  },
+  retryBtnTxt: { fontSize: T.xs, fontWeight: '800', color: '#fff' },
 
   // Section
   section: {

@@ -253,10 +253,12 @@ interface GsmSaisieProps {
 // en dessous, inchangés.
 const STATUTS_EN_ATTENTE = new Set(['en_attente', 'en_cours']);
 
-function DossierRecap({ dossier, busy, onDecision }: {
+function DossierRecap({ dossier, busy, decision, onDecision, onResetDecision }: {
   dossier: Dossier;
   busy: boolean;
+  decision: { statut: 'accepte' | 'rejete'; raison?: string } | null;
   onDecision: (statut: 'accepte' | 'rejete', raison?: string) => void;
+  onResetDecision: () => void;
 }) {
   const [zoom, setZoom] = useState<{ src: string; label: string } | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -426,14 +428,33 @@ function DossierRecap({ dossier, busy, onDecision }: {
 
         <hr className="divider" />
         {enAttente ? (
-          <div style={{ display: 'flex', gap: '.6rem' }}>
-            <button type="button" className="btn btn-lg" disabled={busy} onClick={() => onDecision('accepte')} style={{ background: '#16A34A', color: '#fff', border: 'none' }}>
-              ✓ Valider le dossier
-            </button>
-            <button type="button" className="btn btn-lg btn-danger" disabled={busy} onClick={() => setRejectOpen(true)}>
-              ✗ Rejeter le dossier
-            </button>
-          </div>
+          decision ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 800,
+                padding: '8px 14px', borderRadius: 999,
+                background: decision.statut === 'accepte' ? '#DCFCE7' : '#FEE2E2',
+                color: decision.statut === 'accepte' ? '#166534' : '#991B1B',
+              }}>
+                {decision.statut === 'accepte' ? '✓ Décision retenue : Accepté' : '✗ Décision retenue : Rejeté'}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+                Sera appliquée au dossier en même temps que l'enregistrement de la saisie GSM ci-dessous.
+              </span>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onResetDecision}>
+                Modifier
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '.6rem' }}>
+              <button type="button" className="btn btn-lg" disabled={busy} onClick={() => onDecision('accepte')} style={{ background: '#16A34A', color: '#fff', border: 'none' }}>
+                ✓ Valider le dossier
+              </button>
+              <button type="button" className="btn btn-lg btn-danger" disabled={busy} onClick={() => setRejectOpen(true)}>
+                ✗ Rejeter le dossier
+              </button>
+            </div>
+          )
         ) : (
           <p style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>
             Dossier déjà {statutLabel.toLowerCase()}{dossier.raison_rejet ? ` — ${dossier.raison_rejet}` : ''}.
@@ -486,6 +507,25 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
   // pièce, décision de traitement...) — sert uniquement à afficher la pastille
   // « Pré-rempli »; n'affecte jamais la validation ni l'envoi du formulaire.
   const [autoFilled, setAutoFilled] = useState<Set<string>>(new Set());
+  // Décision locale (Valider/Rejeter) prise par l'agent sur le dossier —
+  // volontairement PAS envoyée au serveur tout de suite. Elle n'est commise
+  // (accepterDossier/rejeterDossier) qu'au moment où l'agent enregistre la
+  // saisie GSM (voir submit()), pour que le dossier ne puisse jamais être
+  // clôturé sans que sa saisie GSM associée le soit aussi dans la même
+  // opération — avant, les deux actions étaient indépendantes et un agent
+  // interrompu entre les deux laissait un dossier clos sans saisie GSM.
+  const [decision, setDecision] = useState<{ statut: 'accepte' | 'rejete'; raison?: string } | null>(null);
+  // true dès que la décision a réellement été appliquée côté serveur — évite
+  // qu'un retry (après échec de création de la saisie GSM) ne rappelle
+  // accepter/rejeter une seconde fois sur un dossier déjà clos (le backend
+  // renverrait de toute façon 409 "Dossier non en cours").
+  const [decisionCommitted, setDecisionCommitted] = useState(false);
+  // ID de la saisie GSM déjà créée côté serveur, en attente de l'envoi de ses
+  // captures (voir submit ci-dessous : si l'upload des captures échoue après
+  // que la saisie a été enregistrée, on mémorise l'ID ici pour qu'un nouveau
+  // clic sur "Réessayer" ne recrée JAMAIS un second enregistrement — il ne
+  // fait que retenter l'upload des captures sur la saisie déjà existante.
+  const [pendingCapturesId, setPendingCapturesId] = useState<number | null>(null);
 
   useEffect(() => {
     if (dossierId && (!dossier || dossier.id !== dossierId)) {
@@ -527,6 +567,32 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
     setInitialized(true);
   }, [initialized, dossier, defaultValues, today]);
 
+  // Réconciliation post-chargement des référentiels : l'effet ci-dessus peut
+  // tourner AVANT que /api/gsm/referentiels ait fini de répondre (deux
+  // requêtes indépendantes). Dans ce cas, la valeur brute d'acquisition
+  // (ex. "cni" en minuscule via l'OCR) est pré-remplie telle quelle, sans
+  // pouvoir être comparée à l'option institutionnelle exacte ("CNI"). Dès
+  // que le référentiel arrive, on retente le matching et on bascule sur la
+  // forme canonique — mais UNIQUEMENT si le champ est toujours pré-rempli
+  // (autoFilled) et que l'agent n'a pas encore choisi lui-même une option :
+  // on ne touche jamais à une valeur que l'agent a sélectionnée/modifiée.
+  useEffect(() => {
+    if (!refs.data) return;
+    setF(current => {
+      let changed = false;
+      const next = { ...current };
+      (['type_id', 'piece'] as const).forEach(key => {
+        if (!autoFilled.has(key)) return;
+        const opts = R[key];
+        const val = current[key];
+        if (!opts?.length || !val || opts.includes(val)) return;
+        const matched = matchReferentiel(opts, val);
+        if (matched && matched !== val) { next[key] = matched; changed = true; }
+      });
+      return changed ? next : current;
+    });
+  }, [refs.data]);
+
   const chg = (k: string, v: string) => {
     setF(x => ({ ...x, [k]: v }));
     // Dès que l'agent touche un champ pré-rempli, on retire la pastille — la
@@ -539,54 +605,75 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
     });
   };
 
-  // ── Décision sur le dossier (valider/rejeter) — indépendante de la saisie
-  // GSM ci-dessous : l'agent statue sur le dossier d'identité déjà collecté
-  // (recto/verso, infos, signature) sans avoir besoin de le ressaisir.
-  // NB : à adapter si les noms des fonctions diffèrent dans services/api.ts.
-  const handleDossierDecision = async (statut: 'accepte' | 'rejete', raison?: string) => {
-    if (!dossier) return;
-    setDossierBusy(true); setErr(null); setSuccess(null);
-    try {
-      if (statut === 'accepte') {
-        await api.accepterDossier(dossier.id);
-      } else {
-        await api.rejeterDossier(dossier.id, raison ?? '');
-      }
-      const refreshed = await api.getDossier(dossier.id);
-      setDossier(refreshed.dossier);
-      setSuccess(statut === 'accepte' ? 'Dossier validé.' : 'Dossier rejeté.');
+  // ── Décision sur le dossier (valider/rejeter) — retenue localement, PAS
+  // envoyée au serveur ici. Elle sera appliquée dans submit() en même temps
+  // que la saisie GSM, pour que les deux avancent toujours ensemble (voir
+  // le commentaire sur `decision` plus haut).
+  const handleDossierDecision = (statut: 'accepte' | 'rejete', raison?: string) => {
+    setErr(null); setSuccess(null);
+    setDecision({ statut, raison });
 
-      // Automatisation : la décision de traitement vient d'être prise à
-      // l'instant — on la reporte directement dans la saisie GSM (statut
-      // final, raison) au lieu de faire retaper la même information deux fois.
-      // Toujours modifiable ensuite, comme les autres champs pré-remplis.
-      const decisionLabel = statut === 'accepte' ? 'Accepté' : 'Rejeté';
-      const matchedStatut = matchReferentiel(R['statut_final'], decisionLabel) ?? decisionLabel;
-      setF(current => ({
-        ...current,
-        statut_final: matchedStatut,
-        raison: statut === 'rejete' ? (raison || current.raison) : current.raison,
-      }));
-      setAutoFilled(current => {
-        const next = new Set(current);
-        next.add('statut_final');
-        if (statut === 'rejete') next.add('raison');
-        return next;
-      });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Erreur lors du traitement du dossier');
-    } finally {
-      setDossierBusy(false);
-    }
+    // La décision retenue pré-remplit tout de suite le statut final GSM
+    // (et la raison, pour un rejet) — comme avant, toujours modifiable par
+    // la suite tant qu'elle n'a pas été confirmée par l'envoi du formulaire.
+    const decisionLabel = statut === 'accepte' ? 'Accepté' : 'Rejeté';
+    const matchedStatut = matchReferentiel(R['statut_final'], decisionLabel) ?? decisionLabel;
+    setF(current => ({
+      ...current,
+      statut_final: matchedStatut,
+      raison: statut === 'rejete' ? (raison || current.raison) : current.raison,
+    }));
+    setAutoFilled(current => {
+      const next = new Set(current);
+      next.add('statut_final');
+      if (statut === 'rejete') next.add('raison');
+      return next;
+    });
   };
 
+  // "Modifier" la décision retenue — possible uniquement tant qu'elle n'a
+  // pas déjà été commise côté serveur (decisionCommitted). Une fois commise,
+  // le dossier est réellement clos en base : revenir en arrière nécessite
+  // une action superviseur, pas un simple clic agent.
+  const handleResetDecision = () => {
+    if (decisionCommitted) return;
+    setDecision(null);
+    setF(current => ({ ...current, statut_final: '' }));
+    setAutoFilled(current => {
+      const next = new Set(current);
+      next.delete('statut_final');
+      return next;
+    });
+  };
+
+  // Décision transmise par la page Dossiers : l'agent a cliqué "Accepter"/
+  // "Rejeter" sur la liste des dossiers, qui redirige ici SANS avoir commis
+  // quoi que ce soit côté serveur (voir goToGsmSaisie dans DossierPages.tsx).
+  // On rejoue cette intention via handleDossierDecision exactement comme si
+  // l'agent avait cliqué Valider/Rejeter sur cette page : la décision reste
+  // locale, modifiable, et ne sera commise qu'au submit() de la saisie GSM.
+  // On attend que les référentiels soient chargés pour que le statut final
+  // pré-rempli utilise directement le libellé canonique (matchReferentiel).
+  useEffect(() => {
+    if (decision || decisionCommitted || !refs.data) return;
+    if (!dossier || dossier.id !== dossierId) return;
+    const raw = localStorage.getItem('gsm_pending_decision');
+    if (!raw) return;
+    localStorage.removeItem('gsm_pending_decision');
+    try {
+      const pending = JSON.parse(raw) as { statut?: string; raison?: string };
+      if (pending?.statut === 'accepte' || pending?.statut === 'rejete') {
+        handleDossierDecision(pending.statut, pending.raison);
+      }
+    } catch { /* intention malformée/obsolète : ignorée, l'agent décide manuellement */ }
+  }, [decision, decisionCommitted, refs.data, dossier, dossierId]);
+
   // Automatisation « pro totale » : on bloque l'enregistrement de la saisie
-  // GSM tant que le dossier lié n'a pas été validé ou rejeté ci-dessus. Sans
-  // ce garde-fou, un agent pouvait enregistrer sa saisie GSM et quitter la
-  // page en laissant le dossier bloqué "en_cours" indéfiniment — le filet de
-  // sécurité de distribution.ts se base sur la présence de l'agent, pas sur
-  // le temps passé sur CE dossier précis, donc rien ne le récupérait.
-  const dossierNonDecide = !!dossier && STATUTS_EN_ATTENTE.has(dossier.statut);
+  // GSM tant que le dossier lié n'a pas une décision retenue (Valider ou
+  // Rejeter ci-dessus). La décision ET la saisie GSM sont ensuite commises
+  // ensemble dans submit() — un dossier ne peut donc plus jamais être clos
+  // sans que sa saisie GSM associée le soit dans la même opération.
+  const dossierNonDecide = !!dossier && STATUTS_EN_ATTENTE.has(dossier.statut) && !decision;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setErr(null); setSuccess(null);
@@ -596,18 +683,66 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
       return setErr('Champs obligatoires manquants');
     setLoading(true);
     try {
-      const today = todayISO();
-      const payload = { ...f, date: f.date || today, dossier_id: dossierId || undefined };
-      const r = await api.createGsmLibre(payload);
-      setLastId(r.id);
-      if (captures.a || captures.p || captures.aa) {
-        const fd = new FormData();
-        if (captures.a)  fd.append('capture_a',  captures.a);
-        if (captures.p)  fd.append('capture_p',  captures.p);
-        if (captures.aa) fd.append('capture_aa', captures.aa);
-        await api.uploadGsmCaptures(r.id, fd);
+      // 1) Appliquer la décision retenue sur le dossier — une seule fois.
+      // Si une tentative précédente a déjà réussi cette étape avant
+      // d'échouer plus loin (captures, réseau…), decisionCommitted évite de
+      // rejouer accepter/rejeter sur un dossier déjà clos (le backend
+      // renverrait 409 "Dossier non en cours").
+      if (dossier && decision && !decisionCommitted) {
+        setDossierBusy(true);
+        try {
+          if (decision.statut === 'accepte') {
+            await api.accepterDossier(dossier.id);
+          } else {
+            await api.rejeterDossier(dossier.id, decision.raison ?? '');
+          }
+          const refreshed = await api.getDossier(dossier.id);
+          setDossier(refreshed.dossier);
+          setDecisionCommitted(true);
+        } finally {
+          setDossierBusy(false);
+        }
       }
-      setSuccess(`Saisie enregistrée (ID ${r.id})`);
+
+      // 2) Créer la saisie GSM — ou réutiliser celle d'une tentative
+      // précédente qui avait échoué seulement sur l'upload des captures
+      // (voir pendingCapturesId), pour ne jamais créer de doublon.
+      let gsmId = pendingCapturesId;
+      if (gsmId == null) {
+        const todayVal = todayISO();
+        const payload = { ...f, date: f.date || todayVal, dossier_id: dossierId || undefined };
+        const r = await api.createGsmLibre(payload);
+        gsmId = r.id;
+        setLastId(r.id);
+      }
+
+      // 3) Captures (optionnelles) — échec isolé, ne remet pas en cause la
+      // décision ni la saisie GSM déjà enregistrées.
+      if (captures.a || captures.p || captures.aa) {
+        try {
+          const fd = new FormData();
+          if (captures.a)  fd.append('capture_a',  captures.a);
+          if (captures.p)  fd.append('capture_p',  captures.p);
+          if (captures.aa) fd.append('capture_aa', captures.aa);
+          await api.uploadGsmCaptures(gsmId, fd);
+        } catch (captureErr) {
+          // Décision + saisie GSM sont déjà enregistrées en base (gsmId) —
+          // seul l'upload des captures a échoué (réseau terrain faible,
+          // même contexte que l'acquisition). On ne considère pas ça comme
+          // un échec total : on garde gsmId en mémoire pour permettre un
+          // "Réessayer" ciblé, sans ressaisir ni dupliquer quoi que ce soit.
+          setPendingCapturesId(gsmId);
+          setErr(`Saisie enregistrée (ID ${gsmId}), mais l'envoi des captures a échoué. Réessayez — rien ne sera dupliqué.`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      const decisionMsg = decision ? (decision.statut === 'accepte' ? 'Dossier validé. ' : 'Dossier rejeté. ') : '';
+      setSuccess(`${decisionMsg}Saisie GSM enregistrée (ID ${gsmId}).`);
+      setPendingCapturesId(null);
+      setDecision(null);
+      setDecisionCommitted(false);
       setF({ ...EMPTY_GSM }); setCaptures({});
       refetchList();
       (e.target as HTMLFormElement).reset();
@@ -654,14 +789,27 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
         {onClose && <button className="btn btn-ghost btn-sm" onClick={onClose}>Fermer</button>}
       </div>
       {dossierId && !dossier && <Alert kind="info">Chargement du dossier {dossierId}…</Alert>}
-      {dossier && <DossierRecap dossier={dossier} busy={dossierBusy} onDecision={handleDossierDecision} />}
+      {dossier && (
+        <DossierRecap
+          dossier={dossier}
+          busy={dossierBusy || loading}
+          decision={decision}
+          onDecision={handleDossierDecision}
+          onResetDecision={handleResetDecision}
+        />
+      )}
       {dossierNonDecide && (
         <Alert kind="info">
-          ⏳ Décidez d'abord du dossier ci-dessus (✓ Valider ou ✗ Rejeter) — la saisie GSM se débloque juste après, avec le statut final déjà pré-rempli.
+          ⏳ Décidez d'abord du dossier ci-dessus (✓ Valider ou ✗ Rejeter) — la décision sera appliquée en même temps que l'enregistrement de la saisie GSM, en une seule opération.
         </Alert>
       )}
       {err     && <Alert kind="error">{err}</Alert>}
       {success && <Alert kind="success">{success}</Alert>}
+      {pendingCapturesId != null && !err && (
+        <Alert kind="info">
+          La décision et la saisie GSM #{pendingCapturesId} sont déjà enregistrées — seul l'envoi des captures écran reste à finaliser.
+        </Alert>
+      )}
       <div className="card" style={{ maxWidth: 760, border: '1px solid var(--border, #E2E8F0)', borderTop: `3px solid ${MTN_BLUE}`, overflow: 'hidden' }}>
         <form onSubmit={submit} className="form-grid">
           <SectionLabel>Informations obligatoires</SectionLabel>
@@ -711,7 +859,15 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
             title={dossierNonDecide ? "Validez ou rejetez le dossier ci-dessus avant d'enregistrer" : undefined}
             style={{ background: dossierNonDecide ? '#94A3B8' : MTN_BLUE, borderColor: dossierNonDecide ? '#94A3B8' : MTN_BLUE, color: '#fff' }}
           >
-            {loading ? 'Enregistrement…' : dossierNonDecide ? '⏳ En attente de décision sur le dossier' : '✓ Enregistrer la saisie'}
+            {loading
+              ? (dossierBusy ? 'Application de la décision…' : 'Enregistrement…')
+              : dossierNonDecide
+                ? '⏳ En attente de décision sur le dossier'
+                : pendingCapturesId != null
+                  ? '↻ Réessayer l’envoi des captures'
+                  : decision
+                    ? (decision.statut === 'accepte' ? '✓ Valider le dossier et enregistrer la saisie' : '✗ Rejeter le dossier et enregistrer la saisie')
+                    : '✓ Enregistrer la saisie'}
           </button>
         </form>
       </div>

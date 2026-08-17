@@ -887,7 +887,18 @@ export function audit(
   exec(
     'INSERT INTO audit_log (user_matricule, action, details, ip, user_agent, created_at) VALUES (?,?,?,?,?,?)',
     [matricule ?? null, action, details ?? null, ip ?? null, ua ?? null, nowSec()]
-  ).catch(err => console.error('[AUDIT ERROR]', err));
+  ).catch(err => {
+    if (err?.code === 'ER_NO_REFERENCED_ROW_2') {
+      // user_matricule référencé introuvable : retenter sans matricule pour
+      // ne pas faire échouer l'opération principale.
+      exec(
+        'INSERT INTO audit_log (user_matricule, action, details, ip, user_agent, created_at) VALUES (?,?,?,?,?,?)',
+        [null, action, details ?? null, ip ?? null, ua ?? null, nowSec()]
+      ).catch(e => console.error('[AUDIT ERROR RETRY]', e));
+      return;
+    }
+    console.error('[AUDIT ERROR]', err);
+  });
 }
 
 export async function getAuditLogs(params: {

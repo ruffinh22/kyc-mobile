@@ -841,7 +841,13 @@ export function AgentVideoCallPage() {
     setCallElapsed(0);
     setInfo('Lancement de l’appel vers le terrain...');
     logRtc('début d’appel', { terrain: normalizeNumero(terrain), numeroMtn });
-    sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
+    sendWs({
+      type: 'call', numero: normalizeNumero(terrain), numeroMtn,
+      // Identité de l'agent back-office à l'origine de l'appel — relayée par
+      // le serveur (public-dossiers.ts) jusqu'au terrain dans 'incoming-call',
+      // pour affichage ("Agent : X") et rappel direct côté CallHistoryScreen.
+      agentMatricule: user?.matricule, agentNom: [user?.prenom, user?.nom].filter(Boolean).join(' '),
+    });
   };
 
   const forceWakeCall = () => {
@@ -876,7 +882,10 @@ export function AgentVideoCallPage() {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
       forceWakeAttemptsRef.current += 1;
       logRtc('réveil forcé', { attempt: forceWakeAttemptsRef.current, terrain: normalizeNumero(terrain), numeroMtn });
-      sendWs({ type: 'call', numero: normalizeNumero(terrain), numeroMtn });
+      sendWs({
+        type: 'call', numero: normalizeNumero(terrain), numeroMtn,
+        agentMatricule: user?.matricule, agentNom: [user?.prenom, user?.nom].filter(Boolean).join(' '),
+      });
       setInfo(`Réveil forcé • tentative ${forceWakeAttemptsRef.current}`);
     };
 

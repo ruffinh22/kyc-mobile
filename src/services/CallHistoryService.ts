@@ -14,6 +14,14 @@ export type CallHistoryEntry = {
   durationSec?: number;
   createdAt: string;
   updatedAt: string;
+  // ── Identité de l'agent back-office à l'origine de l'appel ────────────────
+  // Renseigné uniquement pour les appels ENTRANTS (reçus par le terrain) :
+  // voir SignalingService/NotificationService, qui reçoivent ces champs dans
+  // le message 'incoming-call' (WS et push FCM) transmis par le serveur
+  // (public-dossiers.ts), lui-même alimenté par VideoCallPage.tsx.
+  // Absents/undefined pour un appel sortant (initié par le terrain lui-même).
+  agentAppelantMatricule?: string;
+  agentAppelantNom?: string;
 };
 
 const STORAGE_KEY = 'call_history_v1';
@@ -34,7 +42,14 @@ export const callHistoryService = {
     }
   },
 
-  async upsert (input: { callUuid?: string; numeroMtn: string; status?: CallHistoryStatus; durationSec?: number }): Promise<CallHistoryEntry[]> {
+  async upsert (input: {
+    callUuid?: string;
+    numeroMtn: string;
+    status?: CallHistoryStatus;
+    durationSec?: number;
+    agentAppelantMatricule?: string;
+    agentAppelantNom?: string;
+  }): Promise<CallHistoryEntry[]> {
     const callUuid = input.callUuid || `call-${Date.now()}`;
     const nextEntry: CallHistoryEntry = {
       id: `${callUuid}-${Date.now()}`,
@@ -44,6 +59,8 @@ export const callHistoryService = {
       durationSec: input.durationSec,
       createdAt: nowIso(),
       updatedAt: nowIso(),
+      agentAppelantMatricule: input.agentAppelantMatricule,
+      agentAppelantNom: input.agentAppelantNom,
     };
 
     try {
@@ -60,6 +77,14 @@ export const callHistoryService = {
           updatedAt: nextEntry.updatedAt,
           numeroMtn: input.numeroMtn || merged[existingIndex].numeroMtn,
           durationSec: typeof input.durationSec === 'number' ? input.durationSec : merged[existingIndex].durationSec,
+          // Une entrée d'historique passe par plusieurs upsert() successifs
+          // (ex. 'incoming' → 'accepted' → 'ended') ; seul le tout premier
+          // appel (celui qui a le contexte 'incoming-call') connaît l'agent
+          // appelant. Les mises à jour de statut suivantes n'ont pas cette
+          // info dans leur payload — on préserve donc la valeur déjà stockée
+          // au lieu de l'écraser par undefined.
+          agentAppelantMatricule: input.agentAppelantMatricule ?? merged[existingIndex].agentAppelantMatricule,
+          agentAppelantNom: input.agentAppelantNom ?? merged[existingIndex].agentAppelantNom,
         };
       } else {
         merged = [nextEntry, ...current];

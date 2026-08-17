@@ -47,26 +47,58 @@ function formatCountdown(seconds: number): string {
 
 function getAutoDistributionRemainingSeconds(dossier: Dossier, now: number, abandonSec: number): number | null {
   if (dossier.statut !== 'en_cours' || !dossier.assigne_le || dossier.assigne_le <= 0) return null;
-  const remaining = Math.floor(abandonSec - ((now / 1000) - dossier.assigne_le));
+  // Même plancher que le serveur (utils/distribution.ts : Math.max(30, abandonSec))
+  // — sans ce plancher, un `abandonSec` configuré en dessous de 30s affichait
+  // un compte à rebours plus court que le délai réellement appliqué côté serveur.
+  const seuil = Math.max(30, abandonSec);
+  const remaining = Math.floor(seuil - ((now / 1000) - dossier.assigne_le));
   return remaining > 0 ? remaining : 0;
 }
 
-function AutoDistributionCountdown({ dossier, abandonSec, now }: { dossier: Dossier; abandonSec: number; now: number }) {
+function AutoDistributionCountdown({ dossier, abandonSec, now, presenceStale }: { dossier: Dossier; abandonSec: number; now: number; presenceStale: boolean }) {
   const remaining = getAutoDistributionRemainingSeconds(dossier, now, abandonSec);
   if (remaining === null) return null;
 
-  const isCritical = remaining <= 30;
+  const eligible = remaining <= 0;
+  // Le serveur ne reprend un dossier que si CES DEUX conditions sont vraies
+  // EN MÊME TEMPS (voir le filet de sécurité dans utils/distribution.ts) :
+  // le délai est dépassé ET l'agent ne donne plus signe de vie (aucun
+  // ping-dispo récent). `eligible` seul ne suffit donc pas — tant que la
+  // connexion de l'agent reste active, le dossier n'est jamais repris, même
+  // si le délai est dépassé (un dossier peut légitimement prendre plus de
+  // temps à traiter que `abandonSec`). Avant, ce badge annonçait une
+  // redistribution imminente dès le délai dépassé, même pour un agent bien
+  // présent en train de traiter son dossier.
+  const imminent = eligible && presenceStale;
+
+  if (eligible && !imminent) {
+    return (
+      <span
+        className="badge"
+        title="Le délai est dépassé, mais votre connexion reste active : le dossier ne sera pas repris tant que vous restez en ligne."
+        style={{
+          background: 'rgba(59, 130, 246, 0.12)',
+          color: 'var(--info, #2563EB)',
+          border: '1px solid rgba(59, 130, 246, 0.2)',
+        }}
+      >
+        ⏳ Délai dépassé — protégé (en ligne)
+      </span>
+    );
+  }
+
+  const isCritical = imminent || remaining <= 30;
   return (
     <span
       className="badge"
-      title={`Redistribution automatique dans ${remaining}s`}
+      title={imminent ? 'Connexion perdue : redistribution imminente' : `Redistribution automatique dans ${remaining}s si la connexion se coupe`}
       style={{
         background: isCritical ? 'rgba(220, 38, 38, 0.14)' : 'rgba(249, 115, 22, 0.16)',
         color: isCritical ? 'var(--danger)' : 'var(--warning)',
         border: isCritical ? '1px solid rgba(220, 38, 38, 0.22)' : '1px solid rgba(249, 115, 22, 0.2)',
       }}
     >
-      ⏳ {formatCountdown(remaining)}
+      ⏳ {imminent ? '00:00' : formatCountdown(remaining)}
     </span>
   );
 }
@@ -278,6 +310,13 @@ export function AgentFileAttente() {
   const [selectedMotif, setSelectedMotif] = useState('');
   const [now, setNow] = useState(Date.now());
   const [abandonSec, setAbandonSec] = useState(120);
+  // Horodatage du dernier échange serveur réussi pour CET agent — sert de
+  // signal de présence côté client, équivalent fonctionnel du `ping-dispo`
+  // que le serveur utilise dans son filet de sécurité (utils/distribution.ts,
+  // table `presence`). Tant que ce contact reste récent, on sait que ce
+  // client est bien en ligne — donc que le serveur voit aussi une présence
+  // fraîche — et le badge de redistribution ne doit jamais afficher "imminent".
+  const [lastContactAt, setLastContactAt] = useState(Date.now());
   const [customMotif, setCustomMotif] = useState('');
   const [motifSearch, setMotifSearch] = useState('');
   const [motifPage, setMotifPage] = useState(1);
@@ -292,14 +331,33 @@ export function AgentFileAttente() {
 
   useEffect(() => {
     let mounted = true;
-    api.getDistributionTiming().then((data) => {
-      if (!mounted) return;
-      setAbandonSec(data?.abandon_sec ?? 120);
-    }).catch(() => {
-      if (mounted) setAbandonSec(120);
-    });
-    return () => { mounted = false; };
+    // Interrogé en boucle (pas juste au montage) : ça garde `abandonSec` à
+    // jour si un superviseur change le réglage en cours de journée, ET ça
+    // sert de sonde de connectivité pour `lastContactAt` — chaque réponse
+    // réussie prouve que ce client est toujours joignable par le serveur,
+    // exactement ce que la table `presence` mesure côté serveur via
+    // ping-dispo. L'intervalle (20s) reste largement sous le plancher
+    // serveur (30s minimum), pour ne jamais accuser une déconnexion à tort.
+    const poll = () => {
+      api.getDistributionTiming().then((data) => {
+        if (!mounted) return;
+        setAbandonSec(data?.abandon_sec ?? 120);
+        setLastContactAt(Date.now());
+      }).catch(() => {
+        // Échec réseau : on NE force PAS abandonSec à sa valeur par défaut
+        // (une valeur déjà connue reste plus fiable qu'un défaut arbitraire),
+        // et surtout on NE met PAS à jour lastContactAt — c'est justement
+        // l'absence de mise à jour qui doit faire vieillir le signal de
+        // présence, en miroir de ce qu'il se passe côté serveur quand
+        // ping-dispo ne parvient plus à joindre le backend.
+      });
+    };
+    poll();
+    const id = window.setInterval(poll, 20_000);
+    return () => { mounted = false; window.clearInterval(id); };
   }, []);
+
+  const presenceStale = (now - lastContactAt) >= Math.max(30, abandonSec) * 1000;
 
   const dossiers = data?.dossiers ?? [];
   const stats = useMemo(() => ({
@@ -312,6 +370,20 @@ export function AgentFileAttente() {
   }), [dossiers]);
 
   const action = async (fn: () => Promise<unknown>, after?: () => void) => { setBusy(true); setErr(null); try { await fn(); setSelected(null); refetch(); after?.(); } catch(e) { setErr(e instanceof Error ? e.message : 'Erreur'); } finally { setBusy(false); } };
+  // Redirige vers la saisie GSM avec l'INTENTION de décision (Accepter/
+  // Rejeter) retenue localement — sans encore l'avoir commise côté serveur.
+  // La décision et la saisie GSM sont désormais commises ensemble, en une
+  // seule opération résiliente, au moment où l'agent enregistre le
+  // formulaire GSM (voir GsmSaisie.submit() dans GsmPages.tsx). Avant, ce
+  // bouton appelait accepterDossier/rejeterDossier immédiatement : un agent
+  // interrompu (onglet fermé, réseau coupé) avant d'avoir terminé la saisie
+  // GSM laissait le dossier définitivement clos côté acquisition, sans
+  // aucune saisie GSM/Gross Add associée.
+  const goToGsmSaisie = (dossierId: string, decision: { statut: 'accepte' | 'rejete'; raison?: string }) => {
+    localStorage.setItem('gsm_dossier_id', dossierId);
+    localStorage.setItem('gsm_pending_decision', JSON.stringify(decision));
+    window.location.href = '/gsm-saisie?dossier=' + dossierId;
+  };
   const motifs = motifsQ.data?.motifs ?? [];
   const filteredMotifs = useMemo(() => {
     const query = motifSearch.trim().toLocaleLowerCase('fr-FR');
@@ -325,6 +397,16 @@ export function AgentFileAttente() {
     if (!dossier.wa_agent) {
       setSuccess(null);
       setErr('Numéro terrain introuvable pour ce dossier.');
+      return;
+    }
+    // BUG CORRIGÉ : le bouton ne vérifiait que wa_agent (identifiant WhatsApp
+    // interne de l'agent) et jamais numero_mtn (le numéro effectivement
+    // composé). Un dossier peut avoir un wa_agent renseigné mais un
+    // numero_mtn vide — la carte affichait alors "Numéro masqué" tout en
+    // laissant le bouton actif, menant à un appel déclenché sans destinataire.
+    if (!dossier.numero_mtn) {
+      setSuccess(null);
+      setErr('Numéro MTN manquant pour ce dossier — impossible de lancer l’appel.');
       return;
     }
     setErr(null);
@@ -423,11 +505,11 @@ export function AgentFileAttente() {
                         <div className="agent-dossier-sub">{age} minute(s) • {d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
-                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent || !d.numero_mtn} onClick={() => handleCallTerrain(d)}>
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: 'inline-block', marginRight: '.35rem', verticalAlign: 'middle' }}>
                             <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.87.33 1.72.63 2.55l-1.2 1.2a15.9 15.9 0 0 0 6 6l1.2-1.2c.83.3 1.68.51 2.55.63A2 2 0 0 1 22 16.92Z" />
                           </svg>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                          {!d.wa_agent ? 'Pas de WA' : !d.numero_mtn ? 'Numéro manquant' : 'Appeler terrain'}
                         </button>
                         <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => action(() => api.prendreEnCharge(d.id))} style={{ marginLeft: 'auto' }}>
                           Prendre en charge
@@ -474,29 +556,26 @@ export function AgentFileAttente() {
                       <div className="agent-dossier-sub">{d.username_agent || 'Agent terrain'} • {d.heure_prise || '—'}</div>
                     </div>
                     <div style={{ display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <AutoDistributionCountdown dossier={d} abandonSec={abandonSec} now={now} />
+                      <AutoDistributionCountdown dossier={d} abandonSec={abandonSec} now={now} presenceStale={presenceStale} />
                       <span className="agent-badge cours">en cours</span>
                     </div>
                   </div>
                   <div className="agent-dossier-body">
                     <div className="agent-dossier-actions">
                       <div>
-                        <div className="agent-dossier-title">{d.numero_mtn}</div>
+                        <div className="agent-dossier-title">{d.numero_mtn || 'Numéro masqué'}</div>
                         <div className="agent-dossier-sub">{d.zone_agent || 'Zone non renseignée'}</div>
                       </div>
                       <div className="agent-actions-inline" style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }}>
-                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent} onClick={() => handleCallTerrain(d)}>
+                        <button className="btn btn-cta btn-sm" disabled={busy || !d.wa_agent || !d.numero_mtn} onClick={() => handleCallTerrain(d)}>
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: 'inline-block', marginRight: '.35rem', verticalAlign: 'middle' }}>
                             <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.08 4.18 2 2 0 0 1 4.06 2h3a2 2 0 0 1 2 1.72c.12.87.33 1.72.63 2.55l-1.2 1.2a15.9 15.9 0 0 0 6 6l1.2-1.2c.83.3 1.68.51 2.55.63A2 2 0 0 1 22 16.92Z" />
                           </svg>
-                          {d.wa_agent ? 'Appeler terrain' : 'Pas de WA'}
+                          {!d.wa_agent ? 'Pas de WA' : !d.numero_mtn ? 'Numéro manquant' : 'Appeler terrain'}
                         </button>
                         <div style={{ display: 'flex', gap: '.5rem', marginLeft: 'auto' }}>
                           <button className="btn btn-cta-danger btn-sm" disabled={busy} onClick={() => { setRejetTarget(d); setSelected(null); }}>Rejeter</button>
-                          <button className="btn btn-cta-success btn-sm" disabled={busy} onClick={() => action(() => api.accepterDossier(d.id), () => {
-                            localStorage.setItem('gsm_dossier_id', d.id);
-                            window.location.href = '/gsm-saisie?dossier=' + d.id;
-                          })}>Accepter</button>
+                          <button className="btn btn-cta-success btn-sm" disabled={busy} onClick={() => goToGsmSaisie(d.id, { statut: 'accepte' })}>Accepter</button>
                         </div>
                       </div>
                     </div>
@@ -545,10 +624,7 @@ export function AgentFileAttente() {
           ) : selected.statut === 'en_cours' && selected.agent_saisie === user?.matricule ? (
             <>
               <button className="btn btn-cta-danger" disabled={busy} onClick={() => { setRejetTarget(selected); setSelected(null); }}>Rejeter</button>
-              <button className="btn btn-cta-success" disabled={busy} onClick={() => action(() => api.accepterDossier(selected.id), () => {
-                localStorage.setItem('gsm_dossier_id', selected.id);
-                window.location.href = '/gsm-saisie?dossier=' + selected.id;
-              })}>Accepter</button>
+              <button className="btn btn-cta-success" disabled={busy} onClick={() => goToGsmSaisie(selected.id, { statut: 'accepte' })}>Accepter</button>
             </>
           ) : null
         }/>
@@ -564,12 +640,14 @@ export function AgentFileAttente() {
               if (selectedMotif === 'autre' && finalReason && !motifs.includes(finalReason)) {
                 await api.setRejectionMotifs([...motifs, finalReason]);
               }
-              await api.rejeterDossier(rejetTarget.id, finalReason);
+              // On ne rejette PAS le dossier ici : le motif choisi est
+              // seulement retenu comme intention, et sera commis avec la
+              // saisie GSM en une seule opération sur la page suivante.
+              const target = rejetTarget;
               setRejetTarget(null);
               setSelectedMotif('');
               setCustomMotif('');
-              localStorage.setItem('gsm_dossier_id', rejetTarget.id);
-              window.location.href = '/gsm-saisie?dossier=' + rejetTarget.id;
+              goToGsmSaisie(target.id, { statut: 'rejete', raison: finalReason });
             })}>Confirmer</button>
           </>
         }>
@@ -681,6 +759,11 @@ export function AgentMesDossiers() {
       setErr('Numéro terrain introuvable pour ce dossier.');
       return;
     }
+    if (!dossier.numero_mtn) {
+      setSuccess(null);
+      setErr('Numéro MTN manquant pour ce dossier — impossible de lancer l’appel.');
+      return;
+    }
     setErr(null);
     setSuccess(null);
     setBusy(true);
@@ -763,8 +846,8 @@ export function AgentMesDossiers() {
               📱 Finaliser GSM
             </button>
           )}
-          <button className="btn btn-success btn-sm" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={!d.wa_agent} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
-            📞 {d.wa_agent ? 'Appeler' : 'Pas de WA'}
+          <button className="btn btn-success btn-sm" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={!d.wa_agent || !d.numero_mtn} onClick={(e) => { e.stopPropagation(); handleCallTerrain(d); }}>
+            📞 {!d.wa_agent ? 'Pas de WA' : !d.numero_mtn ? 'Numéro manquant' : 'Appeler'}
           </button>
         </div>
       )} /></div>}
@@ -773,8 +856,8 @@ export function AgentMesDossiers() {
           {sel.statut === 'accepte' && (
             <button className="btn btn-primary" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} onClick={() => goToGsmSaisie(sel.id)}>📱 Finaliser GSM</button>
           )}
-          <button className="btn btn-success" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={busy || !sel.wa_agent} onClick={() => handleCallTerrain(sel)}>
-            📞 {sel.wa_agent ? 'Appeler' : 'Pas de WA'}
+          <button className="btn btn-success" style={{ whiteSpace:'normal', lineHeight:1.2, maxWidth:'100%' }} disabled={busy || !sel.wa_agent || !sel.numero_mtn} onClick={() => handleCallTerrain(sel)}>
+            📞 {!sel.wa_agent ? 'Pas de WA' : !sel.numero_mtn ? 'Numéro manquant' : 'Appeler'}
           </button>
         </>
       } />}

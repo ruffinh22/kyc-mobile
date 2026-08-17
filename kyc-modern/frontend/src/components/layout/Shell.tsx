@@ -107,6 +107,7 @@ const NAV: Record<Role, NavSection[]> = {
       label: 'GSM & Qualité',
       items: [
         { key: 'compilation-gsm', icon: '📋', label: 'Compilation GSM' },
+        { key: 'referentiels',     icon: '📚', label: 'Référentiels GSM' },
         { key: 'notes-qualite',   icon: '⭐', label: 'Notes qualité' },
       ],
     },

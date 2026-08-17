@@ -51,7 +51,14 @@ const backofficeSockets = new Map<string, WsSocket>();
 // tokens déjà connus.
 const terrainTokens = new Map<string, string>();
 const terrainPresenceTimers = new Map<string, NodeJS.Timeout>();
-const pendingCalls = new Map<string, { callUuid: string; boSocket: WsSocket | null; numeroMtn: string; timer: NodeJS.Timeout | null; connected: boolean }>();
+const pendingCalls = new Map<string, {
+  callUuid: string; boSocket: WsSocket | null; numeroMtn: string; timer: NodeJS.Timeout | null; connected: boolean;
+  // Identité de l'agent back-office qui a déclenché l'appel, conservée
+  // pendant toute la durée de la sonnerie/de l'appel — nécessaire pour la
+  // renvoyer au terrain en cas de reconnexion WS pendant que l'appel sonne
+  // déjà (voir handler 'register' plus bas).
+  agentAppelantMatricule?: string; agentAppelantNom?: string;
+}>();
 
 const CALL_RING_TIMEOUT_MS = 45_000;
 const TERRAIN_PRESENCE_GRACE_MS = 20_000;
@@ -387,6 +394,8 @@ async function sendIncomingCallPush(params: {
   numero: string;
   numeroMtn: string;
   callUuid: string;
+  agentAppelantMatricule?: string;
+  agentAppelantNom?: string;
 }): Promise<boolean> {
   if (!params.token) {
     console.warn('[FCM] push skipped: no token registered for terrain', params.numero);
@@ -417,6 +426,12 @@ async function sendIncomingCallPush(params: {
       numeroMtn: params.numeroMtn,
       callUuid: params.callUuid,
       sentAt: String(Date.now()),
+      // Identité de l'agent back-office appelant, si connue (voir handler
+      // 'call' plus bas). FCM exige des valeurs `data` de type string — on
+      // envoie une chaîne vide plutôt qu'un champ absent, pour que le client
+      // (NotificationService.handlePushPayload) ait un contrat stable à parser.
+      agentAppelantMatricule: params.agentAppelantMatricule ?? '',
+      agentAppelantNom: params.agentAppelantNom ?? '',
     },
     // `android.priority: 'high'` — requis par l'API v1 (seule utilisée
     // désormais, voir sendFcmHttp). Sans lui, la priorité par défaut est
@@ -1117,7 +1132,15 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
     socket.on('message', (raw: Buffer) => {
       try {
-        const msg = JSON.parse(raw.toString()) as { type: string; room?: string; role?: string; numero?: string; numeroMtn?: string; fcmToken?: string; [k: string]: unknown };
+        const msg = JSON.parse(raw.toString()) as {
+          type: string; room?: string; role?: string; numero?: string; numeroMtn?: string; fcmToken?: string;
+          // Identité de l'agent back-office envoyée par VideoCallPage.tsx avec le
+          // message 'call' — ce WebSocket n'est PAS authentifié (voir handler
+          // ci-dessous), le serveur ne connaît donc cette identité QUE si le
+          // client la lui transmet explicitement ici.
+          agentMatricule?: string; agentNom?: string;
+          [k: string]: unknown;
+        };
 
         if (msg.type === 'ping') {
           send({ type: 'pong' });
@@ -1174,6 +1197,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             if (pending && !pending.connected) {
               sendSocketPayload(socket, {
                 type: 'incoming-call', numeroMtn: pending.numeroMtn, numero, callUuid: pending.callUuid,
+                agentAppelantMatricule: pending.agentAppelantMatricule, agentAppelantNom: pending.agentAppelantNom,
               });
               sendSocketPayload(pending.boSocket, { type: 'call-delivered', numero, callUuid: pending.callUuid });
               console.log('[SIGNAL] terrain reconnecté pendant appel en attente (push)', { numero, callUuid: pending.callUuid });
@@ -1189,6 +1213,13 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         if (msg.type === 'call' && role === 'backoffice' && numero) {
           const target = normalizeNumero(msg.numero || numero);
           const numeroMtn = String(msg.numeroMtn ?? '');
+          // Identité de l'agent back-office à l'origine de l'appel, envoyée
+          // explicitement par le client (VideoCallPage.tsx) puisque ce
+          // WebSocket n'est pas authentifié. Purement informative côté
+          // terrain (affichage "Agent : X" + bouton "Rappeler" dans
+          // CallHistoryScreen) — aucune logique de sécurité n'en dépend.
+          const agentAppelantMatricule = String(msg.agentMatricule ?? '') || undefined;
+          const agentAppelantNom = String(msg.agentNom ?? '') || undefined;
 
           // Un appel est déjà en cours de sonnerie pour ce terrain (double-clic
           // "Démarrer l'appel"/"Recommencer" côté back-office, onglet dupliqué,
@@ -1219,7 +1250,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           // tourne, push pour réveiller CallKeep/le service foreground sinon)
           // est le comportement standard des apps VoIP professionnelles.
           if (pushToken) {
-            void sendIncomingCallPush({ token: pushToken, numero: target, numeroMtn, callUuid });
+            void sendIncomingCallPush({ token: pushToken, numero: target, numeroMtn, callUuid, agentAppelantMatricule, agentAppelantNom });
           }
 
           if (!targetSocket) {
@@ -1245,7 +1276,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
               console.log('[SIGNAL] no-answer timeout (push seul, jamais reconnecté)', { target, callUuid });
             }, CALL_RING_TIMEOUT_MS);
 
-            pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer: pushTimer, connected: false });
+            pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer: pushTimer, connected: false, agentAppelantMatricule, agentAppelantNom });
             return;
           }
           // callUuid désormais transmis au mobile : indispensable pour que le
@@ -1253,7 +1284,9 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           // convergent vers le MÊME identifiant d'appel côté SignalingService/
           // NotificationService, au lieu de générer chacun un uuid local et
           // risquer un double écran d'appel entrant pour le même appel.
-          sendSocketPayload(targetSocket, { type: 'incoming-call', numeroMtn, numero: target, callUuid });
+          sendSocketPayload(targetSocket, {
+            type: 'incoming-call', numeroMtn, numero: target, callUuid, agentAppelantMatricule, agentAppelantNom,
+          });
           send({ type: 'call-delivered', numero: target, callUuid });
 
           const timer = setTimeout(() => {
@@ -1263,7 +1296,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
             console.log('[SIGNAL] no-answer timeout', { target, callUuid });
           }, CALL_RING_TIMEOUT_MS);
 
-          pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer, connected: false });
+          pendingCalls.set(target, { callUuid, boSocket: socket, numeroMtn, timer, connected: false, agentAppelantMatricule, agentAppelantNom });
           return;
         }
 

@@ -131,6 +131,8 @@ export function CallHistoryScreen({ navigation }: any) {
       statusLabel(item.status),
       item.callUuid,
       item.updatedAt,
+      item.agentAppelantNom,
+      item.agentAppelantMatricule,
     ].some((value) => value?.toLowerCase().includes(query));
   });
 
@@ -143,23 +145,47 @@ export function CallHistoryScreen({ navigation }: any) {
     navigation.navigate('OutgoingCall', { numeroMtn: dialNumber });
   };
 
-  const renderItem = ({ item }: { item: CallHistoryEntry }) => (
-    <View style={s.card}>
-      <View style={s.headerRow}>
-        <View style={s.left}>
-          <Text style={s.numero}>{item.numeroMtn}</Text>
-          <Text style={s.statusText}>{statusLabel(item.status)}</Text>
+  const renderItem = ({ item }: { item: CallHistoryEntry }) => {
+    const isIncomingType = item.status === 'incoming' || item.status === 'accepted' || item.status === 'declined' || item.status === 'missed';
+    const agentLabel = item.agentAppelantNom || item.agentAppelantMatricule;
+    return (
+      <View style={s.card}>
+        <View style={s.headerRow}>
+          <View style={s.left}>
+            <Text style={s.numero}>{item.numeroMtn}</Text>
+            {isIncomingType ? (
+              <Text style={s.agentLabel}>
+                {agentLabel ? `Agent : ${agentLabel}` : 'Agent : —'}
+              </Text>
+            ) : null}
+          </View>
+          <View style={s.rightCol}>
+            <View style={s.statusDurationRow}>
+              <Text style={s.statusInline} numberOfLines={1}>{statusLabel(item.status)}</Text>
+              <View style={s.durationBadge}>
+                <Text style={s.durationBadgeText}>{formatDuration(item.durationSec) || '00:00'}</Text>
+              </View>
+            </View>
+            {isIncomingType ? (
+              <TouchableOpacity
+                  style={[s.rappelerBtn, { backgroundColor: '#03df20', borderColor: '#02b316', shadowColor: '#02b316' }]}
+                onPress={() => navigation.navigate('OutgoingCall', { numeroMtn: item.numeroMtn })}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={`Rappeler ${agentLabel || item.numeroMtn}`}
+              >
+                <Text style={s.rappelerBtnTxt}>🔁 Rappeler</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
-        <View style={s.durationBadge}>
-          <Text style={s.durationBadgeText}>{formatDuration(item.durationSec) || '00:00'}</Text>
+        <View style={s.metaRow}>
+          <Text style={s.meta}>{formatDate(item.updatedAt)}</Text>
+          <Text style={s.meta}>{statusIcon(item.status)} {item.callUuid.slice(-6)}</Text>
         </View>
       </View>
-      <View style={s.metaRow}>
-        <Text style={s.meta}>{formatDate(item.updatedAt)}</Text>
-        <Text style={s.meta}>{statusIcon(item.status)} {item.callUuid.slice(-6)}</Text>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={s.root}>
@@ -263,8 +289,12 @@ const s = StyleSheet.create({
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   left: { flex: 1, marginRight: 8 },
   numero: { color: C.ink, fontSize: T.md, fontWeight: '800' },
-  statusText: { color: C.ink3, fontSize: T.xs, marginTop: 2 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  agentLabel: { color: C.ink2, fontSize: T.xs, marginTop: 3, fontWeight: '600' },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  rightCol: { alignItems: 'flex-end', gap: 6 },
+  // Statut + durée sur la même ligne, statut juste avant la durée.
+  statusDurationRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusInline: { color: C.ink3, fontSize: T.xs, fontWeight: '700' },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' },
   meta: { color: C.ink3, fontSize: T.xs },
   durationBadge: {
@@ -276,6 +306,16 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   durationBadgeText: { color: C.ink, fontSize: T.xs, fontWeight: '800' },
+  rappelerBtn: {
+    alignSelf: 'flex-end',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: C.success ?? '#08cf33',
+    borderRadius: R.pill, paddingVertical: 8, paddingHorizontal: 14,
+    borderWidth: 1, borderColor: '#047857',
+    shadowColor: '#047857', shadowOpacity: 0.32, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  rappelerBtnTxt: { color: '#fff', fontSize: T.sm, fontWeight: '900', letterSpacing: 0.4 },
   badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, alignSelf: 'flex-start' },
   badgeText: { fontSize: T.xs, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
   uuid: { marginTop: 8, color: C.ink3, fontSize: T.xs },

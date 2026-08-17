@@ -124,6 +124,13 @@ function ActionButton({
 export function IncomingCallScreen({ route, navigation }: any) {
   const { numeroMtn, callUuid } = route.params ?? {};
   const callStore = useCallStore();
+  // Identité de l'agent back-office appelant : lue depuis le callStore (posé
+  // par setIncomingCall via SignalingService/NotificationService), pas depuis
+  // route.params — ainsi ce champ est disponible même si App.tsx ne le
+  // transmet pas explicitement dans les params de navigation.
+  const agentAppelantMatricule = callStore.agentAppelantMatricule;
+  const agentAppelantNom = callStore.agentAppelantNom;
+  const agentLabel = agentAppelantNom || agentAppelantMatricule;
 
   // Anneau de présence unique, retenu — pas de "carnaval" de halos.
   const ringScale = useRef(new Animated.Value(1)).current;
@@ -168,7 +175,7 @@ export function IncomingCallScreen({ route, navigation }: any) {
       stopAll();
       notificationService.endNativeCall(callUuid);
       signalingService.refuseCall();
-      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'missed' });
+      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'missed', agentAppelantMatricule, agentAppelantNom });
       callStore.resetCall();
       navigation.replace('Idle');
     }, CALL_TIMEOUT_MS);
@@ -194,12 +201,21 @@ export function IncomingCallScreen({ route, navigation }: any) {
       // abonné qui arrive après coup, donc CallScreen ne perd aucun événement
       // même si la négociation WebRTC se termine avant qu'il ne soit monté.
       await signalingService.acceptCall();
-      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'accepted' });
+      void callHistoryService.upsert({ callUuid, numeroMtn, status: 'accepted', agentAppelantMatricule, agentAppelantNom });
       // Pas de navigation ici : App.tsx force déjà Call dès que
       // callStore.status passe à 'connecting' (juste au-dessus), sans
       // attendre que la caméra/micro finissent de s'ouvrir — c'est même plus
       // réactif, et ça évite une 2e navigation concurrente avec App.tsx.
     } catch (e) {
+      // Cas particulier : l'appel a déjà été terminé côté serveur
+      // (hangup/refus/timeout) PENDANT que la caméra s'ouvrait.
+      // SignalingService a déjà tout nettoyé de son côté, et un TOUT nouvel
+      // appel entrant a pu démarrer entre-temps — on ne doit surtout pas le
+      // refuser ni forcer un retour à Idle par-dessus lui.
+      if (e instanceof Error && e.message === 'call-superseded') {
+        console.warn('[IncomingCall] acceptCall abandonné : appel déjà terminé côté serveur pendant l’ouverture caméra');
+        return;
+      }
       console.warn('[IncomingCall] acceptCall a échoué, repli sur refus :', e);
       notificationService.endNativeCall(callUuid);
       signalingService.refuseCall();
@@ -212,7 +228,7 @@ export function IncomingCallScreen({ route, navigation }: any) {
     stopAll();
     notificationService.endNativeCall(callUuid);
     signalingService.refuseCall();
-    void callHistoryService.upsert({ callUuid, numeroMtn, status: 'declined' });
+    void callHistoryService.upsert({ callUuid, numeroMtn, status: 'declined', agentAppelantMatricule, agentAppelantNom });
     callStore.resetCall();
     navigation.replace('Idle');
   };
@@ -253,7 +269,9 @@ export function IncomingCallScreen({ route, navigation }: any) {
             <Text style={s.mtnTagTxt}>Agent MTN vérifié</Text>
           </View>
           <Text style={s.callerName}>Vérification d'identité</Text>
-          <Text style={s.callerSub}>Session vidéo sécurisée en cours d'ouverture</Text>
+          <Text style={s.callerSub}>
+            {agentLabel ? `Appel de ${agentLabel}` : "Session vidéo sécurisée en cours d'ouverture"}
+          </Text>
         </View>
 
         <View style={s.numCard}>

@@ -18,6 +18,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.Process;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -82,6 +83,10 @@ public class KycForegroundCallService extends Service {
     private Vibrator vibrator;
     private String currentNumero = "…";
     private String currentCallUuid = null;
+    // Anti-doublon pour launchIncomingCallActivity (voir onStartCommand/ACTION_RING) :
+    // évite de relancer l'Activity deux fois pour le même appel si WS et FCM
+    // déclenchent chacun un RING pour le même callUuid.
+    private String lastLaunchedCallUuid = null;
 
     // ── Démarrage du service ──────────────────────────────────────────────
     @Override
@@ -102,34 +107,24 @@ public class KycForegroundCallService extends Service {
             acquireWakeLock();
             startNativeRingtone();
             startNativeVibration();
-            // BUG CORRIGÉ : cet appel faisait auparavant un startActivity()
-            // DIRECT depuis ce Service pour contourner le cas "écran allumé,
-            // app en arrière-plan" (où le full-screen intent ci-dessus, lui,
-            // se dégrade en simple notification heads-up — comportement
-            // documenté d'Android, pas un bug). Mais lancer une Activity
-            // depuis un Service qui n'a lui-même aucune fenêtre visible est
-            // exactement ce que les "background activity launch restrictions"
-            // d'Android (10+, durcies en 12+) sont censées bloquer : ce n'est
-            // pas une des exemptions reconnues par le système (pas de fenêtre
-            // visible, pas de SYSTEM_ALERT_WINDOW...). En pratique l'appel
-            // était donc silencieusement rejeté par l'OS dans ce cas précis
-            // (le try/catch plus bas avalait l'exception sans qu'elle
-            // remonte nulle part) — c'est-à-dire justement le cas visé par ce
-            // contournement. Résultat observé : la notification + sonnerie
-            // s'affichaient bien (ça, ça marche toujours), mais l'écran
-            // d'appel ne s'ouvrait jamais tout seul.
+            // RÉACTIVÉ (voir discussion) : le full-screen intent de la notification
+            // ne ramène l'Activity au premier plan de façon fiable QUE quand l'écran
+            // est verrouillé. App juste en arrière-plan (écran allumé, utilisateur
+            // sur une autre app/l'accueil) : Android ne relance pas l'Activity tout
+            // seul, et changer l'état de navigation React (App.tsx) ne fait rien
+            // voir à l'écran si l'Activity elle-même n'est pas au premier plan.
+            // C'était la cause du symptôme "ça sonne mais l'écran ne s'affiche pas".
             //
-            // Il n'existe pas de mécanisme public fiable pour forcer une
-            // Activity depuis un Service en arrière-plan sur Android moderne :
-            // le seul chemin sanctionné par l'OS reste le full-screen intent
-            // (voir buildRingingNotification → setFullScreenIntent), qui
-            // s'auto-déclenche de façon fiable quand l'appareil est
-            // verrouillé, et se dégrade en notification standard sinon — au
-            // même titre qu'un appel téléphonique classique. C'est une limite
-            // native d'Android, pas quelque chose que cette app peut forcer.
-            //
-            // launchIncomingCallActivity() / lastLaunchedCallUuid sont donc
-            // retirés de ce chemin plutôt que laissés en dead code trompeur.
+            // Garde-fou anti-doublon (lastLaunchedCallUuid) : le launchMode
+            // singleTask + FLAG_ACTIVITY_SINGLE_TOP|CLEAR_TOP rend cet appel sans
+            // danger même si l'Activity est déjà au premier plan (Android appelle
+            // juste onNewIntent(), pas de recréation) — mais on évite quand même de
+            // le déclencher deux fois pour le MÊME appel (WS + FCM peuvent tous les
+            // deux déclencher un RING pour le même callUuid, comme observé en prod).
+            if (!java.util.Objects.equals(lastLaunchedCallUuid, currentCallUuid)) {
+                lastLaunchedCallUuid = currentCallUuid;
+                launchIncomingCallActivity(currentNumero, currentCallUuid);
+            }
             return START_STICKY;
 
         } else if (ACTION_ANSWER.equals(action)) {
@@ -151,6 +146,7 @@ public class KycForegroundCallService extends Service {
             stopNativeRingtone();
             stopNativeVibration();
             releaseWakeLock();
+            lastLaunchedCallUuid = null;
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
             stopSelf();
         }
@@ -197,16 +193,11 @@ public class KycForegroundCallService extends Service {
                 stopNativeRingtone();
                 return true;
             });
-            // Copie finale : ringtoneUri est réassignée plus haut (repli custom →
-            // système → valide), donc pas "effectively final" — un lambda ne peut
-            // capturer qu'une variable qui ne change plus jamais après son
-            // initialisation. On fige sa valeur ici pour le listener async.
-            final Uri finalRingtoneUri = ringtoneUri;
             ringtonePlayer.setOnPreparedListener(mp -> {
                 try {
                     mp.start();
-                    Log.i(TAG, "Sonnerie native démarrée (async): " + finalRingtoneUri);
-                    appendDiagnosticLog("I", "Sonnerie native démarrée (async): " + finalRingtoneUri, null);
+                    Log.i(TAG, "Sonnerie native démarrée (async): " + ringtoneUri);
+                    appendDiagnosticLog("I", "Sonnerie native démarrée (async): " + ringtoneUri, null);
                 } catch (Exception e) {
                     Log.e(TAG, "Erreur démarrage sonnerie après préparation", e);
                     stopNativeRingtone();
@@ -337,6 +328,19 @@ public class KycForegroundCallService extends Service {
         }
     }
 
+    private void launchIncomingCallActivity(String numeroMtn, String callUuid) {
+        try {
+            Intent activityIntent = new Intent(this, MainActivity.class);
+            activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            activityIntent.putExtra("numeroMtn", numeroMtn);
+            activityIntent.putExtra("callUuid", callUuid);
+            startActivity(activityIntent);
+            Log.i(TAG, "Activity d’appel entrant lancée depuis le service foreground");
+        } catch (Exception e) {
+            Log.w(TAG, "Impossible de lancer l’activité d’appel entrant", e);
+            appendDiagnosticLog("W", "Impossible de lancer l’activité d’appel entrant", e);
+        }
+    }
 
     // ── Notification pendant la sonnerie ──────────────────────────────────
     private Notification buildRingingNotification(String numeroMtn) {

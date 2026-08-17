@@ -33,6 +33,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, []);
 
+  // Ecouter l'événement global 'session_expired' (dispatched par apiFetch sur 401)
+  useEffect(() => {
+    const handler = () => {
+      try {
+        // Clean local state without calling backend logout (token déjà invalide)
+        setUser(null); setToken(null);
+        localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+        localStorage.removeItem('session_expired');
+        // navigate SPA to login
+        try {
+          window.history.pushState({}, '', '/login');
+          window.dispatchEvent(new Event('popstate'));
+        } catch (e) {
+          try { window.location.href = '/login'; } catch (ee) { /* ignore */ }
+        }
+      } catch (e) {
+        console.warn('[Auth] erreur handling session_expired', e);
+      }
+    };
+    window.addEventListener('session_expired', handler as EventListener);
+    return () => window.removeEventListener('session_expired', handler as EventListener);
+  }, []);
+
   const login = useCallback(async (matricule: string, password: string): Promise<User> => {
     setLoading(true); setError(null);
     try {
@@ -42,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(u); setToken(r.token);
       localStorage.setItem(TOKEN_KEY, r.token);
       localStorage.setItem(USER_KEY, JSON.stringify(u));
+      try { localStorage.removeItem('session_expired'); } catch (e) { /* ignore */ }
       return u;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Connexion impossible';
@@ -52,7 +76,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try { await api.logout(); } finally {
       setUser(null); setToken(null);
-      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      // Clear auth and commonly persisted client state that should not survive logout
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem('gsm_dossier_id');
+      localStorage.removeItem('kyc_acq_agent');
+      localStorage.removeItem('gsm_pending_decision');
+      // Ensure SPA navigates to login so the UI is not left on a protected page
+      try {
+        window.history.pushState({}, '', '/login');
+        window.dispatchEvent(new Event('popstate'));
+      } catch (e) {
+        // Fallback to full reload if pushState is not available
+        try { window.location.href = '/login'; } catch (ee) { /* ignore */ }
+      }
     }
   }, []);
 

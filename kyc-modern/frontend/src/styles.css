@@ -88,11 +88,18 @@ body {
 }
 
 /* ── Shell layout ─────────────────────────────────────────────────────────── */
+/* height (pas min-height) + overflow:hidden : contraint le shell à l'écran.
+   Sans ça, .main déborde → toute la page grandit et scrolle, sidebar compris.
+   Avec une hauteur fixe, la rangée "1fr" a une taille réelle, donc .sidebar
+   et .main (stretch par défaut en grid) héritent d'une hauteur définie et
+   leur overflow-y:auto individuel peut enfin faire effet : le sidebar reste
+   ancré, seul le contenu de la page défile. */
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--topbar-h) 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ── Auth shell ───────────────────────────────────────────────────────────── */
@@ -231,9 +238,42 @@ body {
   background: linear-gradient(180deg, #012868 0%, #003087 55%, #012a6e 100%);
   border-right: none;
   padding: 1.1rem 0 2rem;
+  height: 100%;
   overflow-y: auto;
   scrollbar-width: none;
 }
+
+/* ── Identité par rôle ────────────────────────────────────────────────────
+   Même charte MTN (accent jaune constant = signature de marque), mais le
+   fond sidebar/topbar se fonce progressivement avec le niveau d'accès :
+   Agent → bleu MTN standard (identité de base)
+   Superviseur → bleu-ardoise plus profond, registre "pilotage d'équipe"
+   Admin → graphite quasi-noir, registre "console de gouvernance"
+   Ça donne un repère instantané du rôle actif sans jamais dépendre du texte
+   du role-chip, et ça évite qu'un agent confonde son espace avec celui d'un
+   admin dans un onglet resté ouvert. */
+
+.shell--superviseur .sidebar {
+  background: linear-gradient(180deg, #0F1D3D 0%, #17285A 55%, #0F1D3D 100%);
+}
+
+.shell--superviseur .topbar {
+  background: linear-gradient(90deg, #0F1D3D 0%, #17285A 100%);
+}
+
+.shell--admin .sidebar {
+  background: linear-gradient(180deg, #16181F 0%, #1F222B 55%, #16181F 100%);
+}
+
+.shell--admin .topbar {
+  background: linear-gradient(90deg, #16181F 0%, #24262F 100%);
+  /* Registre plus feutré : la barre de signature jaune s'efface au profit
+     d'un liseré or discret, cohérence "console d'administration" plutôt que
+     "espace opérationnel" */
+  border-bottom: 3px solid #B8963E;
+}
+
+.shell--admin .topbar-logo { box-shadow: 0 0 0 2px rgba(184,150,62,.35); }
 
 .sidebar::-webkit-scrollbar { display: none; }
 
@@ -283,6 +323,18 @@ body {
   box-shadow: inset 3px 0 0 var(--mtn-yellow);
 }
 
+.shell--superviseur .nav-btn.active {
+  background: rgba(120,170,255,.14);
+  border-color: rgba(120,170,255,.28);
+  box-shadow: inset 3px 0 0 #78AAFF;
+}
+
+.shell--admin .nav-btn.active {
+  background: rgba(184,150,62,.16);
+  border-color: rgba(184,150,62,.3);
+  box-shadow: inset 3px 0 0 #B8963E;
+}
+
 .nav-btn.active .nav-icon { opacity: 1; }
 
 .nav-icon {
@@ -299,6 +351,7 @@ body {
 /* ── MAIN ─────────────────────────────────────────────────────────────────── */
 .main {
   padding: 1.75rem 2rem;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1697,6 +1750,9 @@ textarea { resize: vertical; min-height: 80px; }
   .shell {
     grid-template-columns: 1fr;
     grid-template-rows: var(--topbar-h) auto 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .sidebar {
@@ -1704,6 +1760,8 @@ textarea { resize: vertical; min-height: 80px; }
     flex-wrap: wrap;
     padding: .5rem;
     border-bottom: 3px solid var(--mtn-yellow);
+    height: auto;
+    overflow-y: visible;
   }
 
   .sidebar-section-label { display: none; }
@@ -1714,7 +1772,11 @@ textarea { resize: vertical; min-height: 80px; }
     font-size: 12px;
   }
 
-  .main { padding: 1.25rem; }
+  .main {
+    padding: 1.25rem;
+    height: auto;
+    overflow-y: visible;
+  }
 
   .form-row { grid-template-columns: 1fr; }
 

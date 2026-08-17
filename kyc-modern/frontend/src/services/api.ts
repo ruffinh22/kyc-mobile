@@ -56,6 +56,24 @@ export async function apiFetch<T>(endpoint: string, opts: RequestInit & { json?:
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
+    // Gestion automatique du token expiré / non autorisé : vider le token
+    // en mémoire et forcer une redirection SPA vers /login pour ré-auth.
+    if (res.status === 401) {
+      console.warn('[apiFetch] 401 Unauthorized — clearing token and redirecting to /login');
+      setToken(null);
+      // marqueur pour UI globale indiquant session expirée
+      try { localStorage.setItem('session_expired', '1'); } catch (e) { /* ignore */ }
+      if (typeof window !== 'undefined') {
+        try {
+          // notify SPA and other listeners that session expired
+          window.dispatchEvent(new CustomEvent('session_expired'));
+          window.history.pushState({}, '', '/login');
+          window.dispatchEvent(new Event('popstate'));
+        } catch (e) {
+          try { window.location.href = '/login'; } catch (ee) { /* ignore */ }
+        }
+      }
+    }
     console.error('[apiFetch] Erreur:', res.status, body);
     throw new ApiError(body?.error || res.statusText || 'Erreur API', res.status, body?.details);
   }

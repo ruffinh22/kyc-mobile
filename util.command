@@ -27,17 +27,19 @@ curl -X POST -H "Authorization: Bearer $TOKEN" "http://localhost:3001/api/admin/
 
 export DB_HOST=127.0.0.1
 export DB_PORT=3306
-export DB_USER=root
-export DB_PASS='your_db_password'
+export DB_USER=kyc_user
+export DB_PASS='Genereux@55'
 export DB_NAME=kyc_v4
 export FORCE_MIGRATIONS_CONFIRM=1
 yarn migrate:force --name=20260814_add_dispo_seq
 
 
-
+DB_USER=kyc_user
+DB_PASS=Genereux@55
+DB_NAME=kyc_prod
 
 FORCE_MIGRATIONS_CONFIRM=1 \
-DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=root DB_PASS='your_db_password' DB_NAME=kyc_v4 \
+DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=kyc_user DB_PASS='Genereux@55'' DB_NAME=kyc_v4 \
 yarn migrate:force --name=20260814_add_dispo_seq
 
 

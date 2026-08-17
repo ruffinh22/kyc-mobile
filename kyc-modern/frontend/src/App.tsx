@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { Alert } from './components/ui';
 import { useHeartbeat } from './hooks';
 import { LoginPage, ChangePasswordPage } from './pages/AuthPages';
 import { Topbar, Sidebar } from './components/layout/Shell';
@@ -208,7 +209,7 @@ function AuthenticatedShell() {
   if (user.must_change_password) return <ChangePasswordPage />;
 
   return (
-    <div className="shell">
+    <div className={`shell shell--${user.role}`}>
       <Topbar />
       <Sidebar role={user.role} active={page} onChange={navigateToPage} />
       <main className="main">
@@ -224,10 +225,17 @@ function AuthenticatedShell() {
 function AppContent() {
   const { user, loading } = useAuth();
   const [pathname, setPathname] = useState(() => getRoute());
+  const [sessionExpired, setSessionExpired] = useState<boolean>(() => {
+    try { return !!localStorage.getItem('session_expired'); } catch { return false; }
+  });
 
   useEffect(() => {
     const handleRouteChange = () => setPathname(getRoute());
     window.addEventListener('popstate', handleRouteChange);
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === 'session_expired') setSessionExpired(!!ev.newValue);
+    };
+    window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('popstate', handleRouteChange);
   }, []);
 
@@ -249,10 +257,20 @@ function AppContent() {
   }
 
   if (pathname === '/login') {
-    return user ? <AuthenticatedShell /> : <LoginPage />;
+    return (
+      <>
+        {sessionExpired && <div style={{ padding: '.75rem' }}><Alert kind="error">Session expirée ou token invalide — reconnectez-vous.</Alert></div>}
+        {user ? <AuthenticatedShell /> : <LoginPage />}
+      </>
+    );
   }
 
-  return user ? <AuthenticatedShell /> : <AccueilPage />;
+  return (
+    <>
+      {sessionExpired && <div style={{ padding: '.75rem' }}><Alert kind="error">Session expirée ou token invalide — reconnectez-vous.</Alert></div>}
+      {user ? <AuthenticatedShell /> : <AccueilPage />}
+    </>
+  );
 }
 
 export default function App() {

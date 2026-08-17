@@ -982,17 +982,32 @@ export async function getReferentiels(): Promise<Record<string, string[]>> {
       const v = String(r['value']);
       if (!v) continue;
       if (!Array.isArray(base[f])) base[f] = [];
-      if (!base[f].includes(v)) base[f].push(v);
+      base[f].push(v);
     }
   } catch (err) {
     // si la table n'existe pas encore, on ignore silencieusement
+  }
+
+  // Normalisation: déduplication et tri alphabétique pour stabilité
+  for (const k of Object.keys(base)) {
+    const set = Array.from(new Set((base[k] || []).map(s => String(s).trim()).filter(Boolean)));
+    set.sort((a, b) => a.localeCompare(b, 'fr'));
+    base[k] = set;
   }
 
   return base;
 }
 
 export async function setReferentiels(data: Record<string, string[]>): Promise<void> {
-  await setConfig('referentiels_gsm', JSON.stringify(data));
+  // Normaliser avant de stocker (dédup + trim + tri)
+  const norm: Record<string, string[]> = {};
+  for (const k of Object.keys(data)) {
+    const arr = Array.isArray(data[k]) ? data[k] : [];
+    const set = Array.from(new Set(arr.map(s => String(s).trim()).filter(Boolean)));
+    set.sort((a, b) => a.localeCompare(b, 'fr'));
+    norm[k] = set;
+  }
+  await setConfig('referentiels_gsm', JSON.stringify(norm));
 }
 
 export async function getUnknownReferentielValues(opts?: { field?: string; limit?: number; offset?: number }): Promise<{ rows: any[]; total: number }> {

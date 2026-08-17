@@ -88,6 +88,13 @@ body {
 }
 
 /* ── Shell layout ─────────────────────────────────────────────────────────── */
+/* Volontairement INCHANGÉ par rapport à l'original : min-height (pas height),
+   pas d'overflow:hidden. La page défile normalement comme avant — c'est
+   .sidebar seul, ci-dessous, qui devient "sticky" pour rester ancré. Cette
+   approche ne touche à rien d'autre : zéro risque de casser le scroll ou le
+   rendu d'une page (contrairement à la tentative précédente qui contraignait
+   toute la hauteur du shell et avait déclenché un bug de CSS Grid sur les
+   pages longues comme GSM). */
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
@@ -233,6 +240,17 @@ body {
   padding: 1.1rem 0 2rem;
   overflow-y: auto;
   scrollbar-width: none;
+
+  /* ── Fix "sidebar qui bouge" ────────────────────────────────────────────
+     position: sticky, PAS de changement sur .shell/.main. Le sidebar reste
+     ancré à l'écran pendant que la page défile normalement (comme avant) ;
+     top décalé de la hauteur de la topbar (elle-même sticky top:0) pour ne
+     pas passer dessous, et height calé sur le reste du viewport pour occuper
+     toute la hauteur visible restante sans dépendre de la hauteur de .main. */
+  position: sticky;
+  top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+  align-self: start; /* nécessaire pour qu'un item de grid en 1fr respecte le sticky au lieu de s'étirer sur toute la piste */
 }
 
 .sidebar::-webkit-scrollbar { display: none; }
@@ -283,6 +301,18 @@ body {
   box-shadow: inset 3px 0 0 var(--mtn-yellow);
 }
 
+.shell--superviseur .nav-btn.active {
+  background: rgba(120,170,255,.14);
+  border-color: rgba(120,170,255,.28);
+  box-shadow: inset 3px 0 0 #78AAFF;
+}
+
+.shell--admin .nav-btn.active {
+  background: rgba(184,150,62,.16);
+  border-color: rgba(184,150,62,.3);
+  box-shadow: inset 3px 0 0 #B8963E;
+}
+
 .nav-btn.active .nav-icon { opacity: 1; }
 
 .nav-icon {
@@ -295,6 +325,33 @@ body {
 
 .nav-btn:hover .nav-icon,
 .nav-btn.active .nav-icon { opacity: 1; }
+
+/* ── Identité par rôle ────────────────────────────────────────────────────
+   Purement cosmétique : ne touche à AUCUNE propriété de layout/scroll, donc
+   aucun risque pour les autres pages. Même charte MTN (accent jaune constant
+   = signature de marque), le fond sidebar/topbar se fonce progressivement
+   avec le niveau d'accès :
+   Agent → bleu MTN standard (identité de base, inchangé)
+   Superviseur → bleu-ardoise plus profond, registre "pilotage d'équipe"
+   Admin → graphite quasi-noir, registre "console de gouvernance" */
+.shell--superviseur .sidebar {
+  background: linear-gradient(180deg, #0F1D3D 0%, #17285A 55%, #0F1D3D 100%);
+}
+
+.shell--superviseur .topbar {
+  background: linear-gradient(90deg, #0F1D3D 0%, #17285A 100%);
+}
+
+.shell--admin .sidebar {
+  background: linear-gradient(180deg, #16181F 0%, #1F222B 55%, #16181F 100%);
+}
+
+.shell--admin .topbar {
+  background: linear-gradient(90deg, #16181F 0%, #24262F 100%);
+  border-bottom: 3px solid #B8963E;
+}
+
+.shell--admin .topbar-logo { box-shadow: 0 0 0 2px rgba(184,150,62,.35); }
 
 /* ── MAIN ─────────────────────────────────────────────────────────────────── */
 .main {
@@ -1704,6 +1761,10 @@ textarea { resize: vertical; min-height: 80px; }
     flex-wrap: wrap;
     padding: .5rem;
     border-bottom: 3px solid var(--mtn-yellow);
+    /* Sur mobile le sidebar redevient une barre horizontale dans le flux
+       normal — le sticky vertical n'a plus de sens ici. */
+    position: static;
+    height: auto;
   }
 
   .sidebar-section-label { display: none; }

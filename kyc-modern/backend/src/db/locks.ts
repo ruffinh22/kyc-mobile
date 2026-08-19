@@ -21,7 +21,7 @@
 // partageait aucun état avec la route /appeler.
 // ============================================================================
 
-import { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { getPool, nowSec } from './index';
 
 const DUPLICATE_ENTRY = 'ER_DUP_ENTRY';

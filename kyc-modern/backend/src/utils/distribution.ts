@@ -43,61 +43,48 @@ export async function distribuerMaintenant(): Promise<void> {
     const intervalSec = Math.max(1, Math.floor(intervalMs / 1000));
 
     // ---- FILET DE SÉCURITÉ ----
-    // Deux cas bien distincts, avec des règles différentes :
+    // Basé uniquement sur `derniere_activite_le` (colonne dédiée au dossier,
+    // voir migration 20260819_add_dossier_derniere_activite_le.ts) — la
+    // présence générale de l'agent (table `presence`, heartbeat ping-dispo)
+    // n'intervient plus du tout ici ; elle continue de servir plus bas, mais
+    // uniquement pour repérer les agents libres à qui pousser un dossier.
     //
-    // (A) JAMAIS COMMENCÉ (`traitement_demarre_le IS NULL`) : l'agent n'a
-    // jamais ouvert CE dossier précis (voir GET /api/dossiers/:id qui pose
-    // `traitement_demarre_le`). Ici la présence générale de l'agent (autre
-    // onglet ouvert, heartbeat ping-dispo actif...) ne prouve rien sur ce
-    // dossier — donc on ne la vérifie pas : dès que `assigne_le` dépasse le
-    // délai d'abandon, retour direct en file. C'est le cas qu'on voulait
-    // couvrir en plus de l'ancienne logique.
+    // AVANT : la logique distinguait "jamais ouvert" (traitement_demarre_le
+    // IS NULL, basé sur assigne_le/updated_at) de "traitement démarré"
+    // (assigne_le/updated_at ET présence générale, reliés par AND). Le
+    // défaut de fond restait le même dans les deux branches : ni assigne_le
+    // (figé à l'attribution) ni la présence générale (vraie mais globale à
+    // l'agent, pas au dossier) ne mesurent une activité RÉCENTE SUR CE
+    // DOSSIER PRÉCIS. Un agent avec deux onglets, ou en pause café session
+    // ouverte, restait "présent" aux yeux de la branche (B) et protégeait
+    // indéfiniment un dossier qu'il ne traitait plus.
     //
-    // (B) TRAITEMENT RÉELLEMENT DÉMARRÉ (`traitement_demarre_le IS NOT NULL`) :
-    // il faut les DEUX signaux à la fois (AND, pas OR) —
-    //   (1) l'attribution (ou la dernière mise à jour) date d'avant le seuil
-    //   (2) ET l'agent n'a envoyé AUCUN signe de vie récent (ping-dispo)
-    // AVANT (ancien bug) : les deux étaient reliés par un OR, donc la seule
-    // condition (1) suffisait à déclencher la reprise — un agent qui a bel
-    // et bien commencé le traitement dans les temps, dont l'onglet reste
-    // ouvert et qui continue d'envoyer sa présence, se faisait quand même
-    // reprendre son dossier dès que `assigne_le` dépassait le délai
-    // d'abandon (2 min par défaut), simplement parce qu'un dossier complexe
-    // prend plus de temps à traiter. Avec le AND, un agent actif ne perd
-    // plus jamais un dossier qu'il a réellement commencé tant qu'il donne
-    // signe de vie — seul un agent VRAIMENT parti (onglet fermé, réseau
-    // coupé, crash) au-delà du délai déclenche la reprise.
+    // MAINTENANT : `derniere_activite_le` est rafraîchie à CHAQUE signe de
+    // vie sur CE dossier (ouverture — voir GET /api/dossiers/:id —, ping
+    // dédié pendant la saisie GSM, clic "Appeler terrain", cf.
+    // db/dossiers.ts et GsmPages.tsx/DossierPages.tsx côté frontend) tant
+    // qu'il reste en_cours. `COALESCE(derniere_activite_le, assigne_le,
+    // updated_at)` retombe sur l'horodatage d'attribution tant qu'aucune
+    // activité n'a encore été enregistrée (dossier attribué mais jamais
+    // ouvert), puis bascule automatiquement sur la dernière activité réelle
+    // dès qu'il y en a une. Un seul signal, un seul seuil : un agent actif
+    // ne perd jamais un dossier qu'il traite réellement ; un agent VRAIMENT
+    // parti (onglet fermé, crash, réseau coupé — plus aucune activité NI
+    // aucun ping) au-delà du délai déclenche la reprise, que sa présence
+    // générale soit encore valide ailleurs ou non.
     const orphelins = await query<{ id: string; agent_saisie: string } & RowDataPacket>(
       `SELECT d.id, d.agent_saisie FROM dossiers d 
        WHERE d.statut='en_cours' AND d.agent_saisie IS NOT NULL
-       AND (
-         (
-           d.traitement_demarre_le IS NULL
-           AND (
-             (d.assigne_le IS NOT NULL AND d.assigne_le <= ?)
-             OR (d.assigne_le IS NULL AND d.updated_at IS NOT NULL AND d.updated_at <= ?)
-           )
-         )
-         OR
-         (
-           d.traitement_demarre_le IS NOT NULL
-           AND (
-             (d.assigne_le IS NOT NULL AND d.assigne_le <= ?)
-             OR (d.assigne_le IS NULL AND d.updated_at IS NOT NULL AND d.updated_at <= ?)
-           )
-           AND d.agent_saisie NOT IN (
-             SELECT matricule FROM presence WHERE ts >= ?
-           )
-         )
-       )`,
-      [seuilAbandon, seuilAbandon, seuilAbandon, seuilAbandon, seuilAbandon]
+       AND COALESCE(d.derniere_activite_le, d.assigne_le, d.updated_at) <= ?`,
+      [seuilAbandon]
     );
 
     for (const o of orphelins) {
       const result = await exec(
         `UPDATE dossiers 
          SET statut='en_attente', assigne_a=NULL, agent_saisie=NULL,
-             assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL, updated_at=? 
+             assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL,
+             derniere_activite_le=NULL, updated_at=? 
          WHERE id=? AND statut='en_cours'`,
         [maintenant, o.id]
       );
@@ -172,7 +159,7 @@ export async function distribuerMaintenant(): Promise<void> {
         `UPDATE dossiers 
          SET statut='en_cours', agent_saisie=?, assigne_a=?, 
              assigne_le=?, heure_prise=DATE_FORMAT(FROM_UNIXTIME(?), '%H:%i'),
-             traitement_demarre_le=NULL, updated_at=? 
+             traitement_demarre_le=NULL, derniere_activite_le=NULL, updated_at=? 
          WHERE id=? AND statut='en_attente'`,
         [ag.matricule, ag.matricule, maintenant, maintenant, maintenant, prochain.id]
       );

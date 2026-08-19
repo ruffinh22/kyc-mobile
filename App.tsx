@@ -195,52 +195,69 @@ export default function App() {
   // garantie active avant même que le premier "incoming-call" ne puisse
   // arriver, peu importe l'écran sur lequel l'utilisateur atterrit.
   // IdleScreen n'a plus besoin d'appeler signalingService.init() lui-même.
+  //
+  // BUG CORRIGÉ : signalingService.init() (qui ouvre la connexion WebSocket)
+  // était appelé APRÈS `await ensureFCMToken()` (jusqu'à 3 tentatives avec
+  // backoff, potentiellement plusieurs secondes) — malgré le commentaire
+  // ci-dessous qui affirmait le contraire. Sur un cold start déclenché par
+  // la notification d'appel entrant (voir restorePendingCallFromNative), ce
+  // délai pouvait suffire pour que l'agent tape "Accepter" AVANT que le WS
+  // ne soit connecté : l'offer envoyée par le serveur (qui arrive par ce
+  // même canal WS) n'était alors jamais reçue, et l'appel restait bloqué sur
+  // "Attente du flux distant" jusqu'au timeout, sans qu'aucune erreur claire
+  // ne remonte à l'agent. On ouvre maintenant le WS immédiatement (avec un
+  // fcmToken vide au besoin), et on met à jour le token de façon asynchrone
+  // ensuite via signalingService.updateFcmToken() — déjà utilisé par
+  // ailleurs pour le refresh de token (voir onTokenRefresh plus bas), donc
+  // sans risque d'incohérence de protocole.
   useEffect(() => {
     if (!serverUrl || !numeroAgent) return;
     let cancelled = false;
 
+    signalingService.init(serverUrl, numeroAgent, notificationService.getFCMToken() ?? '', {
+      onConnected:    () => setConnected(true),
+      onDisconnected: () => setConnected(false),
+      onIncomingCall: (numeroMtn, serverCallUuid) => {
+        const uuid = serverCallUuid || `ws-${Date.now()}`;
+        // Même garde-fou que partout ailleurs : un appel déjà en cours de
+        // traitement (peu importe son uuid) ignore tout nouvel entrant.
+        if (useCallStore.getState().status !== 'idle') {
+          console.log('[App] appel déjà en cours, incoming-call (WS) ignoré', { statut: useCallStore.getState().status, callUuid: uuid, numeroMtn });
+          return;
+        }
+        console.log('[App] traitement incoming-call (WS) : registerIncomingCall', { callUuid: uuid, numeroMtn });
+        void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
+        // registerIncomingCall pose l'affichage natif (notification/
+        // foreground service) ET, via ses propres callbacks, in fine
+        // callStore.setIncomingCall (voir handleIncomingFromAppStart plus
+        // bas) — c'est donc bien lui l'unique point d'entrée, quel que
+        // soit le canal d'origine (WS ici, FCM via handleHeadlessMessage).
+        notificationService.registerIncomingCall(uuid, numeroMtn);
+      },
+      onCallEnded: () => {
+        // L'état pilote l'écran (voir l'effet de navigation en tête de
+        // composant) : on se contente de nettoyer le store, le reset vers
+        // Idle est géré automatiquement par cet effet unique si on est
+        // encore sur IncomingCall/Call.
+        if (cancelled) return;
+        useCallStore.getState().resetCall();
+      },
+      onError: (msg) => console.warn('[Signal]', msg),
+      onMediaError: (msg) => {
+        console.warn('[Signal] Média:', msg);
+        useCallStore.getState().setFailed(msg);
+      },
+    });
+
+    // Token FCM + enregistrement backend : accessoires pour la réception des
+    // push, sans rapport avec la connexion WS elle-même (déjà ouverte
+    // ci-dessus) — peuvent donc tourner en parallèle sans retarder la
+    // capacité à recevoir une offer WebRTC.
     (async () => {
       const fcmToken = (await notificationService.ensureFCMToken()) ?? '';
-      // Contrairement à l'ancien code dans IdleScreen, ce garde ne bloque
-      // QUE l'enregistrement du token FCM côté backend (un aller-retour
-      // réseau accessoire) — jamais l'appel à signalingService.init()
-      // lui-même, qui doit rester indépendant du cycle de vie d'un écran.
-      if (!cancelled) await registerFcmTokenWithBackend(serverUrl, numeroAgent, fcmToken);
-
-      signalingService.init(serverUrl, numeroAgent, fcmToken, {
-        onConnected:    () => setConnected(true),
-        onDisconnected: () => setConnected(false),
-        onIncomingCall: (numeroMtn, serverCallUuid) => {
-          const uuid = serverCallUuid || `ws-${Date.now()}`;
-          // Même garde-fou que partout ailleurs : un appel déjà en cours de
-          // traitement (peu importe son uuid) ignore tout nouvel entrant.
-          if (useCallStore.getState().status !== 'idle') {
-            console.log('[App] appel déjà en cours, incoming-call (WS) ignoré', { statut: useCallStore.getState().status, callUuid: uuid, numeroMtn });
-            return;
-          }
-          console.log('[App] traitement incoming-call (WS) : registerIncomingCall', { callUuid: uuid, numeroMtn });
-          void callHistoryService.upsert({ callUuid: uuid, numeroMtn, status: 'incoming' });
-          // registerIncomingCall pose l'affichage natif (notification/
-          // foreground service) ET, via ses propres callbacks, in fine
-          // callStore.setIncomingCall (voir handleIncomingFromAppStart plus
-          // bas) — c'est donc bien lui l'unique point d'entrée, quel que
-          // soit le canal d'origine (WS ici, FCM via handleHeadlessMessage).
-          notificationService.registerIncomingCall(uuid, numeroMtn);
-        },
-        onCallEnded: () => {
-          // L'état pilote l'écran (voir l'effet de navigation en tête de
-          // composant) : on se contente de nettoyer le store, le reset vers
-          // Idle est géré automatiquement par cet effet unique si on est
-          // encore sur IncomingCall/Call.
-          if (cancelled) return;
-          useCallStore.getState().resetCall();
-        },
-        onError: (msg) => console.warn('[Signal]', msg),
-        onMediaError: (msg) => {
-          console.warn('[Signal] Média:', msg);
-          useCallStore.getState().setFailed(msg);
-        },
-      });
+      if (cancelled) return;
+      if (fcmToken) signalingService.updateFcmToken(fcmToken);
+      await registerFcmTokenWithBackend(serverUrl, numeroAgent, fcmToken);
     })();
 
     return () => { cancelled = true; };
@@ -320,6 +337,13 @@ export default function App() {
       if (state === 'active') {
         signalingService.resumePresence();
         void restorePendingCall();
+        // Relance (throttlée côté NotificationService, voir
+        // FSI_REPROMPT_THROTTLE_MS) la demande système "Notifications plein
+        // écran" tant qu'elle n'est pas accordée — sans ça, un agent qui n'a
+        // jamais remarqué/touché la bannière d'IdleScreen pouvait continuer
+        // à recevoir des appels qui sonnent sans jamais afficher l'écran
+        // accepter/refuser, potentiellement indéfiniment.
+        void notificationService.ensureFullScreenIntentPermission();
       }
     });
 

@@ -533,6 +533,43 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
     }
   }, [dossierId, dossier]);
 
+  // Ping d'activité périodique pendant que l'agent reste sur l'écran de
+  // saisie GSM avec un dossier en_cours ouvert. Sans ça, un dossier
+  // complexe dont la saisie dépasse le délai d'abandon (`abandonSec`, 2 min
+  // par défaut) se ferait reprendre par utils/distribution.ts alors que
+  // l'agent est toujours activement en train de le traiter — exactement le
+  // même défaut que l'ancien bug corrigé côté filet de sécurité, mais côté
+  // "vraiment en train de saisir" plutôt que "présent ailleurs". L'intervalle
+  // s'aligne sur `distribution_abandon_sec` (récupéré via
+  // api.getDistributionTiming(), même source que le compte à rebours affiché
+  // dans DossierPages.tsx) pour garantir au moins 2 pings dans la fenêtre
+  // d'abandon quelle que soit sa configuration ; échec réseau ignoré, un
+  // ping manqué n'est jamais bloquant, seul un arrêt prolongé (onglet
+  // fermé, crash) doit laisser le dossier repartir en file.
+  useEffect(() => {
+    if (!dossier || dossier.id !== dossierId || dossier.statut !== 'en_cours') return;
+    let abandonSec = 120;
+    let cancelled = false;
+    let intervalId: number | undefined;
+
+    const startPinging = () => {
+      const delay = Math.max(15_000, Math.floor((Math.max(30, abandonSec) * 1000) / 2));
+      intervalId = window.setInterval(() => {
+        fetch(`/api/dossiers/${dossierId}/activite`, { method: 'POST' }).catch(() => {});
+      }, delay);
+    };
+
+    api.getDistributionTiming()
+      .then((data) => { abandonSec = data?.abandon_sec ?? 120; })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) startPinging(); });
+
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, [dossier, dossierId]);
+
   useEffect(() => {
     if (initialized) return;
     if (!dossier && !defaultValues) return;

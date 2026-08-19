@@ -210,16 +210,60 @@ class NotificationService {
     }
   }
 
+  // Espacement entre deux ouvertures automatiques de l'écran Réglages
+  // "Notifications plein écran" — même logique que autostart_last_prompt_at
+  // pour l'autostart OEM (voir ensureCallReliabilityPermissions) : sans ce
+  // garde-fou, appeler ensureFullScreenIntentPermission() à chaque retour au
+  // premier plan (ce qu'on veut faire maintenant, pour ne plus dépendre du
+  // seul tap volontaire sur la bannière d'IdleScreen) rouvrirait les
+  // Réglages system À CHAQUE fois que l'agent revient sur l'app tant qu'il
+  // n'a pas coché la case — inutilisable. Volontairement plus court que les
+  // 24h de l'autostart OEM : cette permission bloque TOTALEMENT l'écran
+  // d'appel entrant (pas juste un risque de retard), donc on peut se
+  // permettre d'être plus insistant sans que ce soit abusif.
+  private readonly FSI_REPROMPT_THROTTLE_MS = 4 * 60 * 60 * 1000; // 4h
+
   async ensureFullScreenIntentPermission (): Promise<boolean> {
     if (Platform.OS !== 'android' || Platform.Version < 34) return true;
     try {
       const canUse = KycCallModule()?.canUseFullScreenIntent?.();
       if (canUse) return true;
 
+      const lastPromptRaw = await AsyncStorage.getItem('fsi_last_prompt_at');
+      const lastPrompt = lastPromptRaw ? Number(lastPromptRaw) : 0;
+      if (Date.now() - lastPrompt < this.FSI_REPROMPT_THROTTLE_MS) {
+        // Déjà proposé récemment : on ne rouvre pas les Réglages tout seul,
+        // mais on renvoie bien `false` pour que la bannière IdleScreen reste
+        // affichée et cliquable dans l'intervalle.
+        return false;
+      }
+
+      await AsyncStorage.setItem('fsi_last_prompt_at', String(Date.now()));
       KycCallModule()?.requestFullScreenIntentPermission?.();
       return false;
     } catch (e) {
       console.warn('[Notif] Vérification full screen intent impossible:', e);
+      return true;
+    }
+  }
+
+  // ── Lecture synchrone de l'état de la permission (pour la bannière d'alerte
+  // d'IdleScreen.tsx). Contrairement à ensureFullScreenIntentPermission()
+  // ci-dessus (async, et qui DÉCLENCHE la demande système si refusée), cette
+  // méthode se contente de LIRE l'état actuel — appelée à chaque retour au
+  // premier plan pour rafraîchir la bannière sans jamais rouvrir les Réglages
+  // toute seule. S'appuie sur canUseFullScreenIntent(), exposée en
+  // isBlockingSynchronousMethod côté KycCallModule.java, donc peut être lue
+  // de façon synchrone ici sans passer par une Promise.
+  // Avant Android 14 (API 34) ou sur iOS, la permission n'existe pas / n'est
+  // pas requise : on considère l'état comme accordé pour ne jamais afficher
+  // la bannière à tort sur ces plateformes.
+  isFullScreenIntentGranted (): boolean {
+    if (Platform.OS !== 'android' || Platform.Version < 34) return true;
+    try {
+      return KycCallModule()?.canUseFullScreenIntent?.() ?? false;
+    } catch (e) {
+      console.warn('[Notif] Lecture full screen intent impossible:', e);
       return true;
     }
   }

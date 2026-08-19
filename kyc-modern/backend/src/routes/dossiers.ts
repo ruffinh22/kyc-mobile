@@ -71,31 +71,58 @@ export async function dossiersRoutes(app: any): Promise<void> {
   // GET /api/dossiers/:id
   app.get('/api/dossiers/:id', async (req: FastifyRequest, reply: FastifyReply) => {
     const params = req.params as { id: string };
-    const d = await db.getDossierById(params.id) as (Dossier & { traitement_demarre_le?: number | null });
+    const d = await db.getDossierById(params.id) as (Dossier & { traitement_demarre_le?: number | null; derniere_activite_le?: number | null });
     if (!d) return reply.code(404).send({ error: 'Dossier introuvable' });
 
-    // Marque le DÉBUT RÉEL du traitement par l'agent assigné — la toute
-    // première fois que CE dossier précis est effectivement consulté par
-    // l'agent qui en est responsable (concrètement : l'arrivée sur l'écran
-    // de saisie GSM, voir GsmSaisie dans GsmPages.tsx, qui charge le dossier
-    // via cette même route). C'est un signal beaucoup plus précis que la
-    // présence générale (heartbeat ping-dispo) pour le filet de sécurité de
-    // utils/distribution.ts : un dossier attribué mais jamais ouvert doit
-    // repartir en file dès que le délai est dépassé, MÊME si l'agent est
-    // par ailleurs en ligne (autre onglet, occupé ailleurs...) — alors qu'un
-    // dossier réellement en cours de traitement doit être protégé tant que
-    // l'agent reste joignable. Idempotent (WHERE ... IS NULL côté SQL) : ne
-    // se déclenche qu'une seule fois par attribution, jamais réécrit ensuite.
-    if (req.user.role === 'agent' && d.agent_saisie === req.user.matricule && d.statut === 'en_cours' && !d.traitement_demarre_le) {
+    // `traitement_demarre_le` : posé UNE SEULE FOIS, à la toute première
+    // ouverture de CE dossier précis par l'agent responsable (concrètement :
+    // l'arrivée sur l'écran de saisie GSM, voir GsmSaisie dans GsmPages.tsx,
+    // qui charge le dossier via cette même route). Reste inchangé une fois
+    // posé (COALESCE côté SQL) — sert de repère "début réel du traitement",
+    // affiché côté agent, indépendant du flux d'activité ci-dessous.
+    //
+    // `derniere_activite_le` : à l'inverse, RAFRAÎCHIE à chaque signe de vie
+    // de l'agent SUR ce dossier — chaque ouverture de cette route en fait
+    // partie, au même titre que les sauvegardes réelles et les pings dédiés
+    // (voir POST /:id/activite ci-dessous et GsmSaisie côté frontend pour un
+    // ping périodique pendant la saisie, et handleCallTerrain dans
+    // DossierPages.tsx pour le clic "Appeler terrain"). C'est ce champ que
+    // utils/distribution.ts lit désormais pour son filet de sécurité, à la
+    // place de la présence générale (heartbeat ping-dispo, indépendant de
+    // l'écran affiché) : un agent "en ligne" ailleurs (autre onglet, pause
+    // café session ouverte...) ne protège plus indéfiniment un dossier qu'il
+    // n'a pas concrètement touché depuis `abandonSec`.
+    if (req.user.role === 'agent' && d.agent_saisie === req.user.matricule && d.statut === 'en_cours') {
       const maintenant = db.nowSec();
-      d.traitement_demarre_le = maintenant;
+      if (!d.traitement_demarre_le) d.traitement_demarre_le = maintenant;
+      d.derniere_activite_le = maintenant;
       db.exec(
-        `UPDATE dossiers SET traitement_demarre_le=? WHERE id=? AND agent_saisie=? AND statut='en_cours' AND traitement_demarre_le IS NULL`,
-        [maintenant, d.id, req.user.matricule]
+        `UPDATE dossiers SET traitement_demarre_le=COALESCE(traitement_demarre_le,?), derniere_activite_le=?
+         WHERE id=? AND agent_saisie=? AND statut='en_cours'`,
+        [maintenant, maintenant, d.id, req.user.matricule]
       ).catch(() => {});
     }
 
     return reply.send({ success: true, dossier: maskDossier(normalizeDossier(d), req.user.matricule, req.user.role) });
+  });
+
+  // POST /api/dossiers/:id/activite - Ping d'activité dédié, à un dossier
+  // précis, pendant que l'agent le traite (voir derniere_activite_le
+  // ci-dessus). Appelé explicitement par le frontend pour tout signe de vie
+  // qui ne passe PAS par un GET /:id ni par une écriture réelle du dossier :
+  // aujourd'hui, le clic "Appeler terrain" (handleCallTerrain dans
+  // DossierPages.tsx, avant la redirection vers /video-call) et le ping
+  // périodique pendant la saisie GSM (GsmSaisie dans GsmPages.tsx). N'écrit
+  // rien d'autre que l'horodatage : ni statut, ni verrou, ni audit — c'est
+  // un heartbeat, pas une action métier.
+  app.post('/api/dossiers/:id/activite', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    if (req.user.role !== 'agent') return reply.code(403).send({ error: 'Réservé aux agents' });
+    const result = await db.exec(
+      `UPDATE dossiers SET derniere_activite_le=? WHERE id=? AND agent_saisie=? AND statut='en_cours'`,
+      [db.nowSec(), params.id, req.user.matricule]
+    );
+    return reply.send({ success: true, updated: result.affectedRows === 1 });
   });
 
   // GET /api/dossiers/:id/photo/:type
@@ -267,7 +294,8 @@ export async function dossiersRoutes(app: any): Promise<void> {
       const remis = await db.exec(
         `UPDATE dossiers 
          SET statut='en_attente', agent_saisie=NULL, assigne_a=NULL, 
-             assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL, updated_at=? 
+             assigne_le=NULL, heure_prise=NULL, traitement_demarre_le=NULL,
+             derniere_activite_le=NULL, updated_at=? 
          WHERE agent_saisie=? AND statut='en_cours'`,
         [maintenant, matricule]
       );
@@ -380,6 +408,15 @@ export async function dossiersRoutes(app: any): Promise<void> {
       visage_verifie_le: null,
       raison_rejet: null,
     });
+    // Relance active du flux par l'agent sur SON dossier : signe de vie à
+    // part entière, au même titre qu'une ouverture (GET /:id) — rafraîchit
+    // derniere_activite_le pour ne pas laisser le filet de sécurité de
+    // utils/distribution.ts croire à un abandon pendant que l'agent recommence
+    // la vérification faciale.
+    await db.exec(
+      `UPDATE dossiers SET derniere_activite_le=? WHERE id=? AND agent_saisie=? AND statut='en_cours'`,
+      [db.nowSec(), params.id, req.user.matricule]
+    ).catch(() => {});
 
     db.audit(req.user.matricule, 'DOSSIER_FACE_VERIFY_REPRISE', `id=${params.id}`, req.ip);
     return reply.send({ success: true, message: 'La vérification faciale peut être relancée.' });

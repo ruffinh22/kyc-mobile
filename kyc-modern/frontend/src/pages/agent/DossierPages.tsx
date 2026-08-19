@@ -413,6 +413,15 @@ export function AgentFileAttente() {
     setSuccess(null);
     setBusy(true);
     try {
+      // Signe de vie sur CE dossier avant de quitter la page : sans ça, un
+      // appel terrain qui traîne (agent au téléphone, pas d'action sur
+      // l'écran de saisie GSM pendant ce temps) pouvait faire déclencher le
+      // filet de sécurité de utils/distribution.ts et faire perdre le
+      // dossier à l'agent en pleine vérification terrain. Best-effort :
+      // un échec réseau ne doit jamais bloquer l'appel lui-même.
+      if (dossier.id) {
+        try { await fetch(`/api/dossiers/${dossier.id}/activite`, { method: 'POST' }); } catch {}
+      }
       // Aller directement sur la page d'appel vidéo et lancer l'appel automatiquement
       const params = new URLSearchParams();
       params.set('terrain', dossier.wa_agent);
@@ -768,6 +777,11 @@ export function AgentMesDossiers() {
     setSuccess(null);
     setBusy(true);
     try {
+      // Signe de vie sur ce dossier avant de quitter la page — voir la même
+      // logique dans l'autre handleCallTerrain plus haut dans ce fichier.
+      if (dossier.id) {
+        try { await fetch(`/api/dossiers/${dossier.id}/activite`, { method: 'POST' }); } catch {}
+      }
       const params = new URLSearchParams();
       params.set('terrain', dossier.wa_agent);
       if (dossier.numero_mtn) params.set('mtn', dossier.numero_mtn);

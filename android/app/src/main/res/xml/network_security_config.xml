@@ -1,15 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-  <!-- Autoriser cleartext HTTP pour développement/test local -->
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">10.208.9.116</domain>
-    <domain includeSubdomains="true">10.58.134.116</domain>
-    <domain includeSubdomains="true">10.0.5.38</domain>
-    <domain includeSubdomains="true">localhost</domain>
-    <domain includeSubdomains="true">127.0.0.1</domain>
-  </domain-config>
-  
-  <!-- Production: HTTPS avec certificat Let's Encrypt -->
+  <!-- Production : on force HTTPS avec certificat Let's Encrypt, quoi qu'il
+       arrive — même si le code de l'app se trompait un jour de schéma. -->
   <domain-config cleartextTrafficPermitted="false">
     <domain includeSubdomains="true">kyc.palladiumafrica.com</domain>
     <domain includeSubdomains="true">www.kyc.palladiumafrica.com</domain>
@@ -19,4 +11,14 @@
       <certificates src="@raw/lets_encrypt_root" />
     </trust-anchors>
   </domain-config>
+
+  <!-- Tout le reste (IP locales/terrain 10.x, 192.168.x, 172.16-31.x,
+       localhost...) : cleartext HTTP autorisé.
+       Android ne permet pas de plages CIDR dans <domain>, donc plutôt que
+       de lister chaque IP une par une (et casser dès qu'un agent change de
+       box/réseau), on autorise le cleartext par défaut ici — cohérent avec
+       normalizeServerBase() côté app, qui ne bascule en http:// que pour
+       ces mêmes plages privées. Le domaine de prod reste protégé au-dessus,
+       qui a priorité car plus spécifique. -->
+  <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

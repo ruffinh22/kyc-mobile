@@ -508,6 +508,14 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     }
   };
 
+  const normalizeServerBase = (serverUrl?: string) => {
+    const raw = (serverUrl || '').replace(/\/$/, '');
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const localDevPattern = /^(localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01]))/i;
+    return localDevPattern.test(raw) ? `http://${raw}` : `https://${raw}`;
+  };
+
   // ── OCR du recto CNI (auto-remplissage nom/prénom/naissance) ──────────────
   // Endpoint attendu côté serveur : POST /api/ocr/id-card — contrat détaillé
   // dans SERVER_SPEC.md. Tant que l'endpoint n'existe pas côté back, cet
@@ -516,15 +524,14 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
   const runOcr = async (uri: string) => {
     setOcrStatus('loading');
     try {
-      const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
-      const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
+      const base = normalizeServerBase(agent.serverUrl);
       const fd = new FormData();
       fd.append('country', agent.country);
       fd.append('type_piece', typePiece || 'AUTRE');
       fd.append('photo_recto', { uri, type: 'image/jpeg', name: 'recto.jpg' } as any);
 
       const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 12_000);
+      const tid = setTimeout(() => ctrl.abort(), 20_000);
       const res = await fetch(`${base}/api/ocr/id-card`, { method: 'POST', body: fd, signal: ctrl.signal });
       clearTimeout(tid);
 
@@ -701,19 +708,11 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       }
 
       const xhr = new XMLHttpRequest();
-      // Plafond dur à 5s, demandé explicitement (soumission "hyper rapide"),
-      // vs 30s avant. Les photos/signature sont déjà compressées et écrites
-      // sur disque AVANT ce point (voir capturePhoto / pré-conversion
-      // signature plus haut), donc ces 5s ne couvrent que le transfert réseau
-      // lui-même — pas de traitement en attente au moment de l'envoi.
-      // Sur un réseau vraiment très faible (LTE -97/-108 dBm observé sur ce
-      // terrain), 5s peut ne pas suffire à faire passer ~200-400 Ko : c'est
-      // une limite physique du lien radio, pas quelque chose que le code peut
-      // contourner. Dans ce cas on ne relance PAS automatiquement (voir
-      // 'error'/'timeout' plus bas) — on affiche un bouton "Réessayer"
-      // explicite, pour ne jamais doubler silencieusement l'attente de
-      // l'agent avec une seconde tentative cachée.
-      xhr.timeout = 5_000;
+      // Le réseau mobile terrain peut être très lent ; 5s est trop court pour
+      // un upload multipart avec photo + verso + signature. On laisse 30s pour
+      // éviter les faux "Erreur réseau" alors que le serveur est simplement
+      // plus lent que prévu.
+      xhr.timeout = 30_000;
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
       });
@@ -778,8 +777,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         shake();
         setLoading(false);
       });
-      const cleanUrl = agent.serverUrl?.replace(/\/$/, '') || '';
-      const base = cleanUrl.startsWith('http') ? cleanUrl : `http://${cleanUrl}`;
+      const base = normalizeServerBase(agent.serverUrl);
       // Debug: log destination so we can diagnose network errors in logcat
       console.warn('[Acquisition] Envoi dossier vers', `${base}/api/public/dossiers`, { serverUrl: agent.serverUrl });
       xhr.open('POST', `${base}/api/public/dossiers`);

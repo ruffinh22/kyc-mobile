@@ -173,6 +173,11 @@ class SignalingService {
   private readonly ICE_GRACE_MS = 10_000;
 
   private pendingCandidates: Array<{ candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null }> = [];
+  // Queue for outbound messages when WS is not open. Prevents silent drops
+  // of important client-originated messages during reconnects.
+  private outboundQueue: Array<{ msg: object; ts: number }> = [];
+  private readonly OUTBOUND_QUEUE_MAX = 50; // max messages in queue
+  private readonly OUTBOUND_QUEUE_TTL_MS = 30_000; // drop messages older than 30s
   private remoteDescriptionReady = false;
 
   // ── Offer reçue avant acceptation utilisateur ────────────────────────────
@@ -341,6 +346,8 @@ class SignalingService {
       this.reconnectDelay = 2000;
       this.reRegister();
       this.startPing();
+      // On open, flush any queued outbound messages (register already sent)
+      try { this.flushOutboundQueue(); } catch (e) { /* ignore */ }
     };
 
     this.ws.onmessage = (e: MessageEvent) => {
@@ -1130,7 +1137,39 @@ class SignalingService {
   // ── Envoi brut (si WS ouvert) ─────────────────────────────────────────────
   private sendRaw (msg: object) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      try {
+        this.ws.send(JSON.stringify(msg));
+        return;
+      } catch (e) {
+        // fallthrough to enqueue below
+      }
+    }
+    // WS not open or send failed: enqueue for retry on reconnect
+    this.enqueueOutbound(msg);
+  }
+
+  private enqueueOutbound(msg: object) {
+    const now = Date.now();
+    this.outboundQueue.push({ msg, ts: now });
+    // drop stale entries
+    this.outboundQueue = this.outboundQueue.filter(e => (now - e.ts) <= this.OUTBOUND_QUEUE_TTL_MS);
+    // enforce max length
+    while (this.outboundQueue.length > this.OUTBOUND_QUEUE_MAX) this.outboundQueue.shift();
+  }
+
+  private flushOutboundQueue() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    while (this.outboundQueue.length) {
+      const entry = this.outboundQueue.shift()!;
+      if ((now - entry.ts) > this.OUTBOUND_QUEUE_TTL_MS) continue; // drop stale
+      try {
+        this.ws.send(JSON.stringify(entry.msg));
+      } catch (e) {
+        // failed to send: re-enqueue and abort flush to avoid hot loop
+        this.outboundQueue.unshift(entry);
+        break;
+      }
     }
   }
 

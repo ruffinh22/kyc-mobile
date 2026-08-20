@@ -1,0 +1,27 @@
+diff --git a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnectionService.java b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnectionService.java
+index 0000000..0000000 100644
+--- a/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnectionService.java
++++ b/node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/VoiceConnectionService.java
+@@ -203,5 +203,22 @@
+             ", isForeground: " + isForeground + ", isReachable:" + isReachable + ", timeout: " + timeout);
+ 
+         Connection incomingCallConnection = createConnection(request);
++
++        // ── PATCH KYC : garde-fou contre le crash natif documenté ────────
++        // createConnection() renvoie `null` quand request.getAddress() est
++        // vide — ce qui arrive quand Telecom déclenche l'appel avant que
++        // registerPhoneAccount() n'ait fini de se propager côté OS (race au
++        // cold start, surtout via push FCM headless). Sans ce garde-fou,
++        // l'appel à setRinging() ci-dessous plante l'app avec un
++        // NullPointerException natif, non interceptable en JS.
++        // On échoue proprement la connexion au lieu de planter : le système
++        // d'appel maison (KycForegroundCallService) sonne déjà de façon
++        // indépendante, donc l'utilisateur ne perd rien à cet échec silencieux
++        // côté Telecom.
++        if (incomingCallConnection == null) {
++            Log.w(TAG, "[VoiceConnectionService] onCreateIncomingConnection: createConnection a renvoyé null (race cold-start), échec propre au lieu de crash");
++            return Connection.createFailedConnection(new DisconnectCause(DisconnectCause.ERROR));
++        }
++
+         incomingCallConnection.setRinging();
+         incomingCallConnection.setInitialized();

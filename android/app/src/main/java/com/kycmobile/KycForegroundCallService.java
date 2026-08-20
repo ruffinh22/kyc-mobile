@@ -193,11 +193,12 @@ public class KycForegroundCallService extends Service {
                 stopNativeRingtone();
                 return true;
             });
+            final Uri ringtoneUriFinal = ringtoneUri;
             ringtonePlayer.setOnPreparedListener(mp -> {
                 try {
                     mp.start();
-                    Log.i(TAG, "Sonnerie native démarrée (async): " + ringtoneUri);
-                    appendDiagnosticLog("I", "Sonnerie native démarrée (async): " + ringtoneUri, null);
+                    Log.i(TAG, "Sonnerie native démarrée (async): " + ringtoneUriFinal);
+                    appendDiagnosticLog("I", "Sonnerie native démarrée (async): " + ringtoneUriFinal, null);
                 } catch (Exception e) {
                     Log.e(TAG, "Erreur démarrage sonnerie après préparation", e);
                     stopNativeRingtone();

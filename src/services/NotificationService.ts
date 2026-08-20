@@ -111,6 +111,20 @@ class NotificationService {
   private readonly RING_WATCHDOG_MS = 65_000;              // légèrement > le timeout serveur de 45s
   private readonly MAX_CALL_DURATION_MS = 3 * 60 * 60 * 1000; // filet de sécurité ultime une fois décroché
 
+  // ── Anti-race CallKeep (cold start) ──────────────────────────────────────
+  // Timestamp auquel CallKeep.setup() a résolu pour la dernière fois. Sert à
+  // savoir si on vient tout juste de faire un setup "à froid" (cold start /
+  // push headless) — voir showIncomingCall(). CallKeep.setup() résout côté
+  // JS dès que registerPhoneAccount() a été *appelé*, mais Android peut
+  // mettre quelques centaines de ms de plus à propager cet enregistrement
+  // côté Telecom en interne. Si displayIncomingCall() est appelé avant que
+  // cette propagation soit terminée, Telecom déclenche onCreateIncomingConnection
+  // avec une ConnectionRequest incomplète (adresse absente), ce qui fait
+  // planter nativement la librairie react-native-callkeep (NPE non
+  // interceptable en JS, cf. patch-package appliqué en complément).
+  private callKeepReadyAt: number | null = null;
+  private readonly CALLKEEP_COLD_START_BUFFER_MS = 250;
+
   // ── Initialisation ──────────────────────────────────────────────────────────
   async init (cbs: NotifCallbacks): Promise<void> {
     this.callbacks = cbs;
@@ -210,35 +224,12 @@ class NotificationService {
     }
   }
 
-  // Espacement entre deux ouvertures automatiques de l'écran Réglages
-  // "Notifications plein écran" — même logique que autostart_last_prompt_at
-  // pour l'autostart OEM (voir ensureCallReliabilityPermissions) : sans ce
-  // garde-fou, appeler ensureFullScreenIntentPermission() à chaque retour au
-  // premier plan (ce qu'on veut faire maintenant, pour ne plus dépendre du
-  // seul tap volontaire sur la bannière d'IdleScreen) rouvrirait les
-  // Réglages system À CHAQUE fois que l'agent revient sur l'app tant qu'il
-  // n'a pas coché la case — inutilisable. Volontairement plus court que les
-  // 24h de l'autostart OEM : cette permission bloque TOTALEMENT l'écran
-  // d'appel entrant (pas juste un risque de retard), donc on peut se
-  // permettre d'être plus insistant sans que ce soit abusif.
-  private readonly FSI_REPROMPT_THROTTLE_MS = 4 * 60 * 60 * 1000; // 4h
-
   async ensureFullScreenIntentPermission (): Promise<boolean> {
     if (Platform.OS !== 'android' || Platform.Version < 34) return true;
     try {
       const canUse = KycCallModule()?.canUseFullScreenIntent?.();
       if (canUse) return true;
 
-      const lastPromptRaw = await AsyncStorage.getItem('fsi_last_prompt_at');
-      const lastPrompt = lastPromptRaw ? Number(lastPromptRaw) : 0;
-      if (Date.now() - lastPrompt < this.FSI_REPROMPT_THROTTLE_MS) {
-        // Déjà proposé récemment : on ne rouvre pas les Réglages tout seul,
-        // mais on renvoie bien `false` pour que la bannière IdleScreen reste
-        // affichée et cliquable dans l'intervalle.
-        return false;
-      }
-
-      await AsyncStorage.setItem('fsi_last_prompt_at', String(Date.now()));
       KycCallModule()?.requestFullScreenIntentPermission?.();
       return false;
     } catch (e) {
@@ -247,23 +238,17 @@ class NotificationService {
     }
   }
 
-  // ── Lecture synchrone de l'état de la permission (pour la bannière d'alerte
-  // d'IdleScreen.tsx). Contrairement à ensureFullScreenIntentPermission()
-  // ci-dessus (async, et qui DÉCLENCHE la demande système si refusée), cette
-  // méthode se contente de LIRE l'état actuel — appelée à chaque retour au
-  // premier plan pour rafraîchir la bannière sans jamais rouvrir les Réglages
-  // toute seule. S'appuie sur canUseFullScreenIntent(), exposée en
-  // isBlockingSynchronousMethod côté KycCallModule.java, donc peut être lue
-  // de façon synchrone ici sans passer par une Promise.
-  // Avant Android 14 (API 34) ou sur iOS, la permission n'existe pas / n'est
-  // pas requise : on considère l'état comme accordé pour ne jamais afficher
-  // la bannière à tort sur ces plateformes.
+  // Lecture seule : indicateur synchrone si l'app peut utiliser les intents
+  // plein-écran (Android 14+). Contrairement à ensureFullScreenIntentPermission()
+  // cette méthode NE déclenche PAS de boîte système et peut être appelée à
+  // chaque retour au premier plan sans harceler l'utilisateur.
   isFullScreenIntentGranted (): boolean {
     if (Platform.OS !== 'android' || Platform.Version < 34) return true;
     try {
-      return KycCallModule()?.canUseFullScreenIntent?.() ?? false;
+      const canUse = KycCallModule()?.canUseFullScreenIntent?.();
+      return !!canUse;
     } catch (e) {
-      console.warn('[Notif] Lecture full screen intent impossible:', e);
+      console.warn('[Notif] lecture isFullScreenIntentGranted impossible:', e);
       return true;
     }
   }
@@ -332,6 +317,11 @@ class NotificationService {
       CallKeep.setAvailable(true);
       this.bindCallKeepEvents();
       this.callKeepConfigured = true;
+      // Marque l'instant de fin de setup() — voir showIncomingCall(), qui
+      // s'en sert pour retarder légèrement displayIncomingCall() juste après
+      // un setup à froid, le temps que l'enregistrement du PhoneAccount se
+      // propage côté Telecom.
+      this.callKeepReadyAt = Date.now();
       console.log('[CallKeep] Setup successful');
     } catch (e) {
       console.warn('[CallKeep] Setup failed:', e);
@@ -488,6 +478,21 @@ class NotificationService {
       return;
     }
 
+    // ── Garde-fou "numéro vide" ────────────────────────────────────────────
+    // Si numeroMtn arrive vide (champ non renseigné côté back-office, voir
+    // VideoCallPage.tsx), CallKeep.displayIncomingCall() est appelé avec une
+    // adresse vide : Telecom échoue alors à construire l'adresse de l'appel
+    // (onCreateIncomingConnection retourne null côté natif → onFailedIncomingCall
+    // dans les logs), et l'écran d'appel système ne s'affiche JAMAIS — sans
+    // aucun crash ni erreur JS visible, ce qui rend le bug très difficile à
+    // repérer autrement. On substitue donc un texte de repli AVANT que ça
+    // touche CallKeep, avec un avertissement pour repérer facilement ces cas
+    // côté logs à l'avenir.
+    if (!numeroMtn) {
+      console.warn('[Notif] numeroMtn vide reçu pour un appel entrant — repli appliqué', { callUuid });
+      numeroMtn = 'Numéro non communiqué';
+    }
+
     const now = Date.now();
     const lastSeenAt = this.recentCallUuids.get(callUuid);
     if (lastSeenAt && now - lastSeenAt < 4_000) {
@@ -634,13 +639,35 @@ class NotificationService {
       console.warn('[Notif] startForeground failed:', e);
     }
 
-    CallKeep.displayIncomingCall(
-      callUuid,
-      numeroMtn,
-      `KYC — ${numeroMtn}`,
-      'number',
-      true,   // supportsVideo
-    );
+    // ── Anti-race : voir le commentaire sur callKeepReadyAt plus haut ─────
+    // On ne retarde JAMAIS la sonnerie/vibration/notification (déjà lancées
+    // ci-dessus, indépendantes de CallKeep) — seulement l'appel à Telecom via
+    // CallKeep, et uniquement dans les ~250ms qui suivent un setup() à froid.
+    // Sur un appel "à chaud" (app déjà tournant depuis un moment,
+    // callKeepReadyAt ancien), displayIncomingCall() part immédiatement,
+    // comme avant.
+    const elapsedSinceCallKeepReady = this.callKeepReadyAt ? Date.now() - this.callKeepReadyAt : Infinity;
+    const doDisplayIncomingCall = () => {
+      try {
+        CallKeep.displayIncomingCall(
+          callUuid,
+          numeroMtn,
+          `KYC — ${numeroMtn}`,
+          'number',
+          true,   // supportsVideo
+        );
+      } catch (e) {
+        // Ne doit normalement pas arriver ici (le crash connu est natif, pas
+        // JS), mais on ne laisse jamais un throw JS inattendu empêcher le
+        // reste du flux d'appel — la sonnerie native tourne déjà.
+        console.warn('[CallKeep] displayIncomingCall a levé une exception JS:', e);
+      }
+    };
+    if (elapsedSinceCallKeepReady < this.CALLKEEP_COLD_START_BUFFER_MS) {
+      setTimeout(doDisplayIncomingCall, this.CALLKEEP_COLD_START_BUFFER_MS - elapsedSinceCallKeepReady);
+    } else {
+      doDisplayIncomingCall();
+    }
   }
 
   // ── Décrocher l'appel : arrête sonnerie/vibration natives SANS tuer le

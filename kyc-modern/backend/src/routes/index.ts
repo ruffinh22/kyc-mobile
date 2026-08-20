@@ -15,6 +15,7 @@ import { livenessPageRoutes } from './liveness-page';
 import { adminRoutes }       from './admin';
 import { ocrRoutes }         from './ocr';
 import { capturesRoutes } from './captures';
+import { alertesRoutes } from './alertes';
 
 export async function registerRoutes(app: any): Promise<void> {
   app.get('/api/health', async (_req: FastifyRequest, reply: FastifyReply) =>
@@ -37,4 +38,5 @@ export async function registerRoutes(app: any): Promise<void> {
   await app.register(adminRoutes);
   await app.register(ocrRoutes);
   await app.register(capturesRoutes);
+  await app.register(alertesRoutes);
 }

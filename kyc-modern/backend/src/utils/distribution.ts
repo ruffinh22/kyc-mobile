@@ -7,6 +7,7 @@
 
 import { query, exec, nowSec, getConfig } from '../db';
 import { releaseAgentLock, reconcileAgentLocks } from '../db/locks';
+import { verifierAlertesTraitementLong } from './alertes-traitement';
 import { RowDataPacket } from 'mysql2';
 
 interface ConfigRow {
@@ -30,6 +31,13 @@ export async function distribuerMaintenant(): Promise<void> {
     // db/locks.ts — jusqu'ici cet appel manquait et le seul rattrapage
     // possible était un redémarrage complet du serveur.
     await reconcileAgentLocks();
+
+    // Alerte superviseur "traitement démarré, toujours pas finalisé après
+    // 5 min" : INCONDITIONNELLE elle aussi (comme reconcileAgentLocks ci-
+    // dessus), placée avant le early-return du mode auto/manuel — un
+    // traitement qui traîne doit remonter au superviseur que la distribution
+    // automatique soit activée ou non. Voir utils/alertes-traitement.ts.
+    await verifierAlertesTraitementLong();
 
     // Vérifier le mode de distribution
     const configs = await query<ConfigRow & RowDataPacket>("SELECT valeur FROM config WHERE cle='distribution_mode'");

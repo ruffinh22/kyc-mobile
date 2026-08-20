@@ -2,9 +2,77 @@ import React, { useMemo, useState } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as XLSX from 'xlsx';
 import * as api from '../../services/api';
+import { apiFetch } from '../../services/api';
 import { Dossier, DossierStatut, PlanningEntry } from '../../types';
 import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../components/ui';
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alertes traitement long (agent démarré, non finalisé après 5 min — voir
+// utils/alertes-traitement.ts côté backend). Poll toutes les 20s : plus
+// fiable qu'un SSE seul (rattrape ce qui a été émis pendant que l'onglet
+// était fermé, puisque persisté en base dans alertes_traitement_long).
+// ─────────────────────────────────────────────────────────────────────────────
+interface AlerteTraitementLong {
+  id: number;
+  dossier_id: string;
+  agent_saisie: string;
+  traitement_demarre_le: number;
+  cree_le: number;
+}
+
+function useAlertesTraitementLong() {
+  const [alertes, setAlertes] = useState<AlerteTraitementLong[]>([]);
+
+  const fetchAlertes = async () => {
+    try {
+      const data = await apiFetch<{ success: boolean; alertes: AlerteTraitementLong[] }>('/api/alertes-traitement');
+      if (data.success) setAlertes(data.alertes || []);
+    } catch {
+      // silencieux : l'absence d'alerte n'est pas une panne à afficher
+    }
+  };
+
+  const acquitter = async (id: number) => {
+    setAlertes(a => a.filter(x => x.id !== id));
+    try { await apiFetch(`/api/alertes-traitement/${id}/vue`, { method: 'POST' }); } catch {}
+  };
+
+  React.useEffect(() => {
+    fetchAlertes();
+    const t = setInterval(fetchAlertes, 20000);
+    return () => clearInterval(t);
+  }, []);
+
+  return { alertes, acquitter, refetch: fetchAlertes };
+}
+
+function AlertesTraitementLongBanner() {
+  const { alertes, acquitter } = useAlertesTraitementLong();
+  if (!alertes.length) return null;
+
+  return (
+    <div className="card" style={{ borderLeft: '4px solid var(--danger)', background: 'var(--surface-1)', marginBottom: '1rem' }}>
+      <p className="card-title" style={{ marginBottom: '.5rem' }}>
+        ⚠ Traitements non finalisés depuis plus de 5 min ({alertes.length})
+      </p>
+      <div style={{ display: 'grid', gap: '.5rem' }}>
+        {alertes.map(a => (
+          <div key={a.id} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '.5rem .75rem', borderRadius: 'var(--r-md)', border: '1px solid var(--border)',
+          }}>
+            <div style={{ fontSize: 13 }}>
+              <strong>{a.dossier_id}</strong> — agent {a.agent_saisie}, démarré il y a{' '}
+              {Math.round((Date.now() / 1000 - a.traitement_demarre_le) / 60)} min
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => acquitter(a.id)}>Vu</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Dashboard Superviseur
@@ -20,6 +88,8 @@ export function SupDashboard() {
           <p className="page-sub">Vue d'ensemble activité + équipe — {new Date().toLocaleDateString('fr-FR', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</p></div>
         <button className="btn btn-ghost btn-sm" onClick={() => { stats.refetch(); presence.refetch(); }}>↻ Actualiser</button>
       </div>
+
+      <AlertesTraitementLongBanner />
 
       {stats.error && <Alert kind="error">{stats.error}</Alert>}
       {stats.loading ? <LoadingCenter /> : stats.data && (

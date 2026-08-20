@@ -199,26 +199,9 @@ export function CallScreen({ route, navigation }: CallScreenProps) {
         }
       } catch (e) {
         console.warn('[CallScreen] acceptCall failed', e);
-        if (cancelled) return;
-        // BUG CORRIGÉ : cet appel à acceptCall() est un filet de sécurité
-        // redondant (voir commentaire plus haut — IncomingCallScreen.handleAccept
-        // l'a normalement déjà fait avec succès avant même que CallScreen ne
-        // monte). S'il échoue malgré tout ici (caméra/micro qui lâche entre-
-        // temps, permission révoquée...), on se contentait avant de changer le
-        // texte de statut, sans jamais nettoyer : la connexion restait
-        // enregistrée côté CallKeep/Telecom (answerNativeCall avait déjà été
-        // appelé côté IncomingCallScreen), callStore restait bloqué en
-        // 'connecting', et l'agent n'avait aucun moyen de sortir proprement de
-        // cet écran sinon en forçant la fermeture de l'app — exactement le
-        // genre de sortie qui peut laisser Android Telecom dans un état
-        // "coincé" (voir le crash onCreateIncomingConnection déjà diagnostiqué).
-        // On applique donc maintenant le même nettoyage complet que partout
-        // ailleurs dans l'app (IncomingCallScreen.handleAccept, ligne ~220).
-        scheduleUiUpdate(() => setStatusTxt('Connexion impossible'));
-        notificationService.endNativeCall(callUuid);
-        signalingService.hangUp();
-        callStore.resetCall();
-        navigation.replace('Idle');
+        if (!cancelled) {
+          scheduleUiUpdate(() => setStatusTxt('Connexion impossible'));
+        }
       }
     };
 

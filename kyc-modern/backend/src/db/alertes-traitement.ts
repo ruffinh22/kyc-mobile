@@ -56,7 +56,7 @@ export async function verifierAlertesTraitementLong(): Promise<void> {
       );
 
       try {
-        const sse = await import('./sse.js');
+        const sse = await import('../utils/sse.js');
         for (const sup of superviseurs) {
           sse.notifier(sup.matricule, 'alerte-traitement-long', {
             dossierId: c.id,

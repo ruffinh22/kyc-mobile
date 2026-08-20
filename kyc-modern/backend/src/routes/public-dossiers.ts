@@ -1218,15 +1218,18 @@ export async function publicDossierRoutes(app: any): Promise<void> {
           // robuste) — utile quand l'UI construit l'URL sans ?mtn=...
           const dossierIdCandidate = String((msg as any).dossierId ?? (msg as any).dossier_id ?? '').trim();
           if (!numeroMtn && dossierIdCandidate) {
-            try {
-              const dossier = await db.getDossierById(dossierIdCandidate);
-              if (dossier && dossier.numero_mtn) {
-                numeroMtn = String(dossier.numero_mtn ?? '').replace(/\D/g, '');
-                if (numeroMtn) console.log('[SIGNAL] resolved numeroMtn from dossierId', { dossierId: dossierIdCandidate, numeroMtn });
-              }
-            } catch (err) {
-              console.warn('[SIGNAL] failed to resolve numeroMtn from dossierId', dossierIdCandidate, err);
-            }
+            // db.getDossierById retourne une promesse : utiliser then/catch
+            // pour rester dans un contexte synchrone (callback non-async).
+            db.getDossierById(dossierIdCandidate)
+              .then((dossier) => {
+                if (dossier && dossier.numero_mtn) {
+                  numeroMtn = String(dossier.numero_mtn ?? '').replace(/\D/g, '');
+                  if (numeroMtn) console.log('[SIGNAL] resolved numeroMtn from dossierId', { dossierId: dossierIdCandidate, numeroMtn });
+                }
+              })
+              .catch((err) => {
+                console.warn('[SIGNAL] failed to resolve numeroMtn from dossierId', dossierIdCandidate, err);
+              });
           }
           // Identité de l'agent back-office à l'origine de l'appel, envoyée
           // explicitement par le client (VideoCallPage.tsx) puisque ce

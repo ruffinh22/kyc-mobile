@@ -23,7 +23,7 @@ interface CallState {
   isMicOn:      boolean;
   isCameraOn:   boolean;
   callDuration: number;   // secondes
-  lastError:    string | null;
+  errorMessage: string | null;
   // Identité de l'agent back-office qui a déclenché l'appel ENTRANT (voir
   // public-dossiers.ts → SignalingService/NotificationService). Vide pour un
   // appel sortant. Stocké ici (plutôt que transmis via route.params) pour que
@@ -53,7 +53,7 @@ export const useCallStore = create<CallState>((set) => ({
   isMicOn:      true,
   isCameraOn:   true,
   callDuration: 0,
-  lastError:    null,
+  errorMessage: null,
   agentAppelantMatricule: '',
   agentAppelantNom:       '',
 
@@ -80,7 +80,7 @@ export const useCallStore = create<CallState>((set) => ({
         return state;
       }
       return {
-        status: 'incoming', numeroMtn, callUuid: uuid, lastError: null,
+        status: 'incoming', numeroMtn, callUuid: uuid, errorMessage: null,
         agentAppelantMatricule: agentMatricule, agentAppelantNom: agentNom,
       };
     }),
@@ -92,13 +92,13 @@ export const useCallStore = create<CallState>((set) => ({
         console.log('[CallStore] appel déjà en cours, setOutgoingCall ignoré', { statutActuel: state.status });
         return state;
       }
-      return { status: 'outgoing', numeroMtn, callUuid: `out-${Date.now()}`, lastError: null };
+      return { status: 'outgoing', numeroMtn, callUuid: `out-${Date.now()}`, errorMessage: null };
     }),
 
-  setConnecting: () => set({ status: 'connecting', lastError: null }),
+  setConnecting: () => set({ status: 'connecting', errorMessage: null }),
 
   setCallActive: (active) =>
-    set({ status: active ? 'active' : 'connecting', isCallActive: active }),
+    set({ status: active ? 'active' : 'connecting', isCallActive: active, errorMessage: null }),
 
   // Coupure réseau transitoire pendant l'appel (grâce ICE avant abandon définitif)
   setReconnecting: () => set({ status: 'reconnecting' }),
@@ -107,7 +107,7 @@ export const useCallStore = create<CallState>((set) => ({
   setDeclined: () => set({ status: 'declined' }),
 
   // Échec définitif (caméra/micro indisponible, ICE failed, timeout…)
-  setFailed: (reason) => set({ status: 'failed', lastError: reason ?? null }),
+  setFailed: (reason) => set({ status: 'failed', errorMessage: reason ?? null }),
 
   setMicOn:        (on) => set({ isMicOn: on }),
   setCameraOn:     (on) => set({ isCameraOn: on }),
@@ -115,7 +115,7 @@ export const useCallStore = create<CallState>((set) => ({
 
   resetCall: () => set({
     status: 'idle', numeroMtn: '', callUuid: '',
-    isCallActive: false, isMicOn: true, isCameraOn: true, callDuration: 0, lastError: null,
+    isCallActive: false, isMicOn: true, isCameraOn: true, callDuration: 0, errorMessage: null,
     agentAppelantMatricule: '', agentAppelantNom: '',
   }),
 }));

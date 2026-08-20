@@ -1212,7 +1212,22 @@ export async function publicDossierRoutes(app: any): Promise<void> {
 
         if (msg.type === 'call' && role === 'backoffice' && numero) {
           const target = normalizeNumero(msg.numero || numero);
-          const numeroMtn = String(msg.numeroMtn ?? '');
+          let numeroMtn = String(msg.numeroMtn ?? '');
+          // Si le back-office n'a pas fourni `numeroMtn`, tenter de le
+          // résoudre côté serveur depuis un `dossierId` fourni (repli
+          // robuste) — utile quand l'UI construit l'URL sans ?mtn=...
+          const dossierIdCandidate = String((msg as any).dossierId ?? (msg as any).dossier_id ?? '').trim();
+          if (!numeroMtn && dossierIdCandidate) {
+            try {
+              const dossier = await db.getDossierById(dossierIdCandidate);
+              if (dossier && dossier.numero_mtn) {
+                numeroMtn = String(dossier.numero_mtn ?? '').replace(/\D/g, '');
+                if (numeroMtn) console.log('[SIGNAL] resolved numeroMtn from dossierId', { dossierId: dossierIdCandidate, numeroMtn });
+              }
+            } catch (err) {
+              console.warn('[SIGNAL] failed to resolve numeroMtn from dossierId', dossierIdCandidate, err);
+            }
+          }
           // Identité de l'agent back-office à l'origine de l'appel, envoyée
           // explicitement par le client (VideoCallPage.tsx) puisque ce
           // WebSocket n'est pas authentifié. Purement informative côté

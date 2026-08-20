@@ -75,9 +75,9 @@ export function IdleScreen({ navigation }: IdleScreenProps) {
   // setConnected là-bas) — IdleScreen ne fait plus que le lire, il ne pilote
   // plus lui-même la connexion WS (voir plus bas).
   const { numeroAgent, isConnected } = useAgentStore();
-  // Champ aligné sur callStore.ts (errorMessage), qui est la source de
-  // vérité pour cette version du store — voir callStore.setFailed(), posé
-  // désormais par le bootstrap centralisé dans App.tsx.
+  // Champ aligné sur callStore.ts (`errorMessage`, posé par `setFailed()`).
+  // Utiliser le champ correct garantit que le bandeau d'erreur s'affiche
+  // quand `setFailed()` est appelé (ex. depuis App.tsx onMediaError).
   const errorMessage = useCallStore((s) => s.errorMessage);
 
   const scale = useResponsiveScale();

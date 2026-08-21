@@ -26,11 +26,18 @@ interface AlerteTraitementLong {
 
 type SortKey = 'id' | 'duree' | 'statut' | 'agent' | 'numero';
 
-const REFRESH_MS = 15_000;
+const REFRESH_MS = 5_000;
 
 const STATUT_LABEL: Record<DossierStatut, string> = {
   en_attente: 'En attente', en_cours: 'En cours', accepte: 'Accepté', rejete: 'Rejeté',
 } as any;
+
+const STATUT_BADGE_CLASS: Record<DossierStatut, string> = {
+  en_attente: 'b-attente',
+  en_cours: 'b-cours',
+  accepte: 'b-accepte',
+  rejete: 'b-rejete',
+};
 
 function DureeCell({ depuisSec }: { depuisSec: number | null }) {
   const now = useLiveClock(1000);
@@ -59,16 +66,17 @@ export function SupCommandCenter() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const stats = useFetch(() => api.getDossierStats(), []);
-  const presence = useFetch(() => api.getPresenceResume(), []);
-  const file = useFetch(() => api.getSupFileAttente(date), [date]);
+  const stats = useFetch(() => api.getDossierStats(), [], { silent: true });
+  const presence = useFetch(() => api.getPresenceResume(), [], { silent: true });
+  const file = useFetch(() => api.getSupFileAttente(date), [date], { silent: true });
   const alertes = useFetch(
     () => apiFetch<{ success: boolean; alertes: AlerteTraitementLong[] }>('/api/alertes-traitement'),
-    []
+    [],
+    { silent: true }
   );
   // Seuil de charge configurable (Configuration > seuil d'alerte) plutôt
   // qu'une valeur figée dans le code — l'admin peut l'ajuster sans déploi.
-  const seuilAlerte = useFetch(() => api.getSeuilAlerte(), []);
+  const seuilAlerte = useFetch(() => api.getSeuilAlerte(), [], { silent: true });
   const seuil = seuilAlerte.data?.seuil ?? 10;
 
   const now = useLiveClock(1000);
@@ -77,9 +85,15 @@ export function SupCommandCenter() {
   const secondsSinceRefresh = Math.max(0, Math.floor((now - lastFetchAt) / 1000));
 
   // useFetch (hooks/index.ts) ne poll pas tout seul : on rafraîchit la file
-  // et les alertes nous-mêmes toutes les 15s pour garder la vue "en direct".
+  // et les alertes nous-mêmes toutes les 5s pour garder la vue "en direct"
+  // sans rechargement complet de la page.
   React.useEffect(() => {
-    const t = setInterval(() => { file.refetch(); alertes.refetch(); }, REFRESH_MS);
+    const t = setInterval(() => {
+      stats.refetchSilent();
+      presence.refetchSilent();
+      file.refetchSilent();
+      alertes.refetchSilent();
+    }, REFRESH_MS);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -131,7 +145,12 @@ export function SupCommandCenter() {
     else { setSortKey(key); setSortDesc(true); }
   };
 
-  const refetchAll = () => { stats.refetch(); presence.refetch(); file.refetch(); alertes.refetch(); };
+  const refetchAll = () => {
+    stats.refetch();
+    presence.refetch();
+    file.refetch();
+    alertes.refetch();
+  };
 
   const selIndex = sel ? sorted.findIndex(r => r.d.id === sel.id) : -1;
   useDossierShortcuts({
@@ -174,7 +193,7 @@ export function SupCommandCenter() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Command Center</h1>
-          <p className="page-sub">Vue unique en direct — file active, alertes et présence, actualisée toutes les 15s.</p>
+          <p className="page-sub">Vue unique en direct — file active, alertes et présence, actualisée toutes les 5s en arrière-plan.</p>
         </div>
         <div style={{ textAlign: 'right' }}>
           <button className="btn btn-ghost btn-sm" onClick={refetchAll}>↻ Actualiser</button>
@@ -248,7 +267,7 @@ export function SupCommandCenter() {
                     <td><strong>{d.id}</strong></td>
                     <td>{d.agent_saisie || '—'}</td>
                     <td>{d.numero_mtn || '—'}</td>
-                    <td><span className={`badge b-${d.statut}`}>{STATUT_LABEL[d.statut] || d.statut}</span></td>
+                    <td><span className={`badge ${STATUT_BADGE_CLASS[d.statut] ?? 'b-attente'}`}>{STATUT_LABEL[d.statut] || d.statut}</span></td>
                     <td><DureeCell depuisSec={depuis} /></td>
                     <td>
                       {alerte ? (

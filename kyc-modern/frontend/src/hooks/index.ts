@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { sendHeartbeat } from '../services/api';
 
-export function useFetch<T>(fn: (() => Promise<T>) | null, deps: unknown[] = []) {
+export function useFetch<T>(
+  fn: (() => Promise<T>) | null,
+  deps: unknown[] = [],
+  options: { silent?: boolean } = {}
+) {
   const [data,    setData]    = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -10,7 +14,10 @@ export function useFetch<T>(fn: (() => Promise<T>) | null, deps: unknown[] = [])
   useEffect(() => {
     if (!fn) return;
     let dead = false;
-    setLoading(true); setError(null);
+    if (!options.silent) {
+      setLoading(true);
+      setError(null);
+    }
     fn()
       .then(r  => { if (!dead) setData(r); })
       .catch(e => {
@@ -19,13 +26,22 @@ export function useFetch<T>(fn: (() => Promise<T>) | null, deps: unknown[] = [])
           setError(e instanceof Error ? e.message : 'Erreur');
         }
       })
-      .finally(() => { if (!dead) setLoading(false); });
+      .finally(() => { if (!dead && !options.silent) setLoading(false); });
     return () => { dead = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick, ...deps]);
 
-  const refetch = useCallback(() => setTick(t => t + 1), []);
-  return { data, loading, error, refetch };
+  const refetch = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    setTick(t => t + 1);
+  }, []);
+
+  const refetchSilent = useCallback(() => {
+    setTick(t => t + 1);
+  }, []);
+
+  return { data, loading, error, refetch, refetchSilent };
 }
 
 export function useHeartbeat(active: boolean, ms = 60_000) {

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Role } from '../../types';
 
@@ -89,6 +90,7 @@ const NAV: Record<Role, NavSection[]> = {
     {
       items: [
         { key: 'dashboard',      icon: '📊', label: 'Tableau de bord' },
+        { key: 'command-center', icon: '🧭', label: 'Command Center' },
         { key: 'file-attente',   icon: '📥', label: "File d'attente" },
         { key: 'historique',     icon: '🕓', label: 'Historique' },
         { key: 'donnees-heures', icon: '⏱',  label: 'Données par heure' },
@@ -175,28 +177,64 @@ export function Sidebar({
   role,
   active,
   onChange,
+  collapsed,
+  onToggle,
 }: {
   role: Role;
   active: string;
   onChange(k: string): void;
+  collapsed: boolean;
+  onToggle(): void;
 }) {
+  const firstItemKey = NAV[role][0]?.items[0]?.key;
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
       {NAV[role].map((section, i) => (
-        <nav key={i}>
+        <nav key={i} className="sidebar-nav-group">
           {section.label && (
-            <div className="sidebar-section-label">{section.label}</div>
+            <div className="sidebar-section-label">{collapsed ? '' : section.label}</div>
           )}
-          {section.items.map(item => (
-            <button
-              key={item.key}
-              className={`nav-btn ${active === item.key ? 'active' : ''}`}
-              onClick={() => onChange(item.key)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
+          {section.items.map(item => {
+            const isDashboardRow = i === 0 && item.key === firstItemKey;
+
+            if (isDashboardRow) {
+              return (
+                <div key={item.key} className="nav-row nav-row--dashboard">
+                  <button
+                    className={`nav-btn ${active === item.key ? 'active' : ''}`}
+                    onClick={() => onChange(item.key)}
+                    title={collapsed ? item.label : undefined}
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    {!collapsed && <span className="nav-label">{item.label}</span>}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="sidebar-toggle-inline"
+                    onClick={onToggle}
+                    aria-label={collapsed ? 'Développer le menu' : 'Réduire le menu'}
+                    title={collapsed ? 'Développer le menu' : 'Réduire le menu'}
+                  >
+                    {collapsed ? '›' : '‹'}
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <button
+                key={item.key}
+                className={`nav-btn ${active === item.key ? 'active' : ''}`}
+                onClick={() => onChange(item.key)}
+                title={collapsed ? item.label : undefined}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                {!collapsed && <span className="nav-label">{item.label}</span>}
+              </button>
+            );
+          })}
         </nav>
       ))}
     </aside>

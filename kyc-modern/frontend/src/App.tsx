@@ -21,6 +21,7 @@ import {
   SupPerformance, SupDistribution, SupDonneesHeures, SupFlux,
   SupCompilationGsm, SupNotesQualite, SupPlanning, SupReporting,
 } from './pages/sup/SupPages';
+import { SupCommandCenter } from './pages/sup/SupCommandCenter';
 import { SupReferentielsGsm } from './pages/sup/ReferentielsGsmPage';
 import { SupCapturesPage } from './pages/sup/CapturesPage';
 import { SupPlanningManagersPage } from './pages/sup/PlanningManagersPage';
@@ -46,6 +47,7 @@ const PAGE_PATHS: Record<string, string> = {
   'gsm-historique': '/gsm-historique',
   'gsm-perfs': '/gsm-perfs',
   'file-attente': '/file-attente',
+  'command-center': '/command-center',
   'mes-dossiers': '/mes-dossiers',
   'video-call': '/video-call',
   planning: '/planning',
@@ -115,6 +117,7 @@ function AgentApp({ page }: { page: string }) {
 function SupApp({ page }: { page: string }) {
   switch (page) {
     case 'file-attente':      return <SupFileAttente />;
+    case 'command-center':    return <SupCommandCenter />;
     case 'historique':        return <SupHistorique />;
     case 'presence':          return <SupPresence />;
     case 'performance':       return <SupPerformance />;
@@ -154,6 +157,7 @@ function AdminApp({ page }: { page: string }) {
 function AuthenticatedShell() {
   const { user } = useAuth();
   const [page, setPage] = useState('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const navigateToPage = (nextPage: string) => {
     const path = getPathForPage(nextPage);
@@ -209,9 +213,15 @@ function AuthenticatedShell() {
   if (user.must_change_password) return <ChangePasswordPage />;
 
   return (
-    <div className={`shell shell--${user.role}`}>
+    <div className={`shell shell--${user.role} ${sidebarCollapsed ? 'shell--collapsed' : ''}`}>
       <Topbar />
-      <Sidebar role={user.role} active={page} onChange={navigateToPage} />
+      <Sidebar
+        role={user.role}
+        active={page}
+        onChange={navigateToPage}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed(v => !v)}
+      />
       <main className="main">
         {user.role === 'agent'       && <AgentApp page={page} />}
         {user.role === 'superviseur' && <SupApp   page={page} />}

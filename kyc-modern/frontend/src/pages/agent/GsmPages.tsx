@@ -109,10 +109,10 @@ function SectionLabel({ children, accent = MTN_BLUE }: { children: ReactNode; ac
 }
 
 const STATUT_BADGE: Record<string, { bg: string; fg: string }> = {
-  accepte:    { bg: '#DCFCE7', fg: '#166534' },
-  rejete:     { bg: '#FEE2E2', fg: '#991B1B' },
-  en_cours:   { bg: '#FEF3C7', fg: '#92400E' },
-  en_attente: { bg: '#FEF3C7', fg: '#92400E' },
+  accepte:    { bg: '#E3F9F0', fg: '#00875A' },
+  rejete:     { bg: '#FEF0EF', fg: '#D91E18' },
+  en_cours:   { bg: '#E8F0FB', fg: '#003087' },
+  en_attente: { bg: '#FFFBE0', fg: '#E6B800' },
 };
 
 function StatutBadge({ value }: { value?: string | null }) {

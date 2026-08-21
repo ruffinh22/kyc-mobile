@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
+import { usePersistedState } from '../../hooks/usePersistedState';
+import { useDossierShortcuts } from '../../hooks/useDossierShortcuts';
 import * as XLSX from 'xlsx';
 import * as api from '../../services/api';
 import { apiFetch } from '../../services/api';
@@ -137,8 +139,10 @@ export function SupDashboard() {
 // 2. File d'attente Superviseur (vue complète avec transfert)
 // ─────────────────────────────────────────────────────────────────────────────
 export function SupFileAttente() {
-  const [date, setDate] = useState(todayISO());
-  const [statut, setStatut] = useState<DossierStatut|''>('');
+  // Persisté : un superviseur qui revient sur cette page (après avoir ouvert
+  // un dossier, ou changé de page) retrouve la même date/statut filtrés.
+  const [date, setDate] = usePersistedState('fileAttente.date', todayISO());
+  const [statut, setStatut] = usePersistedState<DossierStatut|''>('fileAttente.statut', '');
   const [sel, setSel] = useState<Dossier|null>(null);
   const [transfertTarget, setTransfertTarget] = useState<Dossier|null>(null);
   const [cible, setCible] = useState('');
@@ -149,11 +153,34 @@ export function SupFileAttente() {
   const { data, loading, error, refetch } = useFetch(
     () => api.getSupFileAttente(date), [date]
   );
+  // Seuil configurable (Configuration > seuil d'alerte) plutôt qu'une
+  // valeur figée — l'admin peut l'ajuster sans déploiement.
+  const { data: seuilData } = useFetch(() => api.getSeuilAlerte(), []);
 
   const dossiers = data?.dossiers ?? [];
   const filtered = dossiers.filter(d => !statut || d.statut === statut);
 
-  const alertThreshold = 10;
+  // Navigation clavier rapide : ↓/J suivant, ↑/K précédent, Entrée ouvrir,
+  // T transférer, R rafraîchir — désactivée pendant qu'un modal est ouvert
+  // pour ne pas déclencher deux actions en même temps.
+  const selIndex = sel ? filtered.findIndex(d => d.id === sel.id) : -1;
+  useDossierShortcuts({
+    enabled: !transfertTarget,
+    onSuivant: () => {
+      const next = selIndex < 0 ? 0 : Math.min(selIndex + 1, filtered.length - 1);
+      if (filtered[next]) setSel(filtered[next]);
+    },
+    onPrecedent: () => {
+      const prev = selIndex < 0 ? 0 : Math.max(selIndex - 1, 0);
+      if (filtered[prev]) setSel(filtered[prev]);
+    },
+    onOuvrir: () => { if (!sel && filtered[0]) setSel(filtered[0]); },
+    onTransferer: () => { if (sel) { setTransfertTarget(sel); setSel(null); } },
+    onEchap: () => { setSel(null); setTransfertTarget(null); },
+    onRafraichir: refetch,
+  });
+
+  const alertThreshold = seuilData?.seuil ?? 10;
   const waitingCount = filtered.filter(d => d.statut === 'en_attente').length;
   const inProgressCount = filtered.filter(d => d.statut === 'en_cours').length;
   const longRunning = filtered.filter(d => d.statut === 'en_cours' && d.assigne_le && d.assigne_le > 0).sort((a, b) => {
@@ -191,6 +218,9 @@ export function SupFileAttente() {
           <p className="page-sub">Tous les dossiers du jour avec possibilité de transfert.</p></div>
         <button className="btn btn-ghost btn-sm" onClick={refetch}>↻</button>
       </div>
+      <p style={{ fontSize: 11.5, color: 'var(--ink-4)', margin: '-.5rem 0 .75rem' }}>
+        Raccourcis : <kbd>↓</kbd>/<kbd>↑</kbd> naviguer · <kbd>Entrée</kbd> ouvrir · <kbd>T</kbd> transférer · <kbd>R</kbd> rafraîchir · <kbd>Échap</kbd> fermer
+      </p>
       {error && <Alert kind="error">{error}</Alert>}
       {err   && <Alert kind="error">{err}</Alert>}
 
@@ -283,12 +313,15 @@ export function SupFileAttente() {
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. Historique complet
 // ─────────────────────────────────────────────────────────────────────────────
+const HISTORIQUE_PAGE_SIZE = 200;
+
 export function SupHistorique() {
-  const [debut, setDebut] = useState('');
-  const [fin, setFin]     = useState('');
-  const [statut, setStatut] = useState<DossierStatut|''>('');
-  const [agent, setAgent]   = useState('');
-  const [search, setSearch] = useState('');
+  const [debut, setDebut] = usePersistedState('historique.debut', '');
+  const [fin, setFin]     = usePersistedState('historique.fin', '');
+  const [statut, setStatut] = usePersistedState<DossierStatut|''>('historique.statut', '');
+  const [agent, setAgent]   = usePersistedState('historique.agent', '');
+  const [search, setSearch] = usePersistedState('historique.search', '');
+  const [page, setPage] = useState(0);
   const dSearch = useDebounce(search, 350);
   const [sel, setSel] = useState<Dossier|null>(null);
   const [transfertTarget, setTransfertTarget] = useState<Dossier|null>(null);
@@ -296,17 +329,20 @@ export function SupHistorique() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string|null>(null);
 
+  // Retour à la page 0 dès qu'un filtre change, pour ne jamais rester
+  // bloqué sur une page devenue vide après un changement de critère.
+  React.useEffect(() => { setPage(0); }, [debut, fin, statut, agent, dSearch]);
+
   const { data, loading, error, refetch } = useFetch(
     () => api.getDossiersHistorique({
-      debut: debut || undefined,
-      fin: fin || undefined,
-      statut: statut || undefined,
-      agent: agent || undefined,
-      search: dSearch || undefined,
-      limit: 500,
+      debut, fin, statut: statut||undefined, agent: agent||undefined, search: dSearch||undefined,
+      limit: HISTORIQUE_PAGE_SIZE, offset: page * HISTORIQUE_PAGE_SIZE,
     }),
-    [debut, fin, statut, agent, dSearch]
+    [debut, fin, statut, agent, dSearch, page]
   );
+
+  const rows = data?.dossiers ?? [];
+  const isLastPage = rows.length < HISTORIQUE_PAGE_SIZE;
 
   const doTransfert = async () => {
     if (!transfertTarget || !cible.trim()) return;
@@ -345,8 +381,14 @@ export function SupHistorique() {
 
       {loading ? <LoadingCenter /> : (
         <div className="card">
-          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>{data?.total ?? 0} résultat(s)</div>
-          <DossiersTable dossiers={data?.dossiers ?? []} onSelect={setSel} />
+          <div style={{ fontSize:12, color:'var(--ink-3)', marginBottom:'.75rem' }}>
+            {data?.total ?? rows.length} résultat(s) — page {page + 1}
+          </div>
+          <DossiersTable dossiers={rows} onSelect={setSel} />
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' }}>
+            <button className="btn btn-ghost btn-sm" disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>← Précédent</button>
+            <button className="btn btn-ghost btn-sm" disabled={isLastPage} onClick={() => setPage(p => p + 1)}>Suivant →</button>
+          </div>
         </div>
       )}
 
@@ -478,7 +520,8 @@ export function SupPerformance() {
 // ─────────────────────────────────────────────────────────────────────────────
 export function SupDistribution() {
   const modeQ    = useFetch(() => api.getDistributionMode(), []);
-  const statsQ   = useFetch(() => api.getDossierStats(), []);
+  const waitingQ = useFetch(() => api.getDossiers({ statut: 'en_attente', limit: 1 }), []);
+  const activeQ  = useFetch(() => api.getDossiers({ statut: 'en_cours', limit: 1 }), []);
   const presenceQ = useFetch(() => api.getPresenceResume(), []);
 
   const [changing, setChanging] = useState(false);
@@ -498,45 +541,63 @@ export function SupDistribution() {
   return (
     <>
       <div className="page-header">
-        <div><h1 className="page-title">Distribution des dossiers</h1><p className="page-sub">Gestion de l'attribution des dossiers en attente.</p></div>
-        <button className="btn btn-ghost btn-sm" onClick={() => { modeQ.refetch(); statsQ.refetch(); presenceQ.refetch(); }}>↻</button>
+        <div>
+          <h1 className="page-title">Distribution des dossiers</h1>
+          <p className="page-sub">Gestion de l'attribution des dossiers en attente.</p>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => { modeQ.refetch(); waitingQ.refetch(); activeQ.refetch(); presenceQ.refetch(); }}>↻</button>
       </div>
       {err && <Alert kind="error">{err}</Alert>}
 
-      <div className="card">
-        <div className="card-header">
-          <div><p className="card-title">Mode de distribution</p>
-            <p style={{ fontSize:13, color:'var(--ink-3)', marginTop:'.25rem' }}>
-              {mode === 'auto' ? 'Auto : attribution FIFO toutes les 2s au 1er agent disponible.' : 'Manuel : chaque agent choisit son dossier dans la file.'}
+      <div className="distribution-panel">
+        <div className="distribution-head">
+          <div className="distribution-title-wrap">
+            <span className="distribution-kicker">Mode de distribution</span>
+            <p className="distribution-description">
+              {mode === 'auto'
+                ? 'Auto : attribution FIFO toutes les 2s au 1er agent disponible.'
+                : 'Manuel : chaque agent choisit son dossier dans la file.'}
             </p>
           </div>
-          <div className="toggle-wrap">
+          <div className="toggle-wrap distribution-toggle-wrap">
             <label className="toggle">
               <input type="checkbox" checked={mode === 'auto'} onChange={toggleMode} disabled={changing} />
               <span className="toggle-track" />
             </label>
-            <span className="toggle-label" style={{ color: mode === 'auto' ? 'var(--success)' : 'var(--ink-3)', fontWeight: 600 }}>
+            <span className="toggle-label" style={{ color: mode === 'auto' ? 'var(--success)' : 'var(--ink-3)', fontWeight: 700 }}>
               {mode === 'auto' ? 'AUTO' : 'MANUEL'}
             </span>
           </div>
         </div>
       </div>
 
-      {statsQ.data && (
-        <div className="stats-grid">
-          <StatCard label="En attente" value={statsQ.data.en_attente} variant="attente" sub="À distribuer" />
-          <StatCard label="En cours"   value={statsQ.data.en_cours}   variant="cours"   sub="En traitement" />
+      {(waitingQ.data || activeQ.data || presenceQ.data) && (
+        <div className="stats-grid distribution-stats">
+          <StatCard label="En attente" value={waitingQ.data?.total ?? 0} variant="attente" sub="À distribuer" />
+          <StatCard label="En cours" value={activeQ.data?.total ?? 0} variant="cours" sub="En traitement" />
           <StatCard label="Agents actifs" value={(presenceQ.data?.en_ligne ?? 0)} variant="accepte" sub="Disponibles" />
         </div>
       )}
 
-      <div className="card">
+      <div className="card distribution-rules">
         <p className="card-title">Règles de distribution automatique</p>
         <div className="detail-grid">
-          <div className="detail-item"><span className="detail-label">Ordre dossiers</span><span className="detail-value">FIFO strict — le plus ancien en attente d'abord</span></div>
-          <div className="detail-item"><span className="detail-label">Sélection agent</span><span className="detail-value">En ligne, sans dossier en cours, disponible depuis le plus longtemps</span></div>
-          <div className="detail-item"><span className="detail-label">Fréquence</span><span className="detail-value">Toutes les 2 secondes</span></div>
-          <div className="detail-item"><span className="detail-label">Seuil heartbeat</span><span className="detail-value">Agent ignoré si heartbeat {'>'} 120s</span></div>
+          <div className="detail-item">
+            <span className="detail-label">Ordre dossiers</span>
+            <span className="detail-value">FIFO strict — le plus ancien en attente d'abord</span>
+          </div>
+          <div className="detail-item">
+            <span className="detail-label">Sélection agent</span>
+            <span className="detail-value">En ligne, sans dossier en cours, disponible depuis le plus longtemps</span>
+          </div>
+          <div className="detail-item">
+            <span className="detail-label">Fréquence</span>
+            <span className="detail-value">Toutes les 2 secondes</span>
+          </div>
+          <div className="detail-item">
+            <span className="detail-label">Seuil heartbeat</span>
+            <span className="detail-value">Agent ignoré si heartbeat {'>'} 120s</span>
+          </div>
         </div>
       </div>
     </>

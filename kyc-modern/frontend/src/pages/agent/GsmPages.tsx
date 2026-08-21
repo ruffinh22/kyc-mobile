@@ -43,6 +43,60 @@ function formatGsmEvolutionLabel(value?: string | null): string {
   return formatGsmDateValue(text);
 }
 
+function normalizeGsmStatus(value?: string | null, fallback?: string | null): string | null {
+  const raw = String(value ?? fallback ?? '').trim();
+  if (!raw) return null;
+
+  const text = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normalized = text.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const aliases: Record<string, string> = {
+    accepte: 'Accepté',
+    accepte_avec_parrainage: 'Accepté',
+    accepte_avec_parrainage_final: 'Accepté',
+    accepted: 'Accepté',
+    valide: 'Accepté',
+    valider: 'Accepté',
+    validee: 'Accepté',
+    valid: 'Accepté',
+    validé: 'Accepté',
+    validé_final: 'Accepté',
+    rejete: 'Rejeté',
+    rejet: 'Rejeté',
+    rejette: 'Rejeté',
+    refuse: 'Rejeté',
+    refusee: 'Rejeté',
+    refuser: 'Rejeté',
+    rejected: 'Rejeté',
+    rejected_final: 'Rejeté',
+    en_cours: 'En cours',
+    encours: 'En cours',
+    cours: 'En cours',
+    en_attente: 'En cours',
+    en_attente_final: 'En cours',
+    attente: 'En cours',
+    a_corriger: 'En cours',
+    a_corriger_au_superviseur: 'En cours',
+    a_corriger_final: 'En cours',
+    correction: 'En cours',
+    correction_requise: 'En cours',
+    transmis_au_superviseur: 'En cours',
+    transmis_au_superviseur_final: 'En cours',
+    transmission_au_superviseur: 'En cours',
+    cloture_sans_suite: 'En cours',
+    cloture_sans_suite_final: 'En cours',
+    reenregistrement_demande: 'En cours',
+    re_enregistrement_demande: 'En cours',
+    reenregistrement: 'En cours',
+    demande_de_renregistrement: 'En cours',
+    reprise_demande: 'En cours',
+    traitement_en_cours: 'En cours',
+    traitement_en_cours_final: 'En cours',
+  };
+
+  return aliases[normalized] ?? raw;
+}
+
 function SectionLabel({ children, accent = MTN_BLUE }: { children: ReactNode; accent?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '2px 0 4px' }}>
@@ -62,15 +116,16 @@ const STATUT_BADGE: Record<string, { bg: string; fg: string }> = {
 };
 
 function StatutBadge({ value }: { value?: string | null }) {
-  if (!value) return <span style={{ color: MTN_MUTED }}>—</span>;
-  const key = value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+  const normalized = normalizeGsmStatus(value);
+  if (!normalized) return <span style={{ color: MTN_MUTED }}>—</span>;
+  const key = normalized.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
   const tone = STATUT_BADGE[key] ?? { bg: '#EEF2F7', fg: MTN_TEXT };
   return (
     <span style={{
       display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 10px',
       borderRadius: 999, background: tone.bg, color: tone.fg, whiteSpace: 'nowrap',
     }}>
-      {value}
+      {normalized}
     </span>
   );
 }
@@ -78,15 +133,16 @@ function StatutBadge({ value }: { value?: string | null }) {
 // Pastille neutre pour les valeurs de référentiel (constat, pièce, action, statut
 // final…) dans les tableaux — évite le texte brut et donne un rendu uniforme et
 // institutionnel à toutes les listes GSM du fichier.
-function Chip({ value }: { value?: string | null }) {
-  if (!value) return <span style={{ color: MTN_MUTED }}>—</span>;
+function Chip({ value, fallback }: { value?: string | null; fallback?: string | null }) {
+  const display = normalizeGsmStatus(value, fallback);
+  if (!display) return <span style={{ color: MTN_MUTED }}>—</span>;
   return (
     <span style={{
       display: 'inline-block', fontSize: 11.5, fontWeight: 600, padding: '3px 9px',
       borderRadius: 999, background: '#EEF2FF', color: MTN_BLUE, whiteSpace: 'nowrap',
       border: `1px solid ${MTN_BLUE}26`,
     }}>
-      {value}
+      {display}
     </span>
   );
 }
@@ -220,7 +276,7 @@ export function GsmMonTableau() {
                         <td><strong>{g.numero}</strong></td>
                         <td>{formatGsmDateValue(g.date_saisie)}</td>
                         <td><Chip value={g.constat} /></td>
-                        <td><Chip value={g.statut_final} /></td>
+                        <td><Chip value={g.statut_final} fallback={g.action ?? undefined} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -933,7 +989,7 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
                     <td><Chip value={g.constat} /></td>
                     <td><Chip value={g.piece} /></td>
                     <td><Chip value={g.action} /></td>
-                    <td><Chip value={g.statut_final} /></td>
+                    <td><Chip value={g.statut_final} fallback={g.action ?? undefined} /></td>
                     <td style={{ textAlign: 'right' }}>
                       <button
                         type="button"
@@ -1014,7 +1070,7 @@ export function GsmHistorique() {
                       <td>{formatGsmDateValue(g.date_saisie)}</td>
                       <td><Chip value={g.type_id} /></td>
                       <td><Chip value={g.constat} /></td>
-                      <td><Chip value={g.statut_final} /></td>
+                      <td><Chip value={g.statut_final} fallback={g.action ?? undefined} /></td>
                       <td onClick={e => e.stopPropagation()}>
                         <div style={{ display:'flex', gap:'.3rem' }}>
                           <button className="btn btn-ghost btn-sm" onClick={() => setSel(g)}>Voir</button>

@@ -4,6 +4,7 @@
 // ============================================================================
 import { FastifyRequest } from 'fastify';
 import * as db from '../db';
+import { requireAuth } from '../middleware/auth';
 
 // Types
 interface PlanningShift {
@@ -24,6 +25,8 @@ interface PlanningRequest {
 }
 
 export async function planningManagersRoutes(app: any): Promise<void> {
+  app.addHook('preHandler', requireAuth);
+
   app.register(async function (fastify) {
     // Middleware d'authentification
     fastify.addHook('preHandler', async (request: FastifyRequest, reply) => {

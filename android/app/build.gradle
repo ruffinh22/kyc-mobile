@@ -33,15 +33,6 @@ android {
 
         missingDimensionStrategy 'react-native-firebase', 'release'
         missingDimensionStrategy 'react-native-camera', 'general'
-
-        // Un seul APK contenant les 2 architectures réellement présentes sur
-        // le parc téléphone (arm64-v8a = quasi tous les appareils 2017+,
-        // armeabi-v7a = anciens/bas de gamme). x86/x86_64 ne servent qu'à
-        // l'émulateur — jamais présents sur un vrai téléphone, on les exclut
-        // pour ne pas payer leur poids dans l'APK final.
-        ndk {
-            abiFilters "arm64-v8a", "armeabi-v7a"
-        }
     }
 
     signingConfigs {
@@ -65,11 +56,20 @@ android {
         }
         release {
             signingConfig signingConfigs.release
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled false
+            shrinkResources false
             debuggable false
             jniDebuggable false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a"
+            universalApk true
         }
     }
 
@@ -79,18 +79,26 @@ android {
     }
 }
 
-// ── Nommage de sortie ────────────────────────────────────────────────────
-// Plus de splits ABI : un seul APK universel par variante (arm64-v8a +
-// armeabi-v7a embarqués ensemble), donc plus besoin de versionCode dérivé
-// par architecture.
+// ── Versioning et nommage par variante ─────────────────────────────────────
+// Google Play (et certains outils de distribution) exigent un versionCode
+// UNIQUE par APK quand on utilise les splits ABI. On dérive un versionCode
+// par architecture à partir du versionCode de base, et on renomme chaque
+// APK de sortie pour les distinguer facilement (ex: kyc-mobile-1.0.0-arm64-v8a.apk).
+project.ext.abiCodes = ["arm64-v8a": 1]
+
 android.applicationVariants.all { variant ->
     variant.outputs.each { output ->
+        def abiName = output.getFilter(com.android.build.OutputFile.ABI) ?: "arm64-v8a"
+        def abiCode = project.ext.abiCodes.get(abiName, 0)
+        output.versionCodeOverride = variant.versionCode * 10 + abiCode
+
         def versionName = variant.versionName
         def buildType = variant.buildType.name
         if (buildType == 'debug') {
-            output.outputFileName = "app-${buildType}.apk"
+            // Keep the default RN CLI install pattern for `npx react-native run-android`
+            output.outputFileName = "app-${abiName}-${buildType}.apk"
         } else {
-            output.outputFileName = "kyc-mobile-${versionName}-${buildType}.apk"
+            output.outputFileName = "kyc-mobile-${versionName}-${buildType}-${abiName}.apk"
         }
     }
 }

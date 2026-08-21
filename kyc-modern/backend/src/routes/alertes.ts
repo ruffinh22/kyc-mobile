@@ -1,8 +1,10 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import * as db from '../db';
-import { requireRole } from '../middleware/auth';
+import { requireAuth, requireRole } from '../middleware/auth';
 
 export async function alertesRoutes(app: any): Promise<void> {
+  app.addHook('preHandler', requireAuth);
+
   // GET /api/alertes-traitement — non vues, les plus récentes en premier.
   // Sert au superviseur qui vient d'ouvrir la page (rattrape ce que le SSE
   // aurait manqué en son absence).

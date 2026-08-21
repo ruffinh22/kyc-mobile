@@ -32,15 +32,22 @@ function sanitizeLimit(limit: number | undefined, fallback = 100, max = 500): nu
   return Math.min(parsed, max);
 }
 
+function sanitizeOffset(offset: number | undefined): number {
+  const parsed = typeof offset === 'number' && Number.isFinite(offset) ? Math.floor(offset) : 0;
+  return parsed > 0 ? parsed : 0;
+}
+
 export function buildCaptureSearchQuery(options: {
   type?: string;
   date?: string;
   dossier_id?: string;
   numero?: string;
   limit?: number;
+  offset?: number;
 }): { sql: string; params: any[] } {
-  const { type, date, dossier_id, numero, limit } = options;
+  const { type, date, dossier_id, numero, limit, offset } = options;
   const safeLimit = sanitizeLimit(limit, 100, 500);
+  const safeOffset = sanitizeOffset(offset);
   let baseSql = 'SELECT id, numero_mtn, photo_recto, photo_verso, photo_live, created_at FROM dossiers WHERE 1=1';
   const whereClauses: string[] = [];
   const params: any[] = [];
@@ -72,7 +79,7 @@ export function buildCaptureSearchQuery(options: {
     baseSql += ' AND ' + whereClauses.join(' AND ');
   }
 
-  baseSql += ` ORDER BY created_at DESC LIMIT ${safeLimit}`;
+  baseSql += ` ORDER BY created_at DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
   return { sql: baseSql, params };
 }
 
@@ -80,10 +87,13 @@ export function buildGsmCaptureSearchQuery(options: {
   date?: string;
   agent?: string;
   numero?: string;
+  dossier_id?: string;
   limit?: number;
+  offset?: number;
 }): { sql: string; params: any[] } {
-  const { date, agent, numero, limit } = options;
+  const { date, agent, numero, dossier_id, limit, offset } = options;
   const safeLimit = sanitizeLimit(limit, 100, 500);
+  const safeOffset = sanitizeOffset(offset);
   let baseSql = 'SELECT id, numero, date_saisie, agent_ctrl, capture_a, capture_p, capture_aa, dossier_id FROM gsm WHERE 1=1';
   const whereClauses: string[] = [];
   const params: any[] = [];
@@ -103,11 +113,16 @@ export function buildGsmCaptureSearchQuery(options: {
     params.push(`%${numero!.trim()}%`);
   }
 
+  if (!isBlank(dossier_id)) {
+    whereClauses.push('dossier_id = ?');
+    params.push(dossier_id!.trim());
+  }
+
   if (whereClauses.length > 0) {
     baseSql += ' AND ' + whereClauses.join(' AND ');
   }
 
-  baseSql += ` ORDER BY date_saisie DESC, created_at DESC LIMIT ${safeLimit}`;
+  baseSql += ` ORDER BY date_saisie DESC, created_at DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
   return { sql: baseSql, params };
 }
 
@@ -132,10 +147,12 @@ export async function capturesRoutes(app: any): Promise<void> {
         dossier_id?: string;
         numero?: string;
         limit?: string;
+        offset?: string;
       };
 
       const { type, date, dossier_id, numero } = queryParams;
       const limit = parseInt(queryParams.limit || '100', 10);
+      const offset = parseInt(queryParams.offset || '0', 10);
 
       try {
         const { sql, params } = buildCaptureSearchQuery({
@@ -144,6 +161,7 @@ export async function capturesRoutes(app: any): Promise<void> {
           dossier_id,
           numero,
           limit,
+          offset,
         });
 
         const rows = await query(sql, params);
@@ -156,7 +174,7 @@ export async function capturesRoutes(app: any): Promise<void> {
           live_url: row.photo_live ? `/uploads/cni/${row.photo_live}` : null,
         }));
 
-        return reply.send({ success: true, count: results.length, captures: results });
+        return reply.send({ success: true, count: results.length, offset, limit, captures: results });
       } catch (err) {
         fastify.log.error('GET captures/search error: ' + (err as Error).message);
         return reply.code(500).send({ error: 'Erreur serveur' });
@@ -170,18 +188,23 @@ export async function capturesRoutes(app: any): Promise<void> {
         date?: string;
         agent?: string;
         numero?: string;
+        dossier_id?: string;
         limit?: string;
+        offset?: string;
       };
 
-      const { date, agent, numero } = queryParams;
+      const { date, agent, numero, dossier_id } = queryParams;
       const limit = parseInt(queryParams.limit || '100', 10);
+      const offset = parseInt(queryParams.offset || '0', 10);
 
       try {
         const { sql, params } = buildGsmCaptureSearchQuery({
           date,
           agent,
           numero,
+          dossier_id,
           limit,
+          offset,
         });
 
         const rows = await query(sql, params);
@@ -194,7 +217,7 @@ export async function capturesRoutes(app: any): Promise<void> {
           capture_aa_url: row.capture_aa ? `/uploads/gsm/${row.capture_aa}` : null,
         }));
 
-        return reply.send({ success: true, count: results.length, captures: results });
+        return reply.send({ success: true, count: results.length, offset, limit, captures: results });
       } catch (err) {
         fastify.log.error('GET captures/gsm error: ' + (err as Error).message);
         return reply.code(500).send({ error: 'Erreur serveur' });

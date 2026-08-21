@@ -13,7 +13,12 @@ export function useFetch<T>(fn: (() => Promise<T>) | null, deps: unknown[] = [])
     setLoading(true); setError(null);
     fn()
       .then(r  => { if (!dead) setData(r); })
-      .catch(e => { if (!dead) setError(e instanceof Error ? e.message : 'Erreur'); })
+      .catch(e => {
+        if (!dead) {
+          setData(null);
+          setError(e instanceof Error ? e.message : 'Erreur');
+        }
+      })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -11,6 +11,22 @@ const UPLOAD_CNI  = process.env.UPLOAD_CNI  || path.join(process.cwd(),'uploads'
 const MAX_FILE    = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(['image/jpeg','image/png','image/webp']);
 
+function inferGsmStatusFromAction(action?: string | null): string | null {
+  const v = (action ?? '').toString().trim();
+  if (!v) return null;
+  const normalized = v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+  const map: Record<string, string> = {
+    valide: 'Accepté',
+    rejete: 'Rejeté',
+    en_cours: 'En cours',
+    a_corriger: 'En cours',
+    transmis_au_superviseur: 'En cours',
+    cloture_sans_suite: 'En cours',
+    reenregistrement_demande: 'En cours',
+  };
+  return map[normalized] ?? null;
+}
+
 export async function gsmRoutes(app: any): Promise<void> {
   app.addHook('preHandler', requireAuth);
 
@@ -120,6 +136,7 @@ export async function gsmRoutes(app: any): Promise<void> {
     if (!body?.numero || !body.type_id || !body.constat || !body.piece || !body.verbatim || !body.action) {
       return reply.code(400).send({ error: 'Champs obligatoires: numero, type_id, constat, piece, verbatim, action' });
     }
+    const normalizedStatus = body.statut_final || inferGsmStatusFromAction(body.action) || null;
     const now = new Date();
     const id = await db.createGsm({
       numero: body.numero, agent_ctrl: req.user.matricule,
@@ -128,7 +145,7 @@ export async function gsmRoutes(app: any): Promise<void> {
       coach: body.coach||null, type_id: body.type_id||null,
       constat: body.constat||null, piece: body.piece||null,
       verbatim: body.verbatim||null, action: body.action||null,
-      statut_final: body.statut_final||null, traitement: body.traitement||null,
+      statut_final: normalizedStatus, traitement: body.traitement||null,
       raison: body.raison||null, nom_client: body.nom_client||null,
       observations: body.observations||null, dossier_id: null,
       capture_a: null, capture_p: null, capture_aa: null,
@@ -165,7 +182,12 @@ export async function gsmRoutes(app: any): Promise<void> {
     if (gsm.agent_ctrl !== req.user.matricule && req.user.role !== 'admin')
       return reply.code(403).send({ error: 'Pas votre saisie' });
     const body = req.body as Record<string,unknown>|null;
-    await db.updateGsm(id, body as never);
+    const payload = { ...(body ?? {}) } as Record<string, unknown>;
+    if (!payload.statut_final && typeof payload.action === 'string') {
+      const inferred = inferGsmStatusFromAction(payload.action as string);
+      if (inferred) payload.statut_final = inferred;
+    }
+    await db.updateGsm(id, payload as never);
     db.audit(req.user.matricule,'GSM_MODIFIE',`id=${id}`,req.ip);
     return reply.send({ success: true });
   });

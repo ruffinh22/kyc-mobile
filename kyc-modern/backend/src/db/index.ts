@@ -2,8 +2,8 @@
 // KYC V4 – Couche d'accès MySQL (mysql2/promise)
 // ============================================================================
 
-import mysql from 'mysql2/promise';
-import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import mysql, { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import type { Pool } from 'mysql2/promise';
 import {
   Compte, Session, Dossier, GsmRecord, PlanningEntry, PlanningManager,
   NoteQualite, PresenceRow, ConfigRow, AuditLog, Role
@@ -58,24 +58,6 @@ export async function initDb(): Promise<void> {
     pool = null;
     console.error('[DB] MySQL indisponible au démarrage, le backend continuera sans base de données :', dbInitError.message);
   }
-}
-
-/**
- * Renvoie la prochaine valeur d'un compteur nommé, atomiquement.
- * Idiome MySQL classique : UPDATE ... SET value = LAST_INSERT_ID(value + 1)
- * puis SELECT LAST_INSERT_ID(). Atomique sous InnoDB (la ligne est verrouillée
- * le temps de l'UPDATE), ne fait grossir aucune table, et LAST_INSERT_ID()
- * est local à la connexion donc deux appels concurrents ne peuvent jamais
- * lire la même valeur.
- */
-export async function nextSeq(name: string): Promise<number> {
-  const activePool = getPoolOrThrow();
-  await activePool.query(
-    `UPDATE seq_counter SET value = LAST_INSERT_ID(value + 1) WHERE id = ?`,
-    [name]
-  );
-  const [rows] = await activePool.query<RowDataPacket[]>(`SELECT LAST_INSERT_ID() AS v`);
-  return Number(rows[0]?.v ?? 0);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -408,12 +390,14 @@ export async function getDossiers(params: {
   const p: unknown[] = [];
 
   if (params.date) {
-    if (params.includePendingAll && (!params.statut || params.statut === 'en_attente')) {
+    if (params.includePendingAll && (!params.statut || params.statut === 'en_attente' || params.statut === 'en_cours')) {
       if (params.statut === 'en_attente') {
         where += " AND statut='en_attente'";
+      } else if (params.statut === 'en_cours') {
+        where += " AND statut='en_cours'";
       } else {
-      where += " AND (date=? OR statut='en_attente')";
-      p.push(params.date);
+        where += " AND (date=? OR statut='en_attente' OR statut='en_cours')";
+        p.push(params.date);
       }
     } else {
       where += ' AND date=?';
@@ -887,18 +871,7 @@ export function audit(
   exec(
     'INSERT INTO audit_log (user_matricule, action, details, ip, user_agent, created_at) VALUES (?,?,?,?,?,?)',
     [matricule ?? null, action, details ?? null, ip ?? null, ua ?? null, nowSec()]
-  ).catch(err => {
-    if (err?.code === 'ER_NO_REFERENCED_ROW_2') {
-      // user_matricule référencé introuvable : retenter sans matricule pour
-      // ne pas faire échouer l'opération principale.
-      exec(
-        'INSERT INTO audit_log (user_matricule, action, details, ip, user_agent, created_at) VALUES (?,?,?,?,?,?)',
-        [null, action, details ?? null, ip ?? null, ua ?? null, nowSec()]
-      ).catch(e => console.error('[AUDIT ERROR RETRY]', e));
-      return;
-    }
-    console.error('[AUDIT ERROR]', err);
-  });
+  ).catch(err => console.error('[AUDIT ERROR]', err));
 }
 
 export async function getAuditLogs(params: {
@@ -969,84 +942,95 @@ export async function setHabilitations(data: Record<string, Record<string, strin
 
 export async function getReferentiels(): Promise<Record<string, string[]>> {
   const val = await getConfig('referentiels_gsm');
-  let base: Record<string, string[]> = {};
-  if (val) {
-    try { base = JSON.parse(val); } catch { base = {}; }
-  }
-
-  // Fusionner avec les valeurs rapportées par les agents (unknown_referentiel_values)
-  try {
-    const rows = await query<RowDataPacket>('SELECT DISTINCT field_name, value FROM unknown_referentiel_values WHERE value IS NOT NULL');
-    for (const r of rows) {
-      const f = String(r['field_name']);
-      const v = String(r['value']);
-      if (!v) continue;
-      if (!Array.isArray(base[f])) base[f] = [];
-      base[f].push(v);
-    }
-  } catch (err) {
-    // si la table n'existe pas encore, on ignore silencieusement
-  }
-
-  // Normalisation: déduplication et tri alphabétique pour stabilité
-  for (const k of Object.keys(base)) {
-    const set = Array.from(new Set((base[k] || []).map(s => String(s).trim()).filter(Boolean)));
-    set.sort((a, b) => a.localeCompare(b, 'fr'));
-    base[k] = set;
-  }
-
-  return base;
+  if (!val) return {};
+  try { return JSON.parse(val); } catch { return {}; }
 }
 
 export async function setReferentiels(data: Record<string, string[]>): Promise<void> {
-  // Normaliser avant de stocker (dédup + trim + tri)
-  const norm: Record<string, string[]> = {};
-  for (const k of Object.keys(data)) {
-    const arr = Array.isArray(data[k]) ? data[k] : [];
-    const set = Array.from(new Set(arr.map(s => String(s).trim()).filter(Boolean)));
-    set.sort((a, b) => a.localeCompare(b, 'fr'));
-    norm[k] = set;
-  }
-  await setConfig('referentiels_gsm', JSON.stringify(norm));
+  await setConfig('referentiels_gsm', JSON.stringify(data));
 }
 
-export async function getUnknownReferentielValues(opts?: { field?: string; limit?: number; offset?: number }): Promise<{ rows: any[]; total: number }> {
-  const where: string[] = [];
-  const p: unknown[] = [];
-  if (opts?.field) { where.push('field_name = ?'); p.push(opts.field); }
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+export async function insertUnknownReferentiel(params: {
+  agent?: string | null;
+  field: string;
+  value: string;
+  gsmId?: number | null;
+  dossierId?: string | null;
+}): Promise<number> {
+  const activePool = getPoolOrThrow();
+  const [result] = await activePool.execute<ResultSetHeader>(
+    `INSERT INTO unknown_referentiel_values (agent, field_name, value, gsm_id, dossier_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [params.agent ?? null, params.field, String(params.value).trim(), params.gsmId ?? null, params.dossierId ?? null, nowSec()]
+  );
+  return result.insertId;
+}
+
+export async function getUnknownReferentielValues(params: {
+  field?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ rows: Array<{ id: number; agent: string | null; field_name: string; value: string; gsm_id: number | null; dossier_id: string | null; created_at: number }>; total: number }> {
+  const field = params.field ? String(params.field).trim() : null;
+  const limit = Math.max(1, Math.min(Number(params.limit ?? 200), 2000));
+  const offset = Math.max(0, Number(params.offset ?? 0) || 0);
+
+  const where = field ? 'WHERE field_name = ?' : 'WHERE 1=1';
+  const countParams: any[] = field ? [field] : [];
+  const rowsParams: any[] = field ? [field, limit, offset] : [limit, offset];
 
   const activePool = getPoolOrThrow();
-  const [countRows] = await activePool.execute<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM unknown_referentiel_values ${whereSql}`, p as P);
-  const total = (countRows[0] as RowDataPacket)['n'] as number;
-
-  const limit = opts?.limit ?? 200;
-  const offset = opts?.offset ?? 0;
-  const rows = await query<RowDataPacket & any>(
-    `SELECT * FROM unknown_referentiel_values ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-    [...p, limit, offset]
+  const [countRows] = await activePool.execute<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n FROM unknown_referentiel_values ${where}`,
+    countParams
   );
-  return { rows, total };
+  const total = Number((countRows[0] as RowDataPacket | undefined)?.['n'] ?? 0);
+
+  const rows = await query<RowDataPacket>(
+    `SELECT * FROM unknown_referentiel_values ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    rowsParams
+  );
+
+  return {
+    rows: rows.map((row) => ({
+      id: Number(row.id),
+      agent: row.agent == null ? null : String(row.agent),
+      field_name: String(row.field_name),
+      value: String(row.value),
+      gsm_id: row.gsm_id == null ? null : Number(row.gsm_id),
+      dossier_id: row.dossier_id == null ? null : String(row.dossier_id),
+      created_at: Number(row.created_at),
+    })),
+    total,
+  };
 }
 
 export async function acceptUnknownReferentielById(id: number): Promise<void> {
-  const row = await queryOne<RowDataPacket & any>('SELECT * FROM unknown_referentiel_values WHERE id=?', [id]);
-  if (!row) throw new Error('Entrée introuvable');
-  const field = String(row.field_name);
-  const value = String(row.value);
-  if (!value) return;
+  const row = await queryOne<RowDataPacket>(
+    'SELECT * FROM unknown_referentiel_values WHERE id = ?',
+    [id]
+  );
+
+  if (!row) {
+    throw new Error('Valeur inconnue introuvable');
+  }
+
+  const field = String(row.field_name || '').trim();
+  const value = String(row.value || '').trim();
+  if (!field || !value) {
+    await exec('DELETE FROM unknown_referentiel_values WHERE id = ?', [id]);
+    return;
+  }
 
   const refs = await getReferentiels();
-  if (!Array.isArray(refs[field])) refs[field] = [];
-  if (!refs[field].includes(value)) refs[field].push(value);
+  const current = Array.isArray(refs[field]) ? refs[field].map((v) => String(v).trim()).filter(Boolean) : [];
+  refs[field] = Array.from(new Set([...current, value]));
   await setReferentiels(refs);
-
-  // Supprimer toutes les occurrences identiques après acceptation
-  await exec('DELETE FROM unknown_referentiel_values WHERE field_name=? AND value=?', [field, value]);
+  await exec('DELETE FROM unknown_referentiel_values WHERE id = ?', [id]);
 }
 
 export async function deleteUnknownReferentielById(id: number): Promise<void> {
-  await exec('DELETE FROM unknown_referentiel_values WHERE id=?', [id]);
+  await exec('DELETE FROM unknown_referentiel_values WHERE id = ?', [id]);
 }
 
 // ── Purge ─────────────────────────────────────────────────────────────────────
@@ -1114,18 +1098,6 @@ export async function purgeExecute(
       throw new Error('Action inconnue');
   }
   return { count: r.affectedRows };
-}
-
-// Enregistrer une valeur inconnue envoyée par un agent pour réconciliation
-export async function insertUnknownReferentiel(opts: {
-  agent?: string | null; field: string; value: string; gsmId?: number | null; dossierId?: string | null;
-}): Promise<void> {
-  const now = nowSec();
-  await exec(
-    `INSERT INTO unknown_referentiel_values (agent, field_name, value, gsm_id, dossier_id, created_at)
-     VALUES (?,?,?,?,?,?)`,
-    [opts.agent ?? null, opts.field, opts.value, opts.gsmId ?? null, opts.dossierId ?? null, now]
-  );
 }
 
 // ── Stockage ──────────────────────────────────────────────────────────────────

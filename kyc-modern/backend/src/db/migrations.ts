@@ -7,13 +7,37 @@ const MIGRATION_TABLE = 'schema_migrations';
 
 type MigrationModule = { name: string; up: (pool: Pool) => Promise<void>; down: (pool: Pool) => Promise<void> };
 
+// Liste les fichiers de migration exécutables du dossier `migrations/`.
+//
+// En production (dist/), les migrations sont compilées en .js — en
+// développement (src/, lancé via ts-node), elles restent en .ts. On
+// accepte les deux extensions ici pour que ça marche dans les deux
+// contextes, mais on exclut explicitement :
+//   - les .d.ts (déclarations générées par tsc, jamais exécutables)
+//   - les .js.map (source maps)
+// et on déduplique par nom de migration pour ne jamais charger deux fois
+// la même migration si .ts et .js coexistent (ex: build non nettoyé).
+function listMigrationFilenames(dir: string): string[] {
+  const files = fs.readdirSync(dir)
+    .filter(file => (file.endsWith('.js') || file.endsWith('.ts')) && !file.endsWith('.d.ts'))
+    .sort();
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const file of files) {
+    const base = file.replace(/\.(js|ts)$/, '');
+    if (seen.has(base)) continue; // priorité au premier trouvé (ordre alphabétique .js < .ts)
+    seen.add(base);
+    result.push(file);
+  }
+  return result;
+}
+
 function loadMigrations(): MigrationModule[] {
   const dir = path.resolve(__dirname, 'migrations');
   if (!fs.existsSync(dir)) return [];
 
-  return fs.readdirSync(dir)
-    .filter(file => file.endsWith('.ts'))
-    .sort()
+  return listMigrationFilenames(dir)
     .map(file => path.join(dir, file))
     .map(filePath => {
       const module = require(filePath) as { migration?: MigrationModule };
@@ -69,8 +93,5 @@ export function autoCreateMigration(name: string): string {
 export function listMigrationFiles(): string[] {
   const dir = path.resolve(__dirname, 'migrations');
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(file => file.endsWith('.ts'))
-    .sort()
-    .map(file => path.join(dir, file));
+  return listMigrationFilenames(dir).map(file => path.join(dir, file));
 }

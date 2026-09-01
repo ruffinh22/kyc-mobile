@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { completeWithFaceVerify, verifyFaceRealtime } from '../services/api';
+import useAdminFieldsSchema from '../hooks/useAdminFieldsSchema';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ export function FaceVerifyInteractivePage() {
   const [result, setResult]         = useState<{ score: number | null; msg: string; motif?: string } | null>(null);
   const [phase, setPhase]           = useState<'init' | 'capture' | 'verif' | 'done' | 'error'>('init');
   const [creating, setCreating]     = useState(false);
+  const { inactiveFields, isFieldActive } = useAdminFieldsSchema();
 
   // ── Step UI helpers ────────────────────────────────────────────────────────
 
@@ -313,17 +315,17 @@ export function FaceVerifyInteractivePage() {
       const fd = new FormData();
       fd.append('video_frame',    capturesRef.current[0].blob, 'live-front.jpg');
       fd.append('dossier_id',     P.dossier_id);
-      fd.append('numero_mtn',     P.numero.replace(/\D/g, ''));
-      fd.append('wa_agent',       P.wa);
-      fd.append('username_agent', P.username);
-      fd.append('fonction_agent', P.fonction);
-      fd.append('zone_agent',     P.zone);
-      fd.append('country',        P.country);
-      fd.append('recto_path',     P.recto);
-      fd.append('verso_path',     P.verso);
-      fd.append('score_visage',   result?.score != null ? String(result.score) : '');
-      fd.append('visage_match',   result?.score != null ? String(result.score >= 70 ? 1 : 0) : '');
-      fd.append('visage_motif',   'verification_manuelle_interactive');
+      if (P.numero) fd.append('numero_mtn',     P.numero.replace(/\D/g, ''));
+      if (P.wa && isFieldActive('wa_agent')) fd.append('wa_agent',       P.wa);
+      if (P.username && isFieldActive('username_agent')) fd.append('username_agent', P.username);
+      if (P.fonction && isFieldActive('fonction_agent')) fd.append('fonction_agent', P.fonction);
+      if (P.zone && isFieldActive('zone_agent')) fd.append('zone_agent',     P.zone);
+      if (P.country && isFieldActive('country')) fd.append('country',        P.country);
+      if (P.recto && isFieldActive('recto_path')) fd.append('recto_path',     P.recto);
+      if (P.verso && isFieldActive('verso_path')) fd.append('verso_path',     P.verso);
+      if (result?.score != null && isFieldActive('score_visage')) fd.append('score_visage',   String(result.score));
+      if (result?.score != null && isFieldActive('visage_match')) fd.append('visage_match',   String(result.score >= 70 ? 1 : 0));
+      if (isFieldActive('visage_motif')) fd.append('visage_motif',   'verification_manuelle_interactive');
 
       const data = await completeWithFaceVerify(fd);
 

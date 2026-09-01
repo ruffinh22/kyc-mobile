@@ -7,6 +7,7 @@ import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../compone
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
 import { FaceLivenessCheck } from '../FaceLivenessCheck';
 import { PauseButton } from '../../components/PauseButton';
+import useAdminFieldsSchema from '../../hooks/useAdminFieldsSchema';
 
 const PHONE_CONFIG: Record<string, { digitCount: number; placeholder: string }> = {
   CG: { digitCount: 9, placeholder: '06 XXX XXX' },
@@ -111,6 +112,9 @@ export function AgentDashboard() {
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
   }, []);
 
   useEffect(() => {
@@ -793,6 +797,7 @@ export function AgentAcquisition() {
     nom_titulaire:'', prenom_titulaire:'', date_naissance:'', lieu_naissance:'', autre_numero:'',
     nom_pere:'', nom_mere:'', adresse_complete:'', numero_cni:'', sexe:'', nationalite:'', profession:''
   });
+  const { inactiveFields, isFieldActive, refresh } = useAdminFieldsSchema();
   const [recto, setRecto] = useState<File|null>(null); const [verso, setVerso] = useState<File|null>(null);
   const [loading, setLoading] = useState(false); const [err, setErr] = useState<string|null>(null); const [success, setSuccess] = useState<string|null>(null);
 
@@ -800,7 +805,14 @@ export function AgentAcquisition() {
     e.preventDefault(); setErr(null); setSuccess(null);
     if (!recto || !verso) { setErr('Photos recto et verso obligatoires'); return; }
     if (!f.country) { setErr('Sélectionnez un pays'); return; }
-    if (!f.nom_titulaire.trim() || !f.prenom_titulaire.trim() || !f.date_naissance.trim() || !f.lieu_naissance.trim() || !f.nom_pere.trim() || !f.nom_mere.trim()) {
+    if (
+      (!inactiveFields.has('nom_titulaire') && !f.nom_titulaire.trim()) ||
+      (!inactiveFields.has('prenom_titulaire') && !f.prenom_titulaire.trim()) ||
+      (!inactiveFields.has('date_naissance') && !f.date_naissance.trim()) ||
+      (!inactiveFields.has('lieu_naissance') && !f.lieu_naissance.trim()) ||
+      (!inactiveFields.has('nom_pere') && !f.nom_pere.trim()) ||
+      (!inactiveFields.has('nom_mere') && !f.nom_mere.trim())
+    ) {
       setErr('Les informations du titulaire et des parents sont obligatoires'); return;
     }
     setLoading(true);
@@ -860,28 +872,28 @@ export function AgentAcquisition() {
           <div className="card" style={{ marginBottom: '1rem', padding: '1rem' }}>
             <h3 style={{ margin: '0 0 .75rem', fontSize: '1rem' }}>Informations du titulaire</h3>
             <div className="form-row">
-              <div className="field"><label>Nom titulaire<span className="req">*</span></label><input value={f.nom_titulaire} onChange={e => setF(x => ({...x, nom_titulaire: e.target.value}))} placeholder="Nom du titulaire" required /></div>
-              <div className="field"><label>Prénom titulaire<span className="req">*</span></label><input value={f.prenom_titulaire} onChange={e => setF(x => ({...x, prenom_titulaire: e.target.value}))} placeholder="Prénom du titulaire" required /></div>
+              {!inactiveFields.has('nom_titulaire') && <div className="field"><label>Nom titulaire<span className="req">*</span></label><input value={f.nom_titulaire} onChange={e => setF(x => ({...x, nom_titulaire: e.target.value}))} placeholder="Nom du titulaire" required /></div>}
+              {!inactiveFields.has('prenom_titulaire') && <div className="field"><label>Prénom titulaire<span className="req">*</span></label><input value={f.prenom_titulaire} onChange={e => setF(x => ({...x, prenom_titulaire: e.target.value}))} placeholder="Prénom du titulaire" required /></div>}
             </div>
             <div className="form-row">
-              <div className="field"><label>Date de naissance<span className="req">*</span></label><input type="date" value={f.date_naissance} onChange={e => setF(x => ({...x, date_naissance: e.target.value}))} required /></div>
-              <div className="field"><label>Lieu de naissance<span className="req">*</span></label><input value={f.lieu_naissance} onChange={e => setF(x => ({...x, lieu_naissance: e.target.value}))} placeholder="Lieu de naissance" required /></div>
+              {!inactiveFields.has('date_naissance') && <div className="field"><label>Date de naissance<span className="req">*</span></label><input type="date" value={f.date_naissance} onChange={e => setF(x => ({...x, date_naissance: e.target.value}))} required /></div>}
+              {!inactiveFields.has('lieu_naissance') && <div className="field"><label>Lieu de naissance<span className="req">*</span></label><input value={f.lieu_naissance} onChange={e => setF(x => ({...x, lieu_naissance: e.target.value}))} placeholder="Lieu de naissance" required /></div>}
             </div>
             <div className="form-row">
-              <div className="field"><label>Nom du père<span className="req">*</span></label><input value={f.nom_pere} onChange={e => setF(x => ({...x, nom_pere: e.target.value}))} placeholder="Nom du père" required /></div>
-              <div className="field"><label>Nom de la mère<span className="req">*</span></label><input value={f.nom_mere} onChange={e => setF(x => ({...x, nom_mere: e.target.value}))} placeholder="Nom de la mère" required /></div>
+              {!inactiveFields.has('nom_pere') && <div className="field"><label>Nom du père<span className="req">*</span></label><input value={f.nom_pere} onChange={e => setF(x => ({...x, nom_pere: e.target.value}))} placeholder="Nom du père" required /></div>}
+              {!inactiveFields.has('nom_mere') && <div className="field"><label>Nom de la mère<span className="req">*</span></label><input value={f.nom_mere} onChange={e => setF(x => ({...x, nom_mere: e.target.value}))} placeholder="Nom de la mère" required /></div>}
             </div>
             <div className="form-row">
-              <div className="field"><label>Adresse complète</label><input value={f.adresse_complete} onChange={e => setF(x => ({...x, adresse_complete: e.target.value}))} placeholder="Adresse complète" /></div>
-              <div className="field"><label>Numéro CNI</label><input value={f.numero_cni} onChange={e => setF(x => ({...x, numero_cni: e.target.value}))} placeholder="Numéro CNI" /></div>
+              {!inactiveFields.has('adresse_complete') && <div className="field"><label>Adresse complète</label><input value={f.adresse_complete} onChange={e => setF(x => ({...x, adresse_complete: e.target.value}))} placeholder="Adresse complète" /></div>}
+              {!inactiveFields.has('numero_cni') && <div className="field"><label>Numéro CNI</label><input value={f.numero_cni} onChange={e => setF(x => ({...x, numero_cni: e.target.value}))} placeholder="Numéro CNI" /></div>}
             </div>
             <div className="form-row">
-              <div className="field"><label>Sexe</label><select value={f.sexe} onChange={e => setF(x => ({...x, sexe: e.target.value}))}><option value="">Sélectionner…</option><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
-              <div className="field"><label>Nationalité</label><input value={f.nationalite} onChange={e => setF(x => ({...x, nationalite: e.target.value}))} placeholder="Nationalité" /></div>
+              {!inactiveFields.has('sexe') && <div className="field"><label>Sexe</label><select value={f.sexe} onChange={e => setF(x => ({...x, sexe: e.target.value}))}><option value="">Sélectionner…</option><option value="M">Masculin</option><option value="F">Féminin</option></select></div>}
+              {!inactiveFields.has('nationalite') && <div className="field"><label>Nationalité</label><input value={f.nationalite} onChange={e => setF(x => ({...x, nationalite: e.target.value}))} placeholder="Nationalité" /></div>}
             </div>
             <div className="form-row">
-              <div className="field"><label>Profession</label><input value={f.profession} onChange={e => setF(x => ({...x, profession: e.target.value}))} placeholder="Profession" /></div>
-              <div className="field"><label>Autre numéro</label><input value={f.autre_numero} onChange={e => setF(x => ({...x, autre_numero: e.target.value}))} placeholder="Autre numéro" /></div>
+              {!inactiveFields.has('profession') && <div className="field"><label>Profession</label><input value={f.profession} onChange={e => setF(x => ({...x, profession: e.target.value}))} placeholder="Profession" /></div>}
+              {!inactiveFields.has('autre_numero') && <div className="field"><label>Autre numéro</label><input value={f.autre_numero} onChange={e => setF(x => ({...x, autre_numero: e.target.value}))} placeholder="Autre numéro" /></div>}
             </div>
           </div>
 

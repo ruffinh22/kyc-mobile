@@ -14,7 +14,8 @@
     "create-user": "ts-node ./src/scripts/create-user.ts",
     "create-migration": "ts-node ./src/db/createMigrationCli.ts",
     "migrate:force": "ts-node ./src/db/forceMigrationsCli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:dynamic-fields": "ts-node ./test/runDynamicFieldsTests.ts"
   },
   "engines": {
     "node": ">=18.0.0"

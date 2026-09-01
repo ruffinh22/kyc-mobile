@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, LoadingCenter, StatCard } from '../../components/ui';
 import { apiFetch } from '../../services/api';
+import FieldsManager from './FieldsManager';
 
 type DistributionMode = 'manuel' | 'auto';
 
@@ -24,6 +25,8 @@ export function AdminParametresPage() {
   const [seuilState, setSeuilState] = useState<SectionState>(emptySection());
   const [modeState, setModeState] = useState<SectionState>(emptySection());
   const [timingState, setTimingState] = useState<SectionState>(emptySection());
+  const [dbState, setDbState] = useState<SectionState>(emptySection());
+  const [activeDb, setActiveDb] = useState<string | null>(null);
 
   useEffect(() => { fetchConfig(); }, []);
 
@@ -51,6 +54,12 @@ export function AdminParametresPage() {
       if (timingData.success) {
         setIntervalMs(timingData.interval_ms ?? 2000);
         setAbandonSec(timingData.abandon_sec ?? 120);
+      }
+      try {
+        const d = await apiFetch<{ success: boolean; active?: string }>('/api/admin/db/active');
+        if (d.success) setActiveDb(d.active || null);
+      } catch (e) {
+        // ignore
       }
     } catch (err) {
       setPageError(err instanceof Error ? err.message : 'Erreur de connexion au serveur');
@@ -119,13 +128,17 @@ export function AdminParametresPage() {
       {pageLoading ? <LoadingCenter /> : (
         <>
           <div className="card">
+            <FieldsManager />
+          </div>
+
+          
             <div className="stats-grid">
               <StatCard label="Seuil d’alerte" value={`${seuilAlerte} min`} />
               <StatCard label="Distribution" value={distributionMode === 'auto' ? 'Automatique' : 'Manuel'} variant={distributionMode === 'auto' ? 'accepte' : 'attente'} />
               <StatCard label="Intervalle de vérification" value={`${(intervalMs / 1000).toLocaleString('fr-FR')} s`} />
               <StatCard label="Délai d’abandon" value={`${abandonSec} s`} />
             </div>
-          </div>
+        
 
           <div className="card">
             <p className="card-title">⏱ Seuil d’alerte — file d’attente</p>
@@ -228,6 +241,38 @@ export function AdminParametresPage() {
                   <div style={{ fontWeight: 600 }}>{row.value}</div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <p className="card-title">🔁 Bascule base de données (admin)</p>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-4)', marginTop: '.25rem', marginBottom: '.75rem' }}>
+              Voir et basculer la base de données active entre les environnements configurés.
+            </p>
+            {dbState.error && <Alert kind="error">{dbState.error}</Alert>}
+            {dbState.success && <Alert kind="success">{dbState.success}</Alert>}
+            <div className="form-row" style={{ alignItems: 'center' }}>
+              <div className="field" style={{ maxWidth: 320 }}>
+                <label>Base active</label>
+                <select value={activeDb || 'primary'} onChange={e => setActiveDb(e.target.value)}>
+                  <option value="primary">primary (kyc_congo)</option>
+                  <option value="secondary">secondary (kyc_benin)</option>
+                </select>
+              </div>
+              <div>
+                <button className="btn btn-primary" disabled={dbState.saving} onClick={async () => {
+                  setDbState({ saving: true, success: null, error: null });
+                  try {
+                    const res = await apiFetch<{ success: boolean; active?: string }>('/api/admin/db/switch', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: activeDb || 'primary' })
+                    });
+                    if (res.success) setDbState({ saving: false, success: 'Bascule effectuée', error: null });
+                    else setDbState({ saving: false, success: null, error: res.error || 'Échec de la bascule' });
+                  } catch (err) {
+                    setDbState({ saving: false, success: null, error: err instanceof Error ? err.message : 'Erreur réseau' });
+                  }
+                }}>{dbState.saving ? 'Traitement…' : 'Basculer'}</button>
+              </div>
             </div>
           </div>
         </>

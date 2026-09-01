@@ -10,20 +10,33 @@ import {
 } from '../types';
 import { runMigrations } from './migrations';
 
-let pool: Pool | null = null;
+let poolPrimary: Pool | null = null;
+let poolSecondary: Pool | null = null;
+let activeDbName: 'primary' | 'secondary' = 'primary';
 let dbInitError: Error | null = null;
 
 // ── Initialisation ────────────────────────────────────────────────────────────
 
-function getPoolOrThrow(): Pool {
-  if (!pool) {
-    throw new Error(dbInitError?.message || 'Base de données indisponible au démarrage');
+function getPoolOrThrowByName(name: 'primary' | 'secondary'): Pool {
+  const p = name === 'primary' ? poolPrimary : poolSecondary;
+  if (!p) {
+    throw new Error(`Base de données '${name}' indisponible`);
   }
-  return pool;
+  return p;
 }
 
-export function getPool(): Pool {
-  return getPoolOrThrow();
+function getActivePoolOrThrow(): Pool {
+  if (activeDbName === 'primary') return getPoolOrThrowByName('primary');
+  return getPoolOrThrowByName('secondary');
+}
+
+export function getPool(name?: 'primary' | 'secondary'): Pool {
+  if (!name) return getActivePoolOrThrow();
+  return getPoolOrThrowByName(name);
+}
+
+export function getActiveDbName(): 'primary' | 'secondary' {
+  return activeDbName;
 }
 
 export function isDbAvailable(): boolean {
@@ -32,7 +45,8 @@ export function isDbAvailable(): boolean {
 
 export async function initDb(): Promise<void> {
   try {
-    pool = mysql.createPool({
+    // Primary DB pool (used for settings and default operations)
+    poolPrimary = mysql.createPool({
       host:             process.env.DB_HOST     || '127.0.0.1',
       port:             parseInt(process.env.DB_PORT || '3306', 10),
       user:             process.env.DB_USER     || 'root',
@@ -46,13 +60,57 @@ export async function initDb(): Promise<void> {
       charset: 'utf8mb4',
     });
 
-    const conn = await pool.getConnection();
+    const conn = await poolPrimary.getConnection();
     await conn.ping();
     conn.release();
-    await runMigrations(pool);
+    // Ensure basic schema on primary (migrations and presence table)
+    await runMigrations(poolPrimary);
     await ensurePresenceSchema();
+
+    // Secondary DB (optional)
+    if (process.env.DB_HOST_SECONDARY) {
+      try {
+        poolSecondary = mysql.createPool({
+          host:             process.env.DB_HOST_SECONDARY,
+          port:             parseInt(process.env.DB_PORT_SECONDARY || process.env.DB_PORT || '3306', 10),
+          user:             process.env.DB_USER_SECONDARY || process.env.DB_USER || 'root',
+          password:         process.env.DB_PASS_SECONDARY || process.env.DB_PASS || '',
+          database:         process.env.DB_NAME_SECONDARY || process.env.DB_NAME || 'kyc_v4_secondary',
+          waitForConnections: true,
+          connectionLimit:  parseInt(process.env.DB_POOL_LIMIT_SECONDARY || process.env.DB_POOL_LIMIT || '10', 10),
+          queueLimit: 0,
+          enableKeepAlive: true,
+          timezone: '+00:00',
+          charset: 'utf8mb4',
+        });
+        const c2 = await poolSecondary.getConnection();
+        await c2.ping();
+        c2.release();
+        console.log('[DB] MySQL secondaire connecté :', process.env.DB_NAME_SECONDARY || process.env.DB_NAME);
+      } catch (err) {
+        console.warn('[DB] Erreur connexion secondaire :', err instanceof Error ? err.message : String(err));
+        poolSecondary = null;
+      }
+    }
+
+    // Read persisted active DB setting if present in primary
+    try {
+      await ensureAppSettingsTable(poolPrimary);
+      const [rows] = await poolPrimary.execute<RowDataPacket[]>("SELECT value FROM app_settings WHERE name='active_db' LIMIT 1");
+      if (rows && rows.length) {
+        const val = String(rows[0].value || 'primary');
+        if (val === 'secondary' && poolSecondary) activeDbName = 'secondary';
+        else activeDbName = 'primary';
+      } else {
+        // fallback to env
+        activeDbName = (process.env.ACTIVE_DB === 'secondary' && poolSecondary) ? 'secondary' : 'primary';
+      }
+    } catch (e) {
+      activeDbName = (process.env.ACTIVE_DB === 'secondary' && poolSecondary) ? 'secondary' : 'primary';
+    }
+
     dbInitError = null;
-    console.log('[DB] MySQL connecté :', process.env.DB_NAME);
+    console.log('[DB] MySQL connecté : primary=', process.env.DB_NAME, ' active=', activeDbName);
   } catch (error) {
     dbInitError = error instanceof Error ? error : new Error(String(error));
     pool = null;
@@ -109,7 +167,7 @@ function nowSec(): number {
 export { nowSec };
 
 export async function setFcmToken(numero: string, token: string): Promise<void> {
-  const activePool = getPoolOrThrow();
+  const activePool = getActivePoolOrThrow();
   await activePool.query(
     `INSERT INTO terrain_fcm_tokens (numero, fcm_token)
      VALUES (?, ?)
@@ -136,7 +194,7 @@ export async function getAllFcmTokens(): Promise<Array<{ numero: string; fcm_tok
 }
 
 async function ensurePresenceSchema(): Promise<void> {
-  if (!pool) return;
+  if (!poolPrimary) return;
 
   try {
     await pool.execute(`
@@ -158,7 +216,7 @@ async function ensurePresenceSchema(): Promise<void> {
     }
   }
 
-  const [columnsRaw] = await pool.execute(
+  const [columnsRaw] = await poolPrimary.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'presence'`
@@ -194,12 +252,12 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN matricule VARCHAR(50) NOT NULL`);
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN ts BIGINT NOT NULL DEFAULT 0`);
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN pause_debut BIGINT DEFAULT NULL`);
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN dispo_depuis BIGINT DEFAULT NULL`);
-    await pool.execute(`ALTER TABLE presence MODIFY COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN matricule VARCHAR(50) NOT NULL`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN ts BIGINT NOT NULL DEFAULT 0`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN pause_debut BIGINT DEFAULT NULL`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN dispo_depuis BIGINT DEFAULT NULL`);
+    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
   } catch (error: any) {
     if (!['1146', '42S22'].includes(error?.code)) {
       throw error;
@@ -207,7 +265,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await pool.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
+    await poolPrimary.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1068', 'ER_MULTIPLE_PRI_KEY'].includes(code)) {
@@ -216,7 +274,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await pool.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
+    await poolPrimary.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
@@ -225,7 +283,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await pool.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
+    await poolPrimary.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
@@ -234,13 +292,39 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await pool.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
+    await poolPrimary.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
       throw error;
     }
   }
+}
+
+async function ensureAppSettingsTable(pool: Pool): Promise<void> {
+  try {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        name VARCHAR(100) NOT NULL PRIMARY KEY,
+        value TEXT NULL,
+        updated_at BIGINT NOT NULL DEFAULT 0
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+  } catch (error: any) {
+    if (error?.code !== 'ER_TABLE_EXISTS_ERROR') throw error;
+  }
+}
+
+export async function setActiveDbName(name: 'primary' | 'secondary'): Promise<void> {
+  if (!poolPrimary) throw new Error('Primary DB non initialisée');
+  if (name === 'secondary' && !poolSecondary) throw new Error('Secondary DB non configurée');
+  // Persist in primary DB
+  await poolPrimary.execute(`INSERT INTO app_settings (name, value, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`, ['active_db', name, Math.floor(Date.now() / 1000)]);
+  activeDbName = name;
+}
+
+export function getActivePool(): Pool {
+  return getActivePoolOrThrow();
 }
 
 // ── Comptes ───────────────────────────────────────────────────────────────────

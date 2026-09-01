@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "zod": "^3.23.8",
     "@aws-amplify/core": "^6.16.4",
     "@aws-amplify/ui-react": "^6.15.4",
     "@aws-amplify/ui-react-liveness": "^3.6.7",

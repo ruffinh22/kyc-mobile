@@ -284,3 +284,12 @@ export async function getAuditLogs(p: { matricule?: string; action?: string; deb
 export async function getStorageStats() { return apiFetch<{ success: boolean; dossiers: number; gsm: number; photos_cni: number; captures_gsm: number; planning: number; notes: number }>('/api/admin/stockage'); }
 export async function purgeApercu(action: string, mode: string, du?: string, au?: string) { return apiFetch<{ success: boolean; count: number }>('/api/admin/purge/apercu', { method: 'POST', json: { action, mode, du, au } }); }
 export async function purgeExecuter(action: string, code: string, mode: string, du?: string, au?: string) { return apiFetch<{ success: boolean; count: number }>('/api/admin/purge/executer', { method: 'POST', json: { action, code, mode, du, au } }); }
+
+// ── Champs dynamiques (admin) ───────────────────────────────────────────────
+export async function getAdminFields() { return apiFetch<{ success: boolean; count: number; fields: any[] }>('/api/admin/fields'); }
+export async function getAdminFieldsSchema() { return apiFetch<{ success: boolean; count: number; schema: any[] }>('/api/admin/fields/schema'); }
+export async function createAdminField(data: Record<string, unknown>) { return apiFetch<{ success: boolean; migration_file?: string; error?: string }>('/api/admin/fields', { method: 'POST', json: data }); }
+
+export async function adminFieldAction(name: string, action: 'hide' | 'schedule_drop' | 'drop_now', targetTable = 'dossiers') {
+  return apiFetch<{ success: boolean; backupFile?: string }>(`/api/admin/fields/${encodeURIComponent(name)}/action`, { method: 'POST', json: { action, targetTable } });
+}

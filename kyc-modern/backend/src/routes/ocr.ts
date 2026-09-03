@@ -24,17 +24,24 @@
 // ============================================================================
 
 import { FastifyInstance, FastifyRequest } from 'fastify';
+// Types de pièce d'identité "officielle" — SOURCE UNIQUE partagée avec la
+// validation des dossiers (voir db/customFields.ts). Avant cet alignement,
+// ce fichier avait sa propre copie de OFFICIAL_DOC_TYPES : un pays ajouté
+// ici sans être répercuté dans customFields.ts (ou l'inverse) aurait pu
+// faire diverger silencieusement ce que l'OCR tente d'extraire et ce que le
+// serveur exige réellement à la soumission du dossier.
+import { OFFICIAL_DOC_TYPES } from '../db/customFields';
 
 const MAX_FILE = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-// Types de pièce d'identité pris en charge. Les pièces "officielles" ont un
-// format d'État structuré (numéro, date de naissance, date d'expiration...)
-// et on exige une extraction complète + une date d'expiration. Une carte
-// scolaire n'a pas ce niveau de structuration standardisée : les champs
-// secondaires (numéro de pièce, date d'expiration...) peuvent légitimement
-// être absents, on ne les exige donc pas côté extraction.
-const OFFICIAL_DOC_TYPES = new Set(['CNI', 'CEDEAO', 'PASSPORT', 'CIP', 'PERMIS']);
+// Types de pièce d'identité pris en charge. Les pièces "officielles" (voir
+// OFFICIAL_DOC_TYPES importé ci-dessus) ont un format d'État structuré
+// (numéro, date de naissance, date d'expiration...) et on exige une
+// extraction complète + une date d'expiration. Une carte scolaire n'a pas ce
+// niveau de structuration standardisée : les champs secondaires (numéro de
+// pièce, date d'expiration...) peuvent légitimement être absents, on ne les
+// exige donc pas côté extraction.
 const KNOWN_DOC_TYPES = new Set([...OFFICIAL_DOC_TYPES, 'CARTE_SCOLAIRE', 'CARTE_ETUDIANT', 'AUTRE']);
 
 function isOfficialDoc(typePiece: string): boolean {

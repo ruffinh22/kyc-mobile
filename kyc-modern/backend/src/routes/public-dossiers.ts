@@ -23,6 +23,39 @@ type WsSocket = any;
 // Si tu préfères l'inline, copie compareWithRekognition() ici.
 import { verifierVisageAutoById } from './face-verify-shared';
 import { buildDossierCreatePayload } from '../utils/dossierPayload';
+import {
+  listChampsActifs,
+  checkChampsObligatoiresDynamique,
+  OFFICIAL_DOC_TYPES,
+} from '../db/customFields';
+
+
+// Champs créés dynamiquement par l'admin (voir db/customFields.ts) : la
+// page agent terrain (AcquisitionPage) les envoie comme n'importe quel autre
+// champ texte du formulaire multipart — on les repère ici par leur clé
+// (préfixe `custom_`) et on les fusionne dans le dossier après création/màj.
+async function extractCustomFieldValues(fields: Record<string, string>): Promise<Record<string, unknown>> {
+  const actifs = await listChampsActifs();
+  const out: Record<string, unknown> = {};
+  for (const c of actifs) {
+    if (!c.standard && fields[c.cle] !== undefined) {
+      out[c.cle] = fields[c.cle].trim() || null;
+    }
+  }
+  return out;
+}
+
+// ── Validation dynamique pilotée par l'admin (voir db/customFields.ts) ──────
+// Remplace les anciens "if (!nom_pere?.trim()) return ..." codés en dur :
+// désormais la table dossier_champs (Admin > Champs du dossier) est la seule
+// source de vérité pour savoir si un champ, standard ou personnalisé, est
+// obligatoire et bien formé. Un champ masqué par l'admin (actif=false)
+// n'est plus jamais requis côté serveur, quoi qu'il arrive côté écran agent.
+//
+// La fonction et les constantes OFFICIAL_DOC_* vivent désormais dans
+// db/customFields.ts (source UNIQUE), pour rester partagées avec la
+// réattribution GSM (routes/dossiers.ts) sans risque de divergence future.
+const validateChampsActifs = checkChampsObligatoiresDynamique;
 
 const UPLOAD_CNI   = process.env.UPLOAD_CNI || path.join(process.cwd(), 'uploads', 'cni');
 const MAX_FILE     = 5  * 1024 * 1024; // 5 Mo pour recto/verso
@@ -33,7 +66,6 @@ const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // pièces au format d'État structuré (numéro, dates, expiration) pour
 // lesquels on exige une extraction/saisie complète. Toute autre valeur
 // (carte scolaire, type non reconnu) tolère des champs manquants.
-const OFFICIAL_DOC_TYPES = new Set(['CNI', 'CEDEAO', 'PASSPORT', 'CIP', 'PERMIS']);
 
 // NOTE: session management for face-verify flows is handled in
 // `face-verify.ts` to avoid duplicated route declarations.
@@ -625,16 +657,10 @@ export async function publicDossierRoutes(app: any): Promise<void> {
     // l'enregistrement SIM, capturée sur le pad en fin de formulaire.
     if (!photos.photo_signature)
       return reply.code(400).send({ error: 'Signature du titulaire obligatoire (dessin ou empreinte digitale)' });
-    // Infos titulaire — requises pour l'enregistrement SIM (réglementation KYC)
-    if (!nom_titulaire?.trim())    return reply.code(400).send({ error: 'Nom du titulaire requis' });
-    if (!prenom_titulaire?.trim()) return reply.code(400).send({ error: 'Prénom du titulaire requis' });
-    if (!nom_pere?.trim())         return reply.code(400).send({ error: 'Nom du père requis' });
-    if (!nom_mere?.trim())         return reply.code(400).send({ error: 'Nom de la mère requis' });
-    if (isOfficialDocType) {
-      if (!date_naissance?.trim()) return reply.code(400).send({ error: 'Date de naissance requise' });
-      if (!lieu_naissance?.trim()) return reply.code(400).send({ error: 'Lieu de naissance requis' });
-      if (!date_expiration?.trim()) return reply.code(400).send({ error: 'Date d’expiration de la pièce requise' });
-    }
+    // Infos titulaire + champs personnalisés — obligatoire piloté dynamiquement
+    // par l'admin (table dossier_champs), standards et custom confondus.
+    const champsError = await validateChampsActifs(fields, isOfficialDocType);
+    if (champsError) return reply.code(400).send({ error: champsError });
 
     const date    = nowDate();
     const destDir = path.join(UPLOAD_CNI, date);
@@ -666,15 +692,15 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         username_agent: username_agent || dossier.username_agent || null,
         fonction_agent: fonction_agent || dossier.fonction_agent || null,
         zone_agent: zone_agent || dossier.zone_agent || null,
-        nom_titulaire: nom_titulaire.trim(),
-        prenom_titulaire: prenom_titulaire.trim(),
+        nom_titulaire: (nom_titulaire ?? '').trim() || dossier.nom_titulaire || null,
+        prenom_titulaire: (prenom_titulaire ?? '').trim() || dossier.prenom_titulaire || null,
         type_piece: normalizedTypePiece,
         date_naissance: (date_naissance ?? '').trim() || dossier.date_naissance || null,
         lieu_naissance: (lieu_naissance ?? '').trim() || dossier.lieu_naissance || null,
         date_expiration: (date_expiration ?? '').trim() || dossier.date_expiration || null,
         autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || dossier.autre_numero || null,
-        nom_pere: nom_pere.trim(),
-        nom_mere: nom_mere.trim(),
+        nom_pere: (nom_pere ?? '').trim() || dossier.nom_pere || null,
+        nom_mere: (nom_mere ?? '').trim() || dossier.nom_mere || null,
         adresse_complete: (adresse_complete ?? '').trim() || dossier.adresse_complete || null,
         numero_cni: (numero_cni ?? '').trim() || dossier.numero_cni || null,
         sexe: (sexe ?? '').trim() || dossier.sexe || null,
@@ -690,6 +716,7 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         photo_verso: photoPaths.photo_verso,
         ...(photoPaths.photo_live ? { photo_live: photoPaths.photo_live } : {}),
         photo_signature: photoPaths.photo_signature ?? dossier.photo_signature ?? null,
+        ...(await extractCustomFieldValues(fields)),
       });
 
       db.audit(null, 'DOSSIER_PUBLIC_MIS_A_JOUR', `id=${dossierId} wa=${wa_agent ?? ''}`, req.ip);
@@ -721,15 +748,15 @@ export async function publicDossierRoutes(app: any): Promise<void> {
         zone_agent: zone_agent || null,
         date,
         heure_reception: nowTime(),
-        nom_titulaire: nom_titulaire.trim(),
-        prenom_titulaire: prenom_titulaire.trim(),
+        nom_titulaire: (nom_titulaire ?? '').trim() || null,
+        prenom_titulaire: (prenom_titulaire ?? '').trim() || null,
         type_piece: normalizedTypePiece,
         date_naissance: (date_naissance ?? '').trim() || null,
         lieu_naissance: (lieu_naissance ?? '').trim() || null,
         date_expiration: (date_expiration ?? '').trim() || null,
         autre_numero: (autre_numero ?? '').trim().replace(/\D/g, '') || null,
-        nom_pere: nom_pere.trim(),
-        nom_mere: nom_mere.trim(),
+        nom_pere: (nom_pere ?? '').trim() || null,
+        nom_mere: (nom_mere ?? '').trim() || null,
         adresse_complete: (adresse_complete ?? '').trim() || null,
         numero_cni: (numero_cni ?? '').trim() || null,
         sexe: (sexe ?? '').trim() || null,
@@ -745,6 +772,11 @@ export async function publicDossierRoutes(app: any): Promise<void> {
       photo_live: photoPaths.photo_live,
       photo_signature: photoPaths.photo_signature,
     });
+
+    const customValues = await extractCustomFieldValues(fields);
+    if (Object.keys(customValues).length) {
+      await db.updateDossier(id, customValues);
+    }
 
     db.audit(null, 'DOSSIER_PUBLIC_CREE', `id=${id} wa=${wa_agent ?? ''}`, req.ip);
 
@@ -901,6 +933,13 @@ export async function publicDossierRoutes(app: any): Promise<void> {
   // ==========================================================================
   // GET /api/public/dossiers?wa_agent=
   // ==========================================================================
+  // GET /api/public/champs-dossier — champs actifs (standards + custom créés
+  // par l'admin) pour le formulaire de la page agent terrain.
+  app.get('/api/public/champs-dossier', async (_req: FastifyRequest, reply: any) => {
+    const champsList = await listChampsActifs();
+    return reply.send({ champs: champsList });
+  });
+
   app.get('/api/public/dossiers', async (req: FastifyRequest, reply: any) => {
     const q  = req.query as Record<string, string>;
     const wa = String(q.wa_agent ?? '').replace(/\D/g, '');

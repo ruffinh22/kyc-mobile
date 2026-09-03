@@ -71,6 +71,7 @@ const NAV: Record<Role, NavSection[]> = {
     {
       label: 'GSM · Gross Add',
       items: [
+        { key: 'gsm-saisie',     icon: '✍️', label: 'Saisie GSM' },
         { key: 'gsm-tableau',    icon: '📈', label: 'Mon tableau' },
         { key: 'gsm-historique', icon: '🕓', label: 'Mon historique' },
         { key: 'gsm-perfs',      icon: '🏆', label: 'Mes performances' },
@@ -102,6 +103,7 @@ const NAV: Record<Role, NavSection[]> = {
         { key: 'presence',          icon: '🟢', label: 'Présence' },
         { key: 'performance',       icon: '🏆', label: 'Performance agents' },
         { key: 'distribution',      icon: '🔀', label: 'Distribution' },
+        { key: 'historique-numero', icon: '📞', label: 'Historique numéro' },
         { key: 'flux',              icon: '📉', label: 'Flux & Prédiction' },
       ],
     },
@@ -149,6 +151,8 @@ const NAV: Record<Role, NavSection[]> = {
         { key: 'distribution',  icon: '🔀', label: 'Distribution' },
         { key: 'habilitations', icon: '🔑', label: 'Habilitations' },
         { key: 'referentiels',  icon: '📚', label: 'Référentiels GSM' },
+        { key: 'parametres',    icon: '⚙️', label: 'Paramètres' },
+        { key: 'champs-dossier', icon: '🧩', label: 'Configuration dossier' },
       ],
     },
     {

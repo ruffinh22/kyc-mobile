@@ -5,7 +5,7 @@
 import mysql, { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import type { Pool } from 'mysql2/promise';
 import {
-  Compte, Session, Dossier, GsmRecord, PlanningEntry, PlanningManager,
+  Compte, Session, Dossier, DossierReattribution, GsmRecord, PlanningEntry, PlanningManager,
   NoteQualite, PresenceRow, ConfigRow, AuditLog, Role
 } from '../types';
 import { runMigrations } from './migrations';
@@ -13,6 +13,7 @@ import { runMigrations } from './migrations';
 let poolPrimary: Pool | null = null;
 let poolSecondary: Pool | null = null;
 let activeDbName: 'primary' | 'secondary' = 'primary';
+let pool: Pool | null = null;
 let dbInitError: Error | null = null;
 
 // ── Initialisation ────────────────────────────────────────────────────────────
@@ -30,6 +31,10 @@ function getActivePoolOrThrow(): Pool {
   return getPoolOrThrowByName('secondary');
 }
 
+export function getPoolOrThrow(): Pool {
+  return getActivePoolOrThrow();
+}
+
 export function getPool(name?: 'primary' | 'secondary'): Pool {
   if (!name) return getActivePoolOrThrow();
   return getPoolOrThrowByName(name);
@@ -40,7 +45,7 @@ export function getActiveDbName(): 'primary' | 'secondary' {
 }
 
 export function isDbAvailable(): boolean {
-  return pool !== null;
+  return pool !== null || poolPrimary !== null || poolSecondary !== null;
 }
 
 export async function initDb(): Promise<void> {
@@ -109,6 +114,7 @@ export async function initDb(): Promise<void> {
       activeDbName = (process.env.ACTIVE_DB === 'secondary' && poolSecondary) ? 'secondary' : 'primary';
     }
 
+    pool = getActivePoolOrThrow();
     dbInitError = null;
     console.log('[DB] MySQL connecté : primary=', process.env.DB_NAME, ' active=', activeDbName);
   } catch (error) {
@@ -194,10 +200,11 @@ export async function getAllFcmTokens(): Promise<Array<{ numero: string; fcm_tok
 }
 
 async function ensurePresenceSchema(): Promise<void> {
-  if (!poolPrimary) return;
+  const primaryPool = poolPrimary ?? pool;
+  if (!primaryPool) return;
 
   try {
-    await pool.execute(`
+    await primaryPool.execute(`
       CREATE TABLE IF NOT EXISTS presence (
         matricule VARCHAR(50) NOT NULL,
         statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline',
@@ -216,7 +223,7 @@ async function ensurePresenceSchema(): Promise<void> {
     }
   }
 
-  const [columnsRaw] = await poolPrimary.execute(
+  const [columnsRaw] = await primaryPool.execute(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'presence'`
@@ -225,39 +232,39 @@ async function ensurePresenceSchema(): Promise<void> {
 
   if (!columns.has('matricule')) {
     if (columns.has('nom')) {
-      await pool.execute(`ALTER TABLE presence CHANGE COLUMN nom matricule VARCHAR(50) NOT NULL`);
+      await primaryPool.execute(`ALTER TABLE presence CHANGE COLUMN nom matricule VARCHAR(50) NOT NULL`);
     } else {
-      await pool.execute(`ALTER TABLE presence ADD COLUMN matricule VARCHAR(50) NOT NULL`);
+      await primaryPool.execute(`ALTER TABLE presence ADD COLUMN matricule VARCHAR(50) NOT NULL`);
     }
   }
 
   if (!columns.has('statut')) {
-    await pool.execute(`ALTER TABLE presence ADD COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
+    await primaryPool.execute(`ALTER TABLE presence ADD COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
   }
 
   if (!columns.has('ts')) {
-    await pool.execute(`ALTER TABLE presence ADD COLUMN ts BIGINT NOT NULL DEFAULT 0`);
+    await primaryPool.execute(`ALTER TABLE presence ADD COLUMN ts BIGINT NOT NULL DEFAULT 0`);
   }
 
   if (!columns.has('pause_debut')) {
-    await pool.execute(`ALTER TABLE presence ADD COLUMN pause_debut BIGINT DEFAULT NULL`);
+    await primaryPool.execute(`ALTER TABLE presence ADD COLUMN pause_debut BIGINT DEFAULT NULL`);
   }
 
   if (!columns.has('dispo_depuis')) {
-    await pool.execute(`ALTER TABLE presence ADD COLUMN dispo_depuis BIGINT DEFAULT NULL`);
+    await primaryPool.execute(`ALTER TABLE presence ADD COLUMN dispo_depuis BIGINT DEFAULT NULL`);
   }
 
   if (!columns.has('updated_at')) {
-    await pool.execute(`ALTER TABLE presence ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
+    await primaryPool.execute(`ALTER TABLE presence ADD COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
   }
 
   try {
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN matricule VARCHAR(50) NOT NULL`);
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN ts BIGINT NOT NULL DEFAULT 0`);
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN pause_debut BIGINT DEFAULT NULL`);
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN dispo_depuis BIGINT DEFAULT NULL`);
-    await poolPrimary.execute(`ALTER TABLE presence MODIFY COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN matricule VARCHAR(50) NOT NULL`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN statut ENUM('online', 'pause', 'offline') NOT NULL DEFAULT 'offline'`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN ts BIGINT NOT NULL DEFAULT 0`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN pause_debut BIGINT DEFAULT NULL`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN dispo_depuis BIGINT DEFAULT NULL`);
+    await primaryPool.execute(`ALTER TABLE presence MODIFY COLUMN updated_at BIGINT NOT NULL DEFAULT 0`);
   } catch (error: any) {
     if (!['1146', '42S22'].includes(error?.code)) {
       throw error;
@@ -265,7 +272,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await poolPrimary.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
+    await primaryPool.execute(`ALTER TABLE presence ADD PRIMARY KEY (matricule)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1068', 'ER_MULTIPLE_PRI_KEY'].includes(code)) {
@@ -274,7 +281,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await poolPrimary.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
+    await primaryPool.execute(`ALTER TABLE presence ADD UNIQUE INDEX idx_presence_matricule (matricule)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
@@ -283,7 +290,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await poolPrimary.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
+    await primaryPool.execute(`ALTER TABLE presence ADD INDEX idx_statut_ts (statut, ts)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
@@ -292,7 +299,7 @@ async function ensurePresenceSchema(): Promise<void> {
   }
 
   try {
-    await poolPrimary.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
+    await primaryPool.execute(`ALTER TABLE presence ADD INDEX idx_dispo_depuis (dispo_depuis)`);
   } catch (error: any) {
     const code = error?.code;
     if (!['42000', '23000', '1061', 'ER_DUP_KEYNAME'].includes(code)) {
@@ -318,9 +325,15 @@ async function ensureAppSettingsTable(pool: Pool): Promise<void> {
 export async function setActiveDbName(name: 'primary' | 'secondary'): Promise<void> {
   if (!poolPrimary) throw new Error('Primary DB non initialisée');
   if (name === 'secondary' && !poolSecondary) throw new Error('Secondary DB non configurée');
-  // Persist in primary DB
-  await poolPrimary.execute(`INSERT INTO app_settings (name, value, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`, ['active_db', name, Math.floor(Date.now() / 1000)]);
+
+  await poolPrimary.execute(
+    `INSERT INTO app_settings (name, value, updated_at) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`,
+    ['active_db', name, Math.floor(Date.now() / 1000)]
+  );
+
   activeDbName = name;
+  pool = getActivePoolOrThrow();
 }
 
 export function getActivePool(): Pool {
@@ -465,6 +478,50 @@ export async function getDossierById(id: string): Promise<Dossier | null> {
   return queryOne<Dossier & RowDataPacket>('SELECT * FROM dossiers WHERE id=?', [id]);
 }
 
+export async function insertReattribution(data: {
+  dossier_id: string;
+  ancien_snapshot: Record<string, unknown> | null;
+  motif?: string | null;
+  agent_matricule: string;
+}): Promise<void> {
+  await exec(
+    `INSERT INTO dossier_reattributions (dossier_id, ancien_snapshot, motif, agent_matricule, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      data.dossier_id,
+      data.ancien_snapshot ? JSON.stringify(data.ancien_snapshot) : null,
+      data.motif ?? null,
+      data.agent_matricule,
+      nowSec(),
+    ]
+  );
+}
+
+export async function getReattributions(dossierId: string): Promise<DossierReattribution[]> {
+  return query<DossierReattribution & RowDataPacket>(
+    'SELECT * FROM dossier_reattributions WHERE dossier_id=? ORDER BY created_at DESC, id DESC',
+    [dossierId]
+  );
+}
+
+export async function getReattributionsForDossiers(dossierIds: string[]): Promise<DossierReattribution[]> {
+  if (!dossierIds.length) return [];
+  const placeholders = dossierIds.map(() => '?').join(', ');
+  return query<DossierReattribution & RowDataPacket>(
+    `SELECT * FROM dossier_reattributions WHERE dossier_id IN (${placeholders}) ORDER BY dossier_id, created_at DESC, id DESC`,
+    dossierIds
+  );
+}
+
+export async function getDossiersByNumero(numero: string): Promise<Dossier[]> {
+  const clean = String(numero || '').replace(/\D/g, '');
+  if (!clean) return [];
+  return query<Dossier & RowDataPacket>(
+    'SELECT * FROM dossiers WHERE numero_mtn = ? ORDER BY created_at DESC LIMIT 200',
+    [clean]
+  );
+}
+
 export async function getDossiers(params: {
   date?: string | null; debut?: string | null; fin?: string | null;
   statut?: string | null; agent?: string | null; search?: string | null;
@@ -513,9 +570,14 @@ export async function getDossiers(params: {
     p.push(params.agent);
   }
   if (params.search) {
-    where += ' AND (numero_mtn LIKE ? OR username_agent LIKE ? OR id LIKE ?)';
+    where += ` AND (
+      numero_mtn LIKE ? OR username_agent LIKE ? OR id LIKE ? OR
+      nom_titulaire LIKE ? OR prenom_titulaire LIKE ? OR
+      CONCAT(COALESCE(nom_titulaire, ''), ' ', COALESCE(prenom_titulaire, '')) LIKE ? OR
+      CONCAT(COALESCE(prenom_titulaire, ''), ' ', COALESCE(nom_titulaire, '')) LIKE ?
+    )`;
     const s = `%${params.search}%`;
-    p.push(s, s, s);
+    p.push(s, s, s, s, s, s, s);
   }
 
   const activePool = getPoolOrThrow();
@@ -611,6 +673,7 @@ export async function updateDossier(
     'autre_numero', 'nom_pere', 'nom_mere', 'adresse_complete', 'numero_cni',
     'sexe', 'nationalite', 'profession', 'type_piece', 'date_expiration', 'signature_mode', 'country', 'ocr_overrides',
     'flow_step', 'acquisition_status',
+    'reattribue', 'reattribue_le', 'reattribue_par', 'nb_reattributions',
   ];
   const sets: string[] = ['updated_at=?'];
   const vals: unknown[] = [nowSec()];

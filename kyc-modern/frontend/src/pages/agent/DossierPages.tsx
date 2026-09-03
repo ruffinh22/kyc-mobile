@@ -7,7 +7,6 @@ import { StatCard, Alert, LoadingCenter, EmptyState, Modal } from '../../compone
 import { DossiersTable, DossierDetailModal } from '../../components/DossierComponents';
 import { FaceLivenessCheck } from '../FaceLivenessCheck';
 import { PauseButton } from '../../components/PauseButton';
-import useAdminFieldsSchema from '../../hooks/useAdminFieldsSchema';
 
 const PHONE_CONFIG: Record<string, { digitCount: number; placeholder: string }> = {
   CG: { digitCount: 9, placeholder: '06 XXX XXX' },
@@ -112,9 +111,6 @@ export function AgentDashboard() {
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
-  }, []);
-
-  useEffect(() => {
   }, []);
 
   useEffect(() => {
@@ -777,133 +773,6 @@ export function AgentMesDossiers() {
           </button>
         </>
       } />}
-    </>
-  );
-}
-
-// ── Acquisition terrain ────────────────────────────────────────────────────────
-const COUNTRIES = [
-  { code: 'CG', label: 'Congo' },
-  { code: 'BJ', label: 'Bénin' },
-  { code: 'CI', label: "Côte d'Ivoire" },
-  { code: 'CM', label: 'Cameroun' },
-  { code: 'GW', label: 'Guinée Bissau' },
-  { code: 'GN', label: 'Guinée' },
-];
-
-export function AgentAcquisition() {
-  const [f, setF] = useState({
-    wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'',
-    nom_titulaire:'', prenom_titulaire:'', date_naissance:'', lieu_naissance:'', autre_numero:'',
-    nom_pere:'', nom_mere:'', adresse_complete:'', numero_cni:'', sexe:'', nationalite:'', profession:''
-  });
-  const { inactiveFields, isFieldActive, refresh } = useAdminFieldsSchema();
-  const [recto, setRecto] = useState<File|null>(null); const [verso, setVerso] = useState<File|null>(null);
-  const [loading, setLoading] = useState(false); const [err, setErr] = useState<string|null>(null); const [success, setSuccess] = useState<string|null>(null);
-
-  const submit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); setErr(null); setSuccess(null);
-    if (!recto || !verso) { setErr('Photos recto et verso obligatoires'); return; }
-    if (!f.country) { setErr('Sélectionnez un pays'); return; }
-    if (
-      (!inactiveFields.has('nom_titulaire') && !f.nom_titulaire.trim()) ||
-      (!inactiveFields.has('prenom_titulaire') && !f.prenom_titulaire.trim()) ||
-      (!inactiveFields.has('date_naissance') && !f.date_naissance.trim()) ||
-      (!inactiveFields.has('lieu_naissance') && !f.lieu_naissance.trim()) ||
-      (!inactiveFields.has('nom_pere') && !f.nom_pere.trim()) ||
-      (!inactiveFields.has('nom_mere') && !f.nom_mere.trim())
-    ) {
-      setErr('Les informations du titulaire et des parents sont obligatoires'); return;
-    }
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      Object.entries(f).forEach(([k,v]) => fd.append(k, v));
-      fd.append('photo_recto', recto); fd.append('photo_verso', verso);
-      const r = await api.submitDossierPublic(fd);
-      setSuccess(`Dossier déposé avec succès — Réf. ${r.ref}`);
-      setF({
-        wa_agent:'', username_agent:'', fonction_agent:'', zone_agent:'', numero_mtn:'', country:'',
-        nom_titulaire:'', prenom_titulaire:'', date_naissance:'', lieu_naissance:'', autre_numero:'',
-        nom_pere:'', nom_mere:'', adresse_complete:'', numero_cni:'', sexe:'', nationalite:'', profession:''
-      });
-      setRecto(null); setVerso(null);
-      (e.target as HTMLFormElement).reset();
-    } catch(e2) { setErr(e2 instanceof Error ? e2.message : 'Erreur'); }
-    finally { setLoading(false); }
-  };
-
-  return (
-    <>
-      <div className="page-header"><div><h1 className="page-title">Acquisition KYC terrain</h1><p className="page-sub">Saisissez les informations et les pièces d'identité du client.</p></div></div>
-      {err     && <Alert kind="error">{err}</Alert>}
-      {success && <Alert kind="success">{success}</Alert>}
-      <div className="card" style={{ maxWidth: 620 }}>
-        <form onSubmit={submit} className="form-grid">
-          <div className="form-row">
-            <div className="field"><label>WhatsApp agent<span className="req">*</span></label>
-              <input
-                value={formatPhoneLike(f.wa_agent, f.country, PHONE_CONFIG[f.country]?.digitCount ?? 9)}
-                onChange={e => {
-                  const digits = e.target.value.replace(/\D/g, '').slice(0, PHONE_CONFIG[f.country]?.digitCount ?? 9);
-                  setF(x => ({ ...x, wa_agent: digits }));
-                }}
-                placeholder={PHONE_CONFIG[f.country]?.placeholder ?? 'Sélectionnez un pays'}
-                inputMode="numeric"
-                required
-              />
-            </div>
-            <div className="field"><label>Nom agent<span className="req">*</span></label><input value={f.username_agent} onChange={e => setF(x => ({...x, username_agent: e.target.value}))} placeholder="Nom complet" required /></div>
-          </div>
-          <div className="form-row">
-            <div className="field"><label>Fonction</label><input value={f.fonction_agent} onChange={e => setF(x => ({...x, fonction_agent: e.target.value}))} placeholder="Fonction" /></div>
-            <div className="field"><label>Zone</label><input value={f.zone_agent} onChange={e => setF(x => ({...x, zone_agent: e.target.value}))} placeholder="Zone" /></div>
-          </div>
-          <div className="form-row">
-            <div className="field"><label>Numéro MTN client<span className="req">*</span></label><input value={f.numero_mtn} onChange={e => setF(x => ({...x, numero_mtn: e.target.value}))} placeholder="Numéro MTN" required /></div>
-            <div className="field"><label>Pays<span className="req">*</span></label>
-              <select value={f.country} onChange={e => setF(x => ({...x, country: e.target.value, wa_agent: ''}))} required>
-                <option value="">Sélectionner…</option>
-                {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="card" style={{ marginBottom: '1rem', padding: '1rem' }}>
-            <h3 style={{ margin: '0 0 .75rem', fontSize: '1rem' }}>Informations du titulaire</h3>
-            <div className="form-row">
-              {!inactiveFields.has('nom_titulaire') && <div className="field"><label>Nom titulaire<span className="req">*</span></label><input value={f.nom_titulaire} onChange={e => setF(x => ({...x, nom_titulaire: e.target.value}))} placeholder="Nom du titulaire" required /></div>}
-              {!inactiveFields.has('prenom_titulaire') && <div className="field"><label>Prénom titulaire<span className="req">*</span></label><input value={f.prenom_titulaire} onChange={e => setF(x => ({...x, prenom_titulaire: e.target.value}))} placeholder="Prénom du titulaire" required /></div>}
-            </div>
-            <div className="form-row">
-              {!inactiveFields.has('date_naissance') && <div className="field"><label>Date de naissance<span className="req">*</span></label><input type="date" value={f.date_naissance} onChange={e => setF(x => ({...x, date_naissance: e.target.value}))} required /></div>}
-              {!inactiveFields.has('lieu_naissance') && <div className="field"><label>Lieu de naissance<span className="req">*</span></label><input value={f.lieu_naissance} onChange={e => setF(x => ({...x, lieu_naissance: e.target.value}))} placeholder="Lieu de naissance" required /></div>}
-            </div>
-            <div className="form-row">
-              {!inactiveFields.has('nom_pere') && <div className="field"><label>Nom du père<span className="req">*</span></label><input value={f.nom_pere} onChange={e => setF(x => ({...x, nom_pere: e.target.value}))} placeholder="Nom du père" required /></div>}
-              {!inactiveFields.has('nom_mere') && <div className="field"><label>Nom de la mère<span className="req">*</span></label><input value={f.nom_mere} onChange={e => setF(x => ({...x, nom_mere: e.target.value}))} placeholder="Nom de la mère" required /></div>}
-            </div>
-            <div className="form-row">
-              {!inactiveFields.has('adresse_complete') && <div className="field"><label>Adresse complète</label><input value={f.adresse_complete} onChange={e => setF(x => ({...x, adresse_complete: e.target.value}))} placeholder="Adresse complète" /></div>}
-              {!inactiveFields.has('numero_cni') && <div className="field"><label>Numéro CNI</label><input value={f.numero_cni} onChange={e => setF(x => ({...x, numero_cni: e.target.value}))} placeholder="Numéro CNI" /></div>}
-            </div>
-            <div className="form-row">
-              {!inactiveFields.has('sexe') && <div className="field"><label>Sexe</label><select value={f.sexe} onChange={e => setF(x => ({...x, sexe: e.target.value}))}><option value="">Sélectionner…</option><option value="M">Masculin</option><option value="F">Féminin</option></select></div>}
-              {!inactiveFields.has('nationalite') && <div className="field"><label>Nationalité</label><input value={f.nationalite} onChange={e => setF(x => ({...x, nationalite: e.target.value}))} placeholder="Nationalité" /></div>}
-            </div>
-            <div className="form-row">
-              {!inactiveFields.has('profession') && <div className="field"><label>Profession</label><input value={f.profession} onChange={e => setF(x => ({...x, profession: e.target.value}))} placeholder="Profession" /></div>}
-              {!inactiveFields.has('autre_numero') && <div className="field"><label>Autre numéro</label><input value={f.autre_numero} onChange={e => setF(x => ({...x, autre_numero: e.target.value}))} placeholder="Autre numéro" /></div>}
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="field"><label>Photo recto CNI<span className="req">*</span></label><input type="file" accept="image/*" onChange={e => setRecto(e.target.files?.[0]??null)} required /></div>
-            <div className="field"><label>Photo verso CNI<span className="req">*</span></label><input type="file" accept="image/*" onChange={e => setVerso(e.target.files?.[0]??null)} required /></div>
-          </div>
-          <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>{loading ? 'Envoi en cours…' : 'Envoyer le dossier'}</button>
-        </form>
-      </div>
     </>
   );
 }

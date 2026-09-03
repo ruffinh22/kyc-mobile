@@ -17,7 +17,7 @@ export function Alert({ kind, children }: { kind: 'error' | 'success' | 'info' |
 }
 
 // ── Modal ──────────────────────────────────────────────────────────────────────
-export function Modal({ title, onClose, children, footer }: { title: string; onClose(): void; children: ReactNode; footer?: ReactNode }) {
+export function Modal({ title, onClose, children, footer, className, style }: { title: string; onClose(): void; children: ReactNode; footer?: ReactNode; className?: string; style?: React.CSSProperties }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -25,7 +25,7 @@ export function Modal({ title, onClose, children, footer }: { title: string; onC
   }, [onClose]);
   return (
     <div className="modal-bg" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
+      <div className={`modal ${className ?? ''}`} style={style}>
         <div className="modal-header">
           <h3 className="modal-title">{title}</h3>
           <button className="btn-icon" onClick={onClose}>✕</button>

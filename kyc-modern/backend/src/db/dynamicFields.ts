@@ -1,4 +1,20 @@
 // ============================================================================
+// ⚠️ RETIRÉ — NE PLUS UTILISER ⚠️
+// ----------------------------------------------------------------------------
+// Les routes qui appelaient ce module (routes/admin.ts, POST /api/admin/fields
+// et /api/admin/fields/:name/action) ont été désactivées :
+//   1. Faille de sécurité : `targetTable` était fourni par le client sans
+//      validation (aucun équivalent de NAME_RE) puis interpolé directement
+//      dans un ALTER TABLE / DROP COLUMN — injection SQL possible via le nom
+//      de table même avec le rôle admin déjà exigé.
+//   2. Système orphelin : les colonnes créées ici n'étaient lues nulle part
+//      dans l'application (formulaires agent, OCR, réattribution GSM,
+//      rapports ne connaissent que `dossier_champs`).
+// Le chemin unique et sûr pour administrer les champs du dossier est
+// db/customFields.ts + routes/champs-dossier.ts (UI: AdminChampsDossierPage.tsx).
+// Ce fichier est conservé pour référence historique uniquement — ne plus
+// l'importer depuis du nouveau code.
+// ============================================================================
 // Champs dynamiques — helpers DB (KYC V4)
 // ----------------------------------------------------------------------------
 // Construit sur '../db' (mêmes conventions que gsm.ts / dossiers.ts :

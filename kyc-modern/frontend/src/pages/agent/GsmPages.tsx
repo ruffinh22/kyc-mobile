@@ -1,6 +1,7 @@
-import { useEffect, useState, FormEvent, ReactNode } from 'react';
+import { useEffect, useRef, useState, FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useFetch, useDebounce, todayISO, nDaysAgo } from '../../hooks';
 import * as api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { Dossier, GsmRecord } from '../../types';
 import { Alert, LoadingCenter, EmptyState, StatCard, Modal } from '../../components/ui';
 
@@ -541,6 +542,479 @@ function DossierRecap({ dossier, busy, decision, onDecision, onResetDecision }: 
   );
 }
 
+// ── Capture caméra live (web) ────────────────────────────────────────────────
+// Remplace le <input type="file"> : ouvre la caméra du terminal via
+// getUserMedia, affiche l'aperçu vidéo en direct et fige une image (canvas)
+// au clic sur "Capturer". Le résultat est un vrai instantané pris dans
+// l'app — jamais un fichier piocher dans la galerie/téléphone, exactement
+// comme la capture pièce d'identité de AcquisitionScreenPro côté mobile
+// (expo-camera).
+function CameraCapture({ label, file, onChange, facingMode = 'environment' }: {
+  label: string;
+  file: File | null;
+  onChange(file: File | null): void;
+  facingMode?: 'environment' | 'user';
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [active, setActive] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => stopStream();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!file) setPreview(null);
+  }, [file]);
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  }
+
+  async function start() {
+    setErr(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+      streamRef.current = stream;
+      setActive(true);
+      // Le <video> ne monte qu'une fois active=true ; on relie le flux au
+      // prochain tick pour être sûr que la ref existe déjà.
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      }, 0);
+    } catch {
+      setErr("Caméra inaccessible : vérifiez que l'autorisation caméra est accordée au navigateur.");
+    }
+  }
+
+  function shoot() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const shot = new File([blob], `capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+      onChange(shot);
+      setPreview(URL.createObjectURL(blob));
+      stopStream();
+      setActive(false);
+    }, 'image/jpeg', 0.92);
+  }
+
+  function cancel() {
+    stopStream();
+    setActive(false);
+  }
+
+  function retake() {
+    onChange(null);
+    setPreview(null);
+    start();
+  }
+
+  return (
+    <div className="field">
+      <label>{label}<span className="req">*</span></label>
+      {err && <Alert kind="error">{err}</Alert>}
+      {!active && !preview && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={start}>📷 Ouvrir la caméra</button>
+      )}
+      {active && (
+        <div>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: '100%', maxWidth: 360, borderRadius: 8, background: '#000' }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+            <button type="button" className="btn btn-primary btn-sm" onClick={shoot} style={{ background: MTN_BLUE, borderColor: MTN_BLUE }}>
+              Capturer
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>Annuler</button>
+          </div>
+        </div>
+      )}
+      {preview && !active && (
+        <div>
+          <img src={preview} alt={label} style={{ width: '100%', maxWidth: 360, borderRadius: 8 }} />
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retake} style={{ marginTop: 6 }}>↺ Reprendre la photo</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pad de signature (canvas web) ───────────────────────────────────────────
+// Même contrat serveur que l'acquisition mobile (AcquisitionScreenPro) :
+// signature_mode ('dessin' | 'empreinte') + photo_signature (PNG). Le trait
+// est dessiné directement au doigt/souris sur un <canvas> — jamais un
+// fichier importé.
+type SignatureMode = 'dessin' | 'empreinte';
+
+function SignaturePad({ mode, resetKey, onChange }: {
+  mode: SignatureMode;
+  resetKey: number;
+  onChange(dataUrl: string | null): void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const drawingRef = useRef(false);
+  const emptyRef = useRef(true);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    emptyRef.current = true;
+    onChange(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey, mode]);
+
+  function pos(e: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function start(e: ReactPointerEvent<HTMLCanvasElement>) {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    drawingRef.current = true;
+    const { x, y } = pos(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    canvas.setPointerCapture?.(e.pointerId);
+  }
+
+  function move(e: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const { x, y } = pos(e);
+    ctx.lineWidth = mode === 'empreinte' ? 10 : 2.2;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    emptyRef.current = false;
+  }
+
+  function end() {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    const canvas = canvasRef.current;
+    if (!canvas || emptyRef.current) return;
+    onChange(canvas.toDataURL('image/png'));
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    emptyRef.current = true;
+    onChange(null);
+  }
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef}
+        width={480}
+        height={200}
+        style={{ width: '100%', maxWidth: 480, height: 180, border: '1px solid #CBD5E1', borderRadius: 8, touchAction: 'none', background: '#fff', cursor: 'crosshair' }}
+        onPointerDown={start}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerLeave={end}
+      />
+      <button type="button" className="btn btn-ghost btn-sm" onClick={clear} style={{ marginTop: 6 }}>Effacer</button>
+    </div>
+  );
+}
+
+// Convertit le PNG base64 renvoyé par le pad de signature en File, prêt à
+// être ajouté au FormData (même logique que signatureDataUriToFile côté
+// mobile dans AcquisitionScreenPro).
+function signatureDataUrlToFile(dataUrl: string): File {
+  const [meta, b64] = dataUrl.split(',');
+  const mime = /data:(.*);base64/.exec(meta)?.[1] || 'image/png';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], `signature_${Date.now()}.png`, { type: mime });
+}
+
+// ── Réattribution GSM ────────────────────────────────────────────────────────
+// Un dossier déjà enregistré (numéro MTN existant) est réattribué à une
+// NOUVELLE personne : nouvelle pièce d'identité recto/verso obligatoire
+// (capturées via la caméra, pas de fichier importé), signature du nouveau
+// titulaire (dessin ou empreinte, sur pad canvas), informations du nouveau
+// titulaire, motif. L'ancien titulaire est conservé en historique côté
+// serveur. Déclenchable par n'importe quel agent connecté.
+const REATTRIB_TYPE_PIECE = ['CNI', 'CEDEAO', 'PASSPORT', 'CIP', 'PERMIS', 'AUTRE'];
+
+export function ReattributionModal({ dossier, onClose, onDone }: {
+  dossier: Dossier; onClose(): void; onDone(d: Dossier): void;
+}) {
+  const [form, setForm] = useState({
+    nom_titulaire: '', prenom_titulaire: '', type_piece: 'CNI', numero_cni: '',
+    date_naissance: '', lieu_naissance: '', date_expiration: '', sexe: '',
+    nationalite: '', profession: '', nom_pere: '', nom_mere: '', adresse_complete: '',
+    autre_numero: '', motif: '',
+  });
+  const [champsActifs, setChampsActifs] = useState<Array<{ id: number; cle: string; label: string; type: string; options: string[] | null; obligatoire: boolean; standard: boolean; placeholder?: string | null }>>([]);
+  const [recto, setRecto] = useState<File | null>(null);
+  const [verso, setVerso] = useState<File | null>(null);
+  const [signatureMode, setSignatureMode] = useState<SignatureMode>('dessin');
+  const [signatureData, setSignatureData] = useState<string | null>(null);
+  const [signaturePadKey, setSignaturePadKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getChampsDossierPublic()
+      .then((res) => setChampsActifs(res.champs || []))
+      .catch(() => setChampsActifs([]));
+  }, []);
+
+  const champsMap: Record<string, { obligatoire: boolean; label: string; placeholder: string | null }> = {};
+  for (const c of champsActifs) if (c.standard) champsMap[c.cle] = { obligatoire: c.obligatoire, label: c.label, placeholder: c.placeholder ?? null };
+  const champsConfigCharge = champsActifs.length > 0;
+  const visible = (cle: string) => !champsConfigCharge || !!champsMap[cle];
+  const requis = (cle: string, fallback: boolean) => champsMap[cle] ? champsMap[cle].obligatoire : fallback;
+  const libelleStandard = (cle: string, fallback: string) => champsMap[cle]?.label ?? fallback;
+  const placeholderStandard = (cle: string, fallback: string) => champsMap[cle]?.placeholder || fallback;
+
+  const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
+
+  function clearSignature() {
+    setSignatureData(null);
+    setSignaturePadKey(k => k + 1);
+  }
+
+  function switchSignatureMode(mode: SignatureMode) {
+    if (mode === signatureMode) return;
+    setSignatureMode(mode);
+    clearSignature();
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setErr(null);
+
+    if (visible('nom_titulaire') && requis('nom_titulaire', true) && !form.nom_titulaire.trim()) {
+      setErr(`${libelleStandard('nom_titulaire', 'Nom')} du nouveau titulaire requis`); return;
+    }
+    if (visible('prenom_titulaire') && requis('prenom_titulaire', true) && !form.prenom_titulaire.trim()) {
+      setErr(`${libelleStandard('prenom_titulaire', 'Prénom')} du nouveau titulaire requis`); return;
+    }
+    if (visible('nom_pere') && requis('nom_pere', true) && !form.nom_pere.trim()) {
+      setErr(`${libelleStandard('nom_pere', 'Nom du père')} requis`); return;
+    }
+    if (visible('nom_mere') && requis('nom_mere', true) && !form.nom_mere.trim()) {
+      setErr(`${libelleStandard('nom_mere', 'Nom de la mère')} requis`); return;
+    }
+    if ((visible('type_piece') && requis('type_piece', true) && !form.type_piece.trim())) {
+      setErr(`${libelleStandard('type_piece', 'Type de pièce')} requis`); return;
+    }
+    if ((visible('date_naissance') && requis('date_naissance', false) && !form.date_naissance.trim())) {
+      setErr(`${libelleStandard('date_naissance', 'Date de naissance')} requise`); return;
+    }
+    if ((visible('lieu_naissance') && requis('lieu_naissance', false) && !form.lieu_naissance.trim())) {
+      setErr(`${libelleStandard('lieu_naissance', 'Lieu de naissance')} requis`); return;
+    }
+    if ((visible('numero_cni') && requis('numero_cni', false) && !form.numero_cni.trim())) {
+      setErr(`${libelleStandard('numero_cni', 'Numéro de la pièce')} requis`); return;
+    }
+    if ((visible('date_expiration') && requis('date_expiration', false) && !form.date_expiration.trim())) {
+      setErr(`${libelleStandard('date_expiration', 'Date d\'expiration')} requise`); return;
+    }
+
+    if (!recto || !verso) { setErr("Photo recto ET verso de la nouvelle pièce d'identité requises (utilisez la caméra)"); return; }
+    if (!signatureData) {
+      setErr(signatureMode === 'empreinte'
+        ? "Faites apposer l'empreinte digitale du nouveau titulaire sur le pad"
+        : "Faites signer le nouveau titulaire sur le pad");
+      return;
+    }
+    if (!form.motif.trim()) { setErr('Indiquez le motif de la réattribution'); return; }
+
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+      fd.append('signature_mode', signatureMode);
+      fd.append('photo_recto', recto);
+      fd.append('photo_verso', verso);
+      fd.append('photo_signature', signatureDataUrlToFile(signatureData));
+      const res = await api.reattribuerDossier(dossier.id, fd);
+      onDone(res.dossier);
+    } catch (e: any) {
+      setErr(e?.message || 'Échec de la réattribution');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Réattribuer le dossier ${dossier.numero_mtn}`} onClose={onClose} footer={
+      <>
+        <button className="btn" onClick={onClose} disabled={busy}>Annuler</button>
+        <button className="btn btn-cta" onClick={submit} disabled={busy} style={{ minWidth: 180 }}>
+          {busy ? 'Réattribution en cours…' : 'Confirmer la réattribution'}
+        </button>
+      </>
+    }>
+      <Alert kind="warn">
+        Ce dossier a déjà été enregistré pour <strong>{dossier.nom_titulaire || '—'} {dossier.prenom_titulaire || ''}</strong>.
+        Vous allez l'attribuer à une nouvelle personne : la nouvelle pièce d'identité remplace l'ancienne, et le dossier
+        repart en vérification (visage/liveness à refaire). L'ancien titulaire reste consultable dans l'historique.
+      </Alert>
+      {err && <Alert kind="error">{err}</Alert>}
+      <form onSubmit={submit} className="form-grid">
+        <SectionLabel>Nouvelle pièce d'identité</SectionLabel>
+        <div className="form-row">
+          <CameraCapture label="Photo recto" file={recto} onChange={setRecto} />
+          <CameraCapture label="Photo verso" file={verso} onChange={setVerso} />
+        </div>
+
+        <hr className="divider" />
+        <SectionLabel accent="#94A3B8">Signature du nouveau titulaire</SectionLabel>
+        <div className="form-row">
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => switchSignatureMode('dessin')}
+            style={signatureMode === 'dessin' ? { background: MTN_BLUE, borderColor: MTN_BLUE, color: '#fff' } : undefined}
+          >
+            ✍️ Signature
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => switchSignatureMode('empreinte')}
+            style={signatureMode === 'empreinte' ? { background: MTN_BLUE, borderColor: MTN_BLUE, color: '#fff' } : undefined}
+          >
+            👆 Empreinte digitale
+          </button>
+        </div>
+        <div className="field">
+          <label>
+            {signatureMode === 'dessin'
+              ? 'Faites signer le nouveau titulaire ci-dessous (au doigt ou à la souris)'
+              : "Le titulaire ne sait pas signer : demandez-lui d'apposer son doigt sur la zone ci-dessous"}
+            <span className="req">*</span>
+          </label>
+          <SignaturePad mode={signatureMode} resetKey={signaturePadKey} onChange={setSignatureData} />
+          <div style={{ marginTop: 4, fontSize: 13, color: signatureData ? '#16A34A' : MTN_MUTED }}>
+            {signatureData ? '✓ Signature enregistrée' : 'En attente de signature'}
+          </div>
+        </div>
+
+        <hr className="divider" />
+        <SectionLabel accent="#94A3B8">Nouveau titulaire</SectionLabel>
+        {visible('nom_titulaire') && (
+          <div className="form-row">
+            <div className="field"><label>{libelleStandard('nom_titulaire', 'Nom')}{requis('nom_titulaire', true) && <span className="req">*</span>}</label><input value={form.nom_titulaire} onChange={set('nom_titulaire')} placeholder={placeholderStandard('nom_titulaire', 'Nom du titulaire')} required={requis('nom_titulaire', true)} /></div>
+            {visible('prenom_titulaire') && <div className="field"><label>{libelleStandard('prenom_titulaire', 'Prénom')}{requis('prenom_titulaire', true) && <span className="req">*</span>}</label><input value={form.prenom_titulaire} onChange={set('prenom_titulaire')} placeholder={placeholderStandard('prenom_titulaire', 'Prénom du titulaire')} required={requis('prenom_titulaire', true)} /></div>}
+          </div>
+        )}
+        {!visible('nom_titulaire') && visible('prenom_titulaire') && (
+          <div className="form-row">
+            <div className="field"><label>{libelleStandard('prenom_titulaire', 'Prénom')}{requis('prenom_titulaire', true) && <span className="req">*</span>}</label><input value={form.prenom_titulaire} onChange={set('prenom_titulaire')} placeholder={placeholderStandard('prenom_titulaire', 'Prénom du titulaire')} required={requis('prenom_titulaire', true)} /></div>
+          </div>
+        )}
+        <div className="form-row">
+          {visible('type_piece') && (
+            <div className="field"><label>{libelleStandard('type_piece', 'Type de pièce')}{requis('type_piece', true) && <span className="req">*</span>}</label>
+              <select value={form.type_piece} onChange={set('type_piece')} required={requis('type_piece', true)}>
+                {REATTRIB_TYPE_PIECE.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          )}
+          {visible('numero_cni') && (
+            <div className="field"><label>{libelleStandard('numero_cni', 'Numéro de la pièce')}{requis('numero_cni', false) && <span className="req">*</span>}</label><input value={form.numero_cni} onChange={set('numero_cni')} placeholder={placeholderStandard('numero_cni', 'Numéro de la pièce')} required={requis('numero_cni', false)} /></div>
+          )}
+        </div>
+        <div className="form-row">
+          {visible('date_naissance') && (
+            <div className="field"><label>{libelleStandard('date_naissance', 'Date de naissance')}{requis('date_naissance', false) && <span className="req">*</span>}</label><input type="date" value={form.date_naissance} onChange={set('date_naissance')} required={requis('date_naissance', false)} /></div>
+          )}
+          {visible('lieu_naissance') && (
+            <div className="field"><label>{libelleStandard('lieu_naissance', 'Lieu de naissance')}{requis('lieu_naissance', false) && <span className="req">*</span>}</label><input value={form.lieu_naissance} onChange={set('lieu_naissance')} placeholder={placeholderStandard('lieu_naissance', 'Lieu de naissance')} required={requis('lieu_naissance', false)} /></div>
+          )}
+        </div>
+        <div className="form-row">
+          {visible('date_expiration') && (
+            <div className="field"><label>{libelleStandard('date_expiration', 'Date d\'expiration de la pièce')}{requis('date_expiration', false) && <span className="req">*</span>}</label><input type="date" value={form.date_expiration} onChange={set('date_expiration')} required={requis('date_expiration', false)} /></div>
+          )}
+          {visible('sexe') && (
+            <div className="field"><label>{libelleStandard('sexe', 'Sexe')}{requis('sexe', false) && <span className="req">*</span>}</label>
+              <select value={form.sexe} onChange={set('sexe')} required={requis('sexe', false)}>
+                <option value="">—</option><option value="M">M</option><option value="F">F</option>
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="form-row">
+          {visible('nationalite') && (
+            <div className="field"><label>{libelleStandard('nationalite', 'Nationalité')}{requis('nationalite', false) && <span className="req">*</span>}</label><input value={form.nationalite} onChange={set('nationalite')} placeholder={placeholderStandard('nationalite', 'Nationalité')} required={requis('nationalite', false)} /></div>
+          )}
+          {visible('profession') && (
+            <div className="field"><label>{libelleStandard('profession', 'Profession')}{requis('profession', false) && <span className="req">*</span>}</label><input value={form.profession} onChange={set('profession')} placeholder={placeholderStandard('profession', 'Profession')} required={requis('profession', false)} /></div>
+          )}
+        </div>
+        <div className="form-row">
+          {visible('nom_pere') && (
+            <div className="field"><label>{libelleStandard('nom_pere', 'Nom du père')}{requis('nom_pere', true) && <span className="req">*</span>}</label><input value={form.nom_pere} onChange={set('nom_pere')} placeholder={placeholderStandard('nom_pere', 'Nom du père')} required={requis('nom_pere', true)} /></div>
+          )}
+          {visible('nom_mere') && (
+            <div className="field"><label>{libelleStandard('nom_mere', 'Nom de la mère')}{requis('nom_mere', true) && <span className="req">*</span>}</label><input value={form.nom_mere} onChange={set('nom_mere')} placeholder={placeholderStandard('nom_mere', 'Nom de la mère')} required={requis('nom_mere', true)} /></div>
+          )}
+        </div>
+        <div className="form-row">
+          {visible('adresse_complete') && (
+            <div className="field"><label>{libelleStandard('adresse_complete', 'Adresse complète')}{requis('adresse_complete', false) && <span className="req">*</span>}</label><input value={form.adresse_complete} onChange={set('adresse_complete')} placeholder={placeholderStandard('adresse_complete', 'Adresse complète')} required={requis('adresse_complete', false)} /></div>
+          )}
+          {visible('autre_numero') && (
+            <div className="field"><label>{libelleStandard('autre_numero', 'Autre numéro')}{requis('autre_numero', false) && <span className="req">*</span>}</label><input value={form.autre_numero} onChange={set('autre_numero')} placeholder={placeholderStandard('autre_numero', 'Autre numéro')} required={requis('autre_numero', false)} /></div>
+          )}
+        </div>
+
+        <hr className="divider" />
+        <div className="field">
+          <label>Motif de la réattribution<span className="req">*</span></label>
+          <textarea rows={2} value={form.motif} onChange={set('motif')} placeholder="Ex : ancien titulaire a cédé la ligne, perte de la carte SIM, erreur d'enregistrement…" required />
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete, onClose, compact = false }: GsmSaisieProps) {
   const searchParams = new URLSearchParams(window.location.search);
   const dossierId = propDossierId ?? (searchParams.get('dossier') || localStorage.getItem('gsm_dossier_id') || '');
@@ -549,9 +1023,12 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
   const today = todayISO();
   const [f, setF] = useState({ ...EMPTY_GSM, date: today });
   const [dossier, setDossier] = useState<Dossier | null>(null);
+  const [showReattribution, setShowReattribution] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [loading, setLoading] = useState(false); const [err, setErr] = useState<string|null>(null); const [success, setSuccess] = useState<string|null>(null);
   const [dossierBusy, setDossierBusy] = useState(false);
+  const { user } = useAuth();
+  const canReattribuer = user?.role === 'superviseur' || user?.role === 'admin';
   const [captures, setCaptures] = useState<{ a?: File; p?: File; aa?: File }>({});
   const [search, setSearch] = useState('');
   const [lastId, setLastId] = useState<number|null>(null);
@@ -889,6 +1366,24 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
           decision={decision}
           onDecision={handleDossierDecision}
           onResetDecision={handleResetDecision}
+        />
+      )}
+      {dossier && canReattribuer && (
+        <div style={{ margin: '-8px 0 14px' }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowReattribution(true)}>
+            🔄 Réattribuer ce dossier à une nouvelle personne
+          </button>
+        </div>
+      )}
+      {showReattribution && dossier && (
+        <ReattributionModal
+          dossier={dossier}
+          onClose={() => setShowReattribution(false)}
+          onDone={updated => {
+            setDossier(updated);
+            setShowReattribution(false);
+            setSuccess('Dossier réattribué : la vérification faciale doit être refaite avec la nouvelle pièce.');
+          }}
         />
       )}
       {dossierNonDecide && (

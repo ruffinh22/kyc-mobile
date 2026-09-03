@@ -1,7 +1,21 @@
+// ============================================================================
+// ⚠️ RETIRÉ — NE PLUS MONTER CE COMPOSANT ⚠️
+// ----------------------------------------------------------------------------
+// Ce composant appelle POST /api/admin/fields et /api/admin/fields/:name/action,
+// désormais désactivées côté serveur (routes/admin.ts) : le `targetTable`
+// n'y était pas validé et partait tel quel dans un ALTER TABLE / DROP COLUMN,
+// et les colonnes créées n'étaient de toute façon lues nulle part dans l'app.
+// Utilisez AdminChampsDossierPage.tsx (routes/champs-dossier.ts,
+// db/customFields.ts) pour gérer les champs du dossier — c'est le seul
+// chemin lu par les formulaires agent, l'OCR et la réattribution GSM.
+// Conservé pour référence historique ; ne pas réintégrer dans la navigation.
+// ============================================================================
 import { useEffect, useState } from 'react';
 import { Modal, Alert, LoadingCenter, ConfirmModal } from '../../components/ui';
 import { getAdminFields, createAdminField } from '../../services/api';
 import { z } from 'zod';
+
+type CreateAdminFieldPayload = Parameters<typeof createAdminField>[0];
 
 export default function FieldsManager() {
   const [loading, setLoading] = useState(true);
@@ -35,7 +49,7 @@ export default function FieldsManager() {
     } catch (err) { alert(err instanceof Error ? err.message : 'Erreur'); }
   }
 
-  async function onCreate(form: Record<string, any>) {
+  async function onCreate(form: CreateAdminFieldPayload) {
     setCreating(true);
     try {
       const res = await createAdminField(form);
@@ -94,7 +108,7 @@ export default function FieldsManager() {
   );
 }
 
-function CreateFieldForm({ onCreate, onCancel, loading }: { onCreate(form: Record<string, any>): Promise<void>; onCancel(): void; loading: boolean; }) {
+function CreateFieldForm({ onCreate, onCancel, loading }: { onCreate(form: CreateAdminFieldPayload): Promise<void>; onCancel(): void; loading: boolean; }) {
   const [name, setName] = useState('');
   const [label, setLabel] = useState('');
   const [type, setType] = useState('VARCHAR');
@@ -145,13 +159,20 @@ function CreateFieldForm({ onCreate, onCancel, loading }: { onCreate(form: Recor
       <div style={{ marginTop: '.75rem', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' }}>
         <button className="btn btn-ghost" onClick={onCancel} disabled={loading}>Annuler</button>
         <button className="btn btn-primary" onClick={() => {
-          const data = { name, label, type, length: length === '' ? undefined : length, nullable, targetTable };
+          const data: CreateAdminFieldPayload = {
+            name,
+            label,
+            type,
+            length: length === '' ? undefined : length,
+            nullable,
+            targetTable,
+          };
           const parsed = schema.safeParse(data);
           if (!parsed.success) {
             alert(parsed.error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('\n'));
             return;
           }
-          onCreate(parsed.data as any);
+          onCreate(parsed.data as CreateAdminFieldPayload);
         }} disabled={loading}>{loading ? 'Création…' : 'Créer'}</button>
       </div>
     </div>

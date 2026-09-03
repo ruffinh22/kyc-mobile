@@ -32,7 +32,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createWorker, OEM, PSM } from 'tesseract.js';
-import { getPublicDossiers } from '../services/api';
+import { getPublicDossiers, getChampsDossierPublic } from '../services/api';
 import { AFRICAN_COUNTRIES } from '../utils/phoneValidator';
 
 const API_BASE = (() => {
@@ -625,6 +625,37 @@ export function AcquisitionPage() {
   const [photos, setPhotos]     = useState<{ recto: PhotoState | null; verso: PhotoState | null }>({ recto: null, verso: null });
   const [photoErr, setPhotoErr] = useState({ recto: false, verso: false });
 
+  // ── Champs personnalisés (créés par l'admin) + configuration des champs
+  // standards (actif/obligatoire) — TOUS pilotés depuis Configuration →
+  // Champs du dossier. Un champ standard désactivé par l'admin disparaît
+  // du formulaire terrain exactement comme un champ personnalisé désactivé ;
+  // son obligation (`req`) suit aussi la configuration admin, avec un
+  // repli sur la règle historique (pièce officielle) tant que la config
+  // n'est pas encore chargée.
+  const [champsActifs, setChampsActifs] = useState<Array<{ id: number; cle: string; label: string; type: string; options: string[] | null; obligatoire: boolean; standard: boolean; placeholder?: string | null }>>([]);
+  const [valeursPerso, setValeursPerso] = useState<Record<string, string>>({});
+  useEffect(() => {
+    getChampsDossierPublic()
+      .then(r => setChampsActifs(r.champs))
+      .catch(() => setChampsActifs([]));
+  }, []);
+  const champsPerso = champsActifs.filter(c => !c.standard);
+  const champsMap: Record<string, { obligatoire: boolean; label: string; placeholder: string | null }> = {};
+  for (const c of champsActifs) if (c.standard) champsMap[c.cle] = { obligatoire: c.obligatoire, label: c.label, placeholder: c.placeholder ?? null };
+  const champsConfigCharge = champsActifs.length > 0;
+  // visible() : un champ standard est affiché s'il est actif — comme la
+  // liste ne contient QUE les champs actifs (voir /api/public/champs-dossier),
+  // "absent de champsMap alors que la config est chargée" = désactivé par
+  // l'admin. Avant chargement, on affiche tout par défaut (fail-open) pour
+  // ne jamais bloquer un agent sur une erreur réseau transitoire.
+  const visible = (cle: string) => !champsConfigCharge || !!champsMap[cle];
+  const requis = (cle: string, fallback: boolean) => champsMap[cle] ? champsMap[cle].obligatoire : fallback;
+  const libelleStandard = (cle: string, fallback: string) => champsMap[cle]?.label ?? fallback;
+  // placeholderStandard() : le placeholder configuré par l'admin prime ; si
+  // aucun n'est défini (ou config pas encore chargée), on retombe sur le
+  // placeholder codé en dur existant — jamais de champ sans indication.
+  const placeholderStandard = (cle: string, fallback: string) => champsMap[cle]?.placeholder || fallback;
+
   // ── Signature du titulaire ──────────────────────────────────────────────
   // 'dessin' : tracé manuscrit (au doigt/stylet), reproduisant si possible la
   // signature de la pièce. 'empreinte' : le titulaire ne sait pas signer —
@@ -747,21 +778,27 @@ export function AcquisitionPage() {
     const num = form.numero_mtn.replace(/\D/g, '');
     const conf = paysConf;
     const waOk = !!conf && wa.length === conf.digitCount;
-    const official = isOfficialDoc(form.type_piece);
-    // Nom/prénom/filiation exigés quel que soit le document présenté.
-    // Naissance, numéro de pièce et date d'expiration : exigés uniquement
-    // pour une pièce officielle (format d'État structuré) — une carte
-    // scolaire, une carte étudiant ou un justificatif "autre" n'ont pas ce
-    // niveau de structuration standardisée, on ne les exige donc pas.
-    const titulaireOk = !!form.nom_titulaire.trim() && !!form.prenom_titulaire.trim() &&
-      !!form.nom_pere.trim() && !!form.nom_mere.trim() &&
+    const official = !!form.type_piece && isOfficialDoc(form.type_piece);
+    const typePieceOk = !visible('type_piece') || !requis('type_piece', true) || !!form.type_piece;
+    // Les champs standards se conforment à la config admin : un champ masqué
+    // n'est ni affiché ni requis, tandis qu'un champ actif mais non obligatoire
+    // reste optionnel. Les règles historiques de pièce officielle ne s'appliquent
+    // que si le champ type_piece est visible et que le document est officiel.
+    const titulaireOk =
+      (!visible('nom_titulaire') || !requis('nom_titulaire', true) || !!form.nom_titulaire.trim()) &&
+      (!visible('prenom_titulaire') || !requis('prenom_titulaire', true) || !!form.prenom_titulaire.trim()) &&
+      (!visible('nom_pere') || !requis('nom_pere', true) || !!form.nom_pere.trim()) &&
+      (!visible('nom_mere') || !requis('nom_mere', true) || !!form.nom_mere.trim()) &&
       (!official || (
-        !!form.date_naissance.trim() && !!form.lieu_naissance.trim() &&
-        !!form.numero_cni.trim() && !!form.date_expiration.trim()
+        (!visible('date_naissance') || !requis('date_naissance', false) || !!form.date_naissance.trim()) &&
+        (!visible('lieu_naissance') || !requis('lieu_naissance', false) || !!form.lieu_naissance.trim()) &&
+        (!visible('numero_cni') || !requis('numero_cni', false) || !!form.numero_cni.trim()) &&
+        (!visible('date_expiration') || !requis('date_expiration', false) || !!form.date_expiration.trim())
       ));
-    return form.country && !!form.type_piece && waOk && form.username_agent && form.fonction_agent &&
+    const champsPersoOk = champsPerso.every(c => !c.obligatoire || !!(valeursPerso[c.cle] || '').trim());
+    return form.country && waOk && form.username_agent && form.fonction_agent &&
            form.zone_agent && conf && num.length === conf.digitCount &&
-           titulaireOk && photos.recto && photos.verso && !!signature;
+           typePieceOk && titulaireOk && photos.recto && photos.verso && !!signature && champsPersoOk;
   };
 
   // ── Pad de signature (canvas) ────────────────────────────────────────────
@@ -1149,6 +1186,10 @@ export function AcquisitionPage() {
       fd.append('photo_verso',    photos.verso!.file, 'verso.jpg');
       fd.append('signature_mode', signatureMode);
       fd.append('photo_signature', signature!.file, 'signature.png');
+      for (const c of champsPerso) {
+        const v = valeursPerso[c.cle];
+        if (v !== undefined && v !== '') fd.append(c.cle, v);
+      }
 
       const xhr = new XMLHttpRequest();
       xhr.upload.onprogress = e => {
@@ -1411,31 +1452,35 @@ export function AcquisitionPage() {
                   {/* Type de pièce : choisi AVANT toute capture — conditionne
                       les champs exigés plus bas (numéro, date d'expiration...)
                       ainsi que la profession suggérée. */}
-                  <Fld label="Type de pièce" req>
-                    <select
-                      value={form.type_piece}
-                      onChange={e => {
-                        const value = e.target.value as DocumentTypeValue | '';
-                        setForm(f => {
-                          const suggestion = value ? DEFAULT_PROFESSION_BY_TYPE[value as DocumentTypeValue] : undefined;
-                          const prevWasSuggestion = Object.values(DEFAULT_PROFESSION_BY_TYPE).includes(f.profession);
-                          const profession = suggestion && (!f.profession || prevWasSuggestion) ? suggestion : f.profession;
-                          return { ...f, type_piece: value, profession };
-                        });
-                      }}
-                      style={inpSt}
-                    >
-                      <option value="">— Sélectionnez —</option>
-                      {DOCUMENT_TYPES.map(dt => (
-                        <option key={dt.value} value={dt.value}>{dt.label}</option>
-                      ))}
-                    </select>
-                  </Fld>
-                  {!form.type_piece && (
-                    <p style={{ fontSize: 11, color: '#DC2626', margin: '-6px 0 10px' }}>Choisissez le type de pièce avant de capturer les photos.</p>
-                  )}
-                  {!!form.type_piece && !isOfficialDoc(form.type_piece) && (
-                    <p style={{ fontSize: 11, color: '#6B7A99', margin: '-6px 0 10px' }}>Document non officiel : certains champs (numéro, date d'expiration…) resteront optionnels.</p>
+                  {visible('type_piece') && (
+                    <>
+                      <Fld label={libelleStandard('type_piece', 'Type de pièce')} req={requis('type_piece', true)}>
+                        <select
+                          value={form.type_piece}
+                          onChange={e => {
+                            const value = e.target.value as DocumentTypeValue | '';
+                            setForm(f => {
+                              const suggestion = value ? DEFAULT_PROFESSION_BY_TYPE[value as DocumentTypeValue] : undefined;
+                              const prevWasSuggestion = Object.values(DEFAULT_PROFESSION_BY_TYPE).includes(f.profession);
+                              const profession = suggestion && (!f.profession || prevWasSuggestion) ? suggestion : f.profession;
+                              return { ...f, type_piece: value, profession };
+                            });
+                          }}
+                          style={inpSt}
+                        >
+                          <option value="">— Sélectionnez —</option>
+                          {DOCUMENT_TYPES.map(dt => (
+                            <option key={dt.value} value={dt.value}>{dt.label}</option>
+                          ))}
+                        </select>
+                      </Fld>
+                      {!form.type_piece && (
+                        <p style={{ fontSize: 11, color: '#DC2626', margin: '-6px 0 10px' }}>Choisissez le type de pièce avant de capturer les photos.</p>
+                      )}
+                      {!!form.type_piece && !isOfficialDoc(form.type_piece) && (
+                        <p style={{ fontSize: 11, color: '#6B7A99', margin: '-6px 0 10px' }}>Document non officiel : certains champs (numéro, date d'expiration…) resteront optionnels.</p>
+                      )}
+                    </>
                   )}
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
@@ -1477,66 +1522,118 @@ export function AcquisitionPage() {
                 ) : (
                 <Card>
                   <StepHeader num="04" title="Titulaire" sub="Informations obligatoires" />
-                  <Fld label="Nom titulaire" req>
-                    <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder="Nom du titulaire" style={inpSt} />
-                  </Fld>
-                  <Fld label="Prénom titulaire" req>
-                    <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder="Prénom du titulaire" style={inpSt} />
-                  </Fld>
-                  <Fld label="Date de naissance" req={isOfficialDoc(form.type_piece)}>
-                    <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} style={inpSt} />
-                  </Fld>
-                  <Fld label="Lieu de naissance" req={isOfficialDoc(form.type_piece)}>
-                    <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder="Lieu de naissance" style={inpSt} />
-                  </Fld>
-                  <Fld label="Nom du père" req>
-                    <input value={form.nom_pere} onChange={e => setForm(f => ({ ...f, nom_pere: e.target.value }))} placeholder="Nom du père" style={inpSt} />
-                  </Fld>
-                  <Fld label="Nom de la mère" req>
-                    <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder="Nom de la mère" style={inpSt} />
-                  </Fld>
+                  {visible('nom_titulaire') && (
+                    <Fld label={libelleStandard('nom_titulaire', 'Nom titulaire')} req={requis('nom_titulaire', true)}>
+                      <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder={placeholderStandard('nom_titulaire', 'Nom du titulaire')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('prenom_titulaire') && (
+                    <Fld label={libelleStandard('prenom_titulaire', 'Prénom titulaire')} req={requis('prenom_titulaire', true)}>
+                      <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder={placeholderStandard('prenom_titulaire', 'Prénom du titulaire')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('date_naissance') && (
+                    <Fld label={libelleStandard('date_naissance', 'Date de naissance')} req={requis('date_naissance', isOfficialDoc(form.type_piece))}>
+                      <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('lieu_naissance') && (
+                    <Fld label={libelleStandard('lieu_naissance', 'Lieu de naissance')} req={requis('lieu_naissance', isOfficialDoc(form.type_piece))}>
+                      <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder={placeholderStandard('lieu_naissance', 'Lieu de naissance')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('nom_pere') && (
+                    <Fld label={libelleStandard('nom_pere', 'Nom du père')} req={requis('nom_pere', true)}>
+                      <input value={form.nom_pere} onChange={e => setForm(f => ({ ...f, nom_pere: e.target.value }))} placeholder={placeholderStandard('nom_pere', 'Nom du père')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('nom_mere') && (
+                    <Fld label={libelleStandard('nom_mere', 'Nom de la mère')} req={requis('nom_mere', true)}>
+                      <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder={placeholderStandard('nom_mere', 'Nom de la mère')} style={inpSt} />
+                    </Fld>
+                  )}
                   {/* Adresse et nationalité : une pièce non officielle (carte
                       scolaire, carte étudiant, autre) ne les porte pas de
                       façon fiable — champs proposés mais jamais bloquants
                       dans ce cas, contrairement à une pièce officielle. */}
-                  <Fld label="Adresse complète" hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
-                    <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder="Adresse complète" style={inpSt} />
-                  </Fld>
-                  <Fld label="Numéro CNI" req={isOfficialDoc(form.type_piece)}>
-                    <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder="Numéro CNI" style={inpSt} />
-                  </Fld>
-                  {isOfficialDoc(form.type_piece) && (
-                    <Fld label="Date d'expiration" req>
+                  {visible('adresse_complete') && (
+                    <Fld label={libelleStandard('adresse_complete', 'Adresse complète')} hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
+                      <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder={placeholderStandard('adresse_complete', 'Adresse complète')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('numero_cni') && (
+                    <Fld label={libelleStandard('numero_cni', 'Numéro CNI')} req={requis('numero_cni', isOfficialDoc(form.type_piece))}>
+                      <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder={placeholderStandard('numero_cni', 'Numéro CNI')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('date_expiration') && isOfficialDoc(form.type_piece) && (
+                    <Fld label={libelleStandard('date_expiration', 'Date d\'expiration')} req={requis('date_expiration', true)}>
                       <input type="date" value={form.date_expiration} onChange={e => setForm(f => ({ ...f, date_expiration: e.target.value }))} style={inpSt} />
                     </Fld>
                   )}
-                  <Fld label="Sexe">
-                    <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} style={inpSt}>
-                      <option value="">— Sélectionnez —</option>
-                      <option value="M">Masculin</option>
-                      <option value="F">Féminin</option>
-                    </select>
-                  </Fld>
-                  <Fld label="Nationalité" hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
-                    <select
-                      value={form.nationalite}
-                      onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))}
-                      style={inpSt}
-                    >
-                      <option value="">— Sélectionnez —</option>
-                      {(Object.values(AFRICAN_COUNTRIES) as Array<{ code: string; name: string }>).map(country => (
-                        <option key={country.code} value={country.name}>
-                          {country.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Fld>
-                  <Fld label="Profession">
-                    <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder="Profession" style={inpSt} />
-                  </Fld>
-                  <Fld label="Autre numéro">
-                    <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder="Autre numéro" style={inpSt} />
-                  </Fld>
+                  {visible('sexe') && (
+                    <Fld label={libelleStandard('sexe', 'Sexe')}>
+                      <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} style={inpSt}>
+                        <option value="">— Sélectionnez —</option>
+                        <option value="M">Masculin</option>
+                        <option value="F">Féminin</option>
+                      </select>
+                    </Fld>
+                  )}
+                  {visible('nationalite') && (
+                    <Fld label={libelleStandard('nationalite', 'Nationalité')} hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
+                      <select
+                        value={form.nationalite}
+                        onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))}
+                        style={inpSt}
+                      >
+                        <option value="">— Sélectionnez —</option>
+                        {(Object.values(AFRICAN_COUNTRIES) as Array<{ code: string; name: string }>).map(country => (
+                          <option key={country.code} value={country.name}>
+                            {country.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Fld>
+                  )}
+                  {visible('profession') && (
+                    <Fld label={libelleStandard('profession', 'Profession')}>
+                      <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder={placeholderStandard('profession', 'Profession')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {visible('autre_numero') && (
+                    <Fld label={libelleStandard('autre_numero', 'Autre numéro')}>
+                      <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder={placeholderStandard('autre_numero', 'Autre numéro')} style={inpSt} />
+                    </Fld>
+                  )}
+                  {champsPerso.map(c => (
+                    <Fld key={c.id} label={c.label} req={c.obligatoire}>
+                      {c.type === 'liste' ? (
+                        <select
+                          value={valeursPerso[c.cle] || ''}
+                          onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
+                          style={inpSt}
+                        >
+                          <option value="">Sélectionner…</option>
+                          {(c.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : c.type === 'case' ? (
+                        <input
+                          type="checkbox"
+                          checked={valeursPerso[c.cle] === '1'}
+                          onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.checked ? '1' : '' }))}
+                        />
+                      ) : (
+                        <input
+                          type={c.type === 'date' ? 'date' : c.type === 'nombre' ? 'number' : 'text'}
+                          value={valeursPerso[c.cle] || ''}
+                          onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
+                          placeholder={c.placeholder || c.label}
+                          style={inpSt}
+                        />
+                      )}
+                    </Fld>
+                  ))}
                   <div style={{ height: 5, background: '#EDF1F8', borderRadius: 99, overflow: 'hidden' }}>
                     <div style={{ height: '100%', background: 'linear-gradient(90deg,#003087,#0057A8)', borderRadius: 99, width: `${pct()}%`, transition: 'width .3s' }} />
                   </div>

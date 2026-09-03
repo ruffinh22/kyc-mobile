@@ -96,9 +96,23 @@ export interface Dossier {
   created_at: number;
   updated_at: number;
   closed_at: number | null;
+  // ── Réattribution (voir routes/dossiers.ts, POST /:id/reattribution) ──────
+  reattribue: number;
+  reattribue_le: number | null;
+  reattribue_par: string | null;
+  nb_reattributions: number;
   // champ calculé
   touch_time?: number | null;
   masque?: boolean;
+}
+
+export interface DossierReattribution {
+  id: number;
+  dossier_id: string;
+  ancien_snapshot: string;
+  motif: string | null;
+  agent_matricule: string;
+  created_at: number;
 }
 
 export interface GsmRecord {

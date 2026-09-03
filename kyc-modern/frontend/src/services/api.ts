@@ -1,4 +1,4 @@
-import type { Dossier, DossierStats, GsmRecord, GsmStats, PlanningEntry, NoteQualite, Compte, Session, AuditLog, AdminStats, PresenceResume, User } from '../types';
+import type { Dossier, DossierStats, GsmRecord, GsmStats, PlanningEntry, NoteQualite, Compte, Session, AuditLog, AdminStats, PresenceResume, User, ChampDossier, ChampType, DossierReattribution } from '../types';
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
 
@@ -102,6 +102,18 @@ export async function prendreEnCharge(id: string) { return apiFetch<{ success: b
 export async function accepterDossier(id: string, resultat_crm?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/accepter`, { method: 'POST', json: { resultat_crm } }); }
 export async function rejeterDossier(id: string, raison: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/rejeter`, { method: 'POST', json: { raison } }); }
 export async function reprendreFaceVerify(id: string) { return apiFetch<{ success: boolean; message: string }>(`/api/dossiers/${id}/reprendre-face-verify`, { method: 'POST' }); }
+export async function reattribuerDossier(id: string, formData: FormData) {
+  return apiFetch<{ success: boolean; repris: boolean; dossier: Dossier }>(`/api/dossiers/${id}/reattribution`, { method: 'POST', body: formData });
+}
+export async function getReattributions(id: string) {
+  return apiFetch<{ reattributions: DossierReattribution[] }>(`/api/dossiers/${id}/reattributions`);
+}
+export async function getHistoriqueNumero(numero: string) {
+  return apiFetch<{
+    numero: string; nb_dossiers: number; nb_reattributions: number;
+    historique: Array<{ dossier: Dossier; reattributions: DossierReattribution[] }>;
+  }>(`/api/dossiers/numero/${encodeURIComponent(numero)}/historique`);
+}
 export async function transfererDossier(id: string, cible: string, message?: string) { return apiFetch<{ success: boolean }>(`/api/dossiers/${id}/transferer`, { method: 'POST', json: { cible, message } }); }
 export async function verifierVisage(id: string) { return apiFetch<{ score: number; match: boolean; motif: string }>(`/api/dossiers/${id}/verifier-visage`, { method: 'POST' }); }
 export function photoUrl(id: string, type: 'recto' | 'verso' | 'live' | 'signature') { return `${BASE}/api/dossiers/${id}/photo/${type}`; }
@@ -126,6 +138,7 @@ export async function getAdminReporting(p: { debut?: string; fin?: string; statu
   return apiFetch<{ success: boolean; total: number; count: number; dossiers: Dossier[]; stats: Record<string, number>; byAgent: Array<{ agent: string; total: number; accepte: number; rejete: number; en_cours: number }> }>(`/api/admin/reporting?${qs}`);
 }
 export async function submitDossierPublic(formData: FormData) { return apiFetch<{ success: boolean; id: string; ref: string; numero: string }>('/api/public/dossiers', { method: 'POST', body: formData }); }
+export async function getChampsDossierPublic() { return apiFetch<{ champs: ChampDossier[] }>('/api/public/champs-dossier'); }
 
 // ── Face Verify (terrain public) ──────────────────────────────────────────────
 export async function verifyFaceRealtime(videoFrame: Blob, recto_path: string): Promise<{ success: boolean; score: number; match: boolean | null; motif: string; message: string }> {
@@ -201,6 +214,48 @@ export async function exportGsmCsv(params: { numero?: string; du?: string; au?: 
   return apiFetch<string>(`/api/gsm/export-csv${qs.toString() ? `?${qs}` : ''}`);
 }
 export async function getReferentiels() { return apiFetch<{ success: boolean; referentiels: Record<string, string[]> }>('/api/gsm/referentiels'); }
+
+// ── Champs dynamiques du dossier (admin) ────────────────────────────────────
+export async function getChampsDossierActifs() { return apiFetch<{ champs: ChampDossier[] }>('/api/champs-dossier/actifs'); }
+export async function getChampsDossierAdmin() { return apiFetch<{ champs: ChampDossier[] }>('/api/admin/champs-dossier'); }
+export async function createChampDossier(data: { label: string; type: ChampType; options?: string[] | null; obligatoire?: boolean; placeholder?: string | null }) {
+  return apiFetch<{ champ: ChampDossier }>('/api/admin/champs-dossier', { method: 'POST', json: data });
+}
+export async function updateChampDossier(id: number, patch: { label?: string; obligatoire?: boolean; actif?: boolean; ordre?: number; options?: string[] | null; placeholder?: string | null }) {
+  return apiFetch<{ champ: ChampDossier }>(`/api/admin/champs-dossier/${id}`, { method: 'PATCH', json: patch });
+}
+export async function deleteChampDossier(id: number) {
+  return apiFetch<{ success: boolean }>(`/api/admin/champs-dossier/${id}`, { method: 'DELETE', json: { confirm: true } });
+}
+
+// Legacy compatibility wrapper for the older admin field management UI
+export async function getAdminFields() {
+  return apiFetch<{ success: boolean; count: number; fields: Array<Record<string, unknown>> }>(`/api/admin/fields`);
+}
+
+export async function createAdminField(data: {
+  name: string;
+  label: string;
+  type?: string;
+  length?: number;
+  decimalScale?: number;
+  nullable?: boolean;
+  defaultValue?: unknown;
+  position?: number;
+  targetTable?: string;
+}) {
+  return apiFetch<{ success: boolean; migration_file?: string; error?: string }>(`/api/admin/fields`, {
+    method: 'POST',
+    json: data,
+  });
+}
+
+export async function adminFieldAction(name: string, action: 'hide' | 'schedule_drop' | 'drop_now', targetTable = 'dossiers') {
+  return apiFetch<{ success: boolean; backupFile?: string; error?: string }>(`/api/admin/fields/${encodeURIComponent(name)}/action`, {
+    method: 'POST',
+    json: { action, targetTable },
+  });
+}
 
 // ── Planning ──────────────────────────────────────────────────────────────────
 export async function getPlanningMon(debut: string, fin: string) { return apiFetch<{ success: boolean; count: number; entrees: PlanningEntry[] }>(`/api/planning/mon?debut=${debut}&fin=${fin}`); }
@@ -284,12 +339,3 @@ export async function getAuditLogs(p: { matricule?: string; action?: string; deb
 export async function getStorageStats() { return apiFetch<{ success: boolean; dossiers: number; gsm: number; photos_cni: number; captures_gsm: number; planning: number; notes: number }>('/api/admin/stockage'); }
 export async function purgeApercu(action: string, mode: string, du?: string, au?: string) { return apiFetch<{ success: boolean; count: number }>('/api/admin/purge/apercu', { method: 'POST', json: { action, mode, du, au } }); }
 export async function purgeExecuter(action: string, code: string, mode: string, du?: string, au?: string) { return apiFetch<{ success: boolean; count: number }>('/api/admin/purge/executer', { method: 'POST', json: { action, code, mode, du, au } }); }
-
-// ── Champs dynamiques (admin) ───────────────────────────────────────────────
-export async function getAdminFields() { return apiFetch<{ success: boolean; count: number; fields: any[] }>('/api/admin/fields'); }
-export async function getAdminFieldsSchema() { return apiFetch<{ success: boolean; count: number; schema: any[] }>('/api/admin/fields/schema'); }
-export async function createAdminField(data: Record<string, unknown>) { return apiFetch<{ success: boolean; migration_file?: string; error?: string }>('/api/admin/fields', { method: 'POST', json: data }); }
-
-export async function adminFieldAction(name: string, action: 'hide' | 'schedule_drop' | 'drop_now', targetTable = 'dossiers') {
-  return apiFetch<{ success: boolean; backupFile?: string }>(`/api/admin/fields/${encodeURIComponent(name)}/action`, { method: 'POST', json: { action, targetTable } });
-}

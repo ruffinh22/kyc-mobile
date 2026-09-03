@@ -223,22 +223,30 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
     || (dossier.agent_saisie === user?.matricule && ['en_cours', 'accepte', 'rejete'].includes(dossier.statut));
 
   return (
-    <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions}>
-      <div className="form-grid">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
-          <StatutBadge statut={dossier.statut} />
-          <AutoDistributionCountdown dossier={dossier} abandonSec={abandonSec} now={now} />
-          {dossier.score_visage !== null && dossier.score_visage !== undefined && (
-            <span
-              className="badge"
-              style={{
-                background: dossier.visage_match ? 'var(--success-soft)' : 'var(--danger-soft)',
-                color: dossier.visage_match ? 'var(--success)' : 'var(--danger)',
-              }}
-            >
-              Visage {dossier.score_visage}% {dossier.visage_match ? '✓' : '✗'}
-            </span>
-          )}
+    <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions} className="dossier-detail-modal" style={{ maxWidth: 760 }}>
+      <div className="dossier-detail-shell">
+        <div className="dossier-detail-header">
+          <div className="dossier-detail-summary">
+            <span className="dossier-detail-kicker">Fiche dossier</span>
+            <div className="dossier-detail-title-row">
+              <h3>{dossier.nom_titulaire || 'Titulaire'} {dossier.prenom_titulaire || ''}</h3>
+              <StatutBadge statut={dossier.statut} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <AutoDistributionCountdown dossier={dossier} abandonSec={abandonSec} now={now} />
+            {dossier.score_visage !== null && dossier.score_visage !== undefined && (
+              <span
+                className="badge"
+                style={{
+                  background: dossier.visage_match ? 'var(--success-soft)' : 'var(--danger-soft)',
+                  color: dossier.visage_match ? 'var(--success)' : 'var(--danger)',
+                }}
+              >
+                Visage {dossier.score_visage}% {dossier.visage_match ? '✓' : '✗'}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="detail-grid">
@@ -259,8 +267,8 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
         </div>
 
         {canSeePhoto && (dossier.photo_recto || dossier.photo_verso || dossier.photo_live) && (
-          <div>
-            <div className="detail-label" style={{ marginBottom: '.5rem' }}>Pièces d'identité</div>
+          <div className="dossier-detail-section">
+            <div className="detail-label" style={{ marginBottom: '.75rem' }}>Pièces d'identité</div>
             <div className="photo-grid">
               {(() => {
                 const types = ['recto','verso','live'] as const;

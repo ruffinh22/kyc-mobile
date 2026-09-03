@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS dossiers (
   KEY idx_agent        (agent_saisie),
   KEY idx_wa           (wa_agent),
   KEY idx_created      (created_at),
+  KEY idx_numero_mtn   (numero_mtn),
   KEY idx_date_statut  (date, statut)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

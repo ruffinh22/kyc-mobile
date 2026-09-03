@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, LoadingCenter, StatCard } from '../../components/ui';
 import { apiFetch } from '../../services/api';
-import FieldsManager from './FieldsManager';
 
 type DistributionMode = 'manuel' | 'auto';
 
@@ -127,12 +126,7 @@ export function AdminParametresPage() {
 
       {pageLoading ? <LoadingCenter /> : (
         <>
-          <div className="card">
-            <FieldsManager />
-          </div>
-
-          
-            <div className="stats-grid">
+          <div className="stats-grid">
               <StatCard label="Seuil d’alerte" value={`${seuilAlerte} min`} />
               <StatCard label="Distribution" value={distributionMode === 'auto' ? 'Automatique' : 'Manuel'} variant={distributionMode === 'auto' ? 'accepte' : 'attente'} />
               <StatCard label="Intervalle de vérification" value={`${(intervalMs / 1000).toLocaleString('fr-FR')} s`} />
@@ -263,7 +257,7 @@ export function AdminParametresPage() {
                 <button className="btn btn-primary" disabled={dbState.saving} onClick={async () => {
                   setDbState({ saving: true, success: null, error: null });
                   try {
-                    const res = await apiFetch<{ success: boolean; active?: string }>('/api/admin/db/switch', {
+                    const res = await apiFetch<{ success: boolean; active?: string; error?: string }>('/api/admin/db/switch', {
                       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: activeDb || 'primary' })
                     });
                     if (res.success) setDbState({ saving: false, success: 'Bascule effectuée', error: null });

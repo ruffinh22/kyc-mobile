@@ -25,6 +25,22 @@ export interface Dossier {
   gsm_complete: number; transfert_message: string | null; transfert_par: string | null;
   created_at: number; closed_at: number | null; assigne_le: number | null;
   touch_time?: number | null; masque?: boolean;
+  reattribue?: number; reattribue_le?: number | null; reattribue_par?: string | null;
+  nb_reattributions?: number;
+  [customField: string]: unknown;
+}
+
+export type ChampType = 'texte' | 'nombre' | 'date' | 'liste' | 'case';
+
+export interface ChampDossier {
+  id: number; cle: string; label: string; type: ChampType;
+  options: string[] | null; obligatoire: boolean; actif: boolean; standard: boolean;
+  ordre: number; placeholder?: string | null; cree_par: string | null; created_at: number; updated_at: number;
+}
+
+export interface DossierReattribution {
+  id: number; dossier_id: string; ancien_snapshot: Record<string, unknown>;
+  motif: string | null; agent_matricule: string; created_at: number;
 }
 
 export interface DossierStats { en_attente: number; en_cours: number; accepte: number; rejete: number; total: number }

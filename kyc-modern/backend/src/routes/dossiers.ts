@@ -1,12 +1,30 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as db from '../db';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { Dossier } from '../types';
 import { appelerProchainDossier, prendreDossierSpecifique, transferDossierToAgent, releaseAgentLock } from '../db/locks';
+import {
+  listChampsActifs,
+  checkChampsObligatoiresDynamique,
+  OFFICIAL_DOC_TYPES,
+} from '../db/customFields';
+import { buildFicheDossierPdf } from '../services/ficheDossierPdf';
 
 const UPLOAD_CNI = process.env.UPLOAD_CNI || path.join(process.cwd(),'uploads','cni');
+const MAX_FILE_REATTR = 5 * 1024 * 1024; // 5 Mo
+const ALLOWED_MIME_REATTR = new Set(['image/jpeg', 'image/png', 'image/webp']);
+// Champs "identité" standards remplacés lors d'une réattribution — la liste
+// réelle des champs actifs (standards + custom) est complétée dynamiquement
+// via listChampsActifs() au moment de la requête.
+const IDENTITE_STANDARD = [
+  'nom_titulaire', 'prenom_titulaire', 'date_naissance', 'lieu_naissance',
+  'type_piece', 'numero_cni', 'date_expiration', 'sexe', 'nationalite',
+  'profession', 'nom_pere', 'nom_mere', 'adresse_complete', 'autre_numero',
+];
 
 // nowSec() vient désormais de '../db' (db.nowSec) — avant, ce fichier avait
 // sa PROPRE fonction locale (Math.floor(Date.now()/1000)), distincte de celle
@@ -152,6 +170,39 @@ export async function dossiersRoutes(app: any): Promise<void> {
     replyWithHeaders.raw.setHeader('Content-Type', mimes[ext]||'application/octet-stream');
     replyWithHeaders.raw.setHeader('Cache-Control','private,max-age=3600');
     return reply.send(fs.createReadStream(fullPath));
+  });
+
+  // GET /api/dossiers/:id/fiche-pdf — génère la « fiche dossier » PDF
+  // (bandeau MTN, identité, pièce/vérif. faciale, GSM, photos, historique
+  // des réattributions). Mêmes règles d'accès que /reattributions ci-dessus :
+  // sup/admin toujours, agent uniquement sur son propre dossier assigné (ou
+  // encore en_attente). Voir services/ficheDossierPdf.ts pour la mise en page.
+  app.get('/api/dossiers/:id/fiche-pdf', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    const { matricule, role } = req.user;
+    const dossier = await db.getDossierById(params.id);
+    if (!dossier) return reply.code(404).send({ error: 'Dossier introuvable' });
+    if (role === 'agent' && dossier.agent_saisie !== matricule && dossier.statut !== 'en_attente') {
+      return reply.code(403).send({ error: 'Accès refusé' });
+    }
+
+    const rows = await db.getReattributions(params.id);
+    const reattributions = rows.map(r => ({ ...r, ancien_snapshot: JSON.parse(r.ancien_snapshot || '{}') }));
+
+    let pdf: Buffer;
+    try {
+      pdf = await buildFicheDossierPdf(normalizeDossier(dossier), reattributions, matricule);
+    } catch (err: any) {
+      req.log.error({ err, dossierId: params.id }, 'fiche-pdf generation failed');
+      return reply.code(500).send({ error: 'Impossible de générer la fiche PDF' });
+    }
+
+    db.audit(matricule, 'DOSSIER_FICHE_PDF', `id=${params.id}`, req.ip);
+
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Disposition', `attachment; filename="fiche-dossier-${params.id}.pdf"`);
+    reply.header('Cache-Control', 'private, no-store');
+    return reply.send(pdf);
   });
 
   // GET /api/dossiers/flux?token=xxx - Flux SSE temps réel (notification d'attribution)
@@ -422,6 +473,192 @@ export async function dossiersRoutes(app: any): Promise<void> {
     return reply.send({ success: true, message: 'La vérification faciale peut être relancée.' });
   });
 
+  // ==========================================================================
+  // POST /api/dossiers/:id/reattribution
+  // --------------------------------------------------------------------------
+  // Réattribution GSM : un dossier déjà enregistré (numéro MTN existant) est
+  // ré-attribué à une NOUVELLE personne. La nouvelle pièce d'identité
+  // (recto/verso) est re-capturée par le superviseur/admin ; l'ancien
+  // titulaire est figé dans dossier_reattributions pour l'audit. Le dossier
+  // repart ensuite dans le circuit normal de vérification.
+  // ==========================================================================
+  app.post('/api/dossiers/:id/reattribution',
+    { preHandler: requireRole(['superviseur', 'admin']) },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    if (!(req as any).isMultipart?.()) {
+      return reply.code(400).send({ error: 'Format multipart attendu' });
+    }
+
+    const dossier = await db.getDossierById(params.id);
+    if (!dossier) return reply.code(404).send({ error: 'Dossier introuvable' });
+
+    const fields: Record<string, string> = {};
+    const photos: Record<string, { buf: Buffer; mime: string }> = {};
+    try {
+      for await (const part of (req as any).parts()) {
+        if (part.type === 'field') {
+          fields[part.fieldname] = String(part.value ?? '');
+        } else if (part.type === 'file') {
+          if (!['photo_recto', 'photo_verso', 'photo_signature'].includes(part.fieldname) || !ALLOWED_MIME_REATTR.has(part.mimetype)) {
+            part.file.resume(); continue;
+          }
+          const chunks: Buffer[] = []; let size = 0;
+          for await (const chunk of part.file) {
+            size += chunk.length;
+            if (size > MAX_FILE_REATTR) return reply.code(413).send({ error: 'Fichier trop volumineux (max 5 Mo)' });
+            chunks.push(chunk);
+          }
+          photos[part.fieldname] = { buf: Buffer.concat(chunks), mime: part.mimetype };
+        }
+      }
+    } catch { return reply.code(400).send({ error: 'Erreur lecture multipart' }); }
+
+    // Nom/prénom du nouveau titulaire : c'est l'objet même d'une
+    // réattribution (identifier la personne à qui le dossier est transféré),
+    // donc volontairement toujours exigé ici — indépendamment de la config
+    // admin de ces deux champs pour l'écran d'acquisition initiale.
+    if (!fields.nom_titulaire?.trim() || !fields.prenom_titulaire?.trim()) {
+      return reply.code(400).send({ error: 'Nom et prénom du nouveau titulaire requis' });
+    }
+    if (!photos.photo_recto || !photos.photo_verso) {
+      return reply.code(400).send({ error: 'Nouvelle pièce d’identité (recto + verso) obligatoire' });
+    }
+    if (!photos.photo_signature) {
+      return reply.code(400).send({ error: 'Signature (ou empreinte) du nouveau titulaire obligatoire' });
+    }
+    if (!fields.motif?.trim()) {
+      return reply.code(400).send({ error: 'Motif de la réattribution obligatoire' });
+    }
+    // Reste des champs standards (nom_pere, nom_mere, date_naissance,
+    // lieu_naissance, date_expiration...) + champs custom actifs : validation
+    // dynamique unique, pilotée par Admin > Champs du dossier (dossier_champs)
+    // — même fonction que la première acquisition (public-dossiers.ts).
+    // AVANT ce correctif, "nom_pere"/"nom_mere" étaient encore exigés en dur
+    // ici, indépendamment de ce que l'admin configure : un champ masqué par
+    // l'admin bloquait quand même la réattribution GSM sans que l'agent
+    // comprenne pourquoi.
+    const normalizedTypePiece = String(fields.type_piece ?? dossier.type_piece ?? '').trim().toUpperCase() || 'AUTRE';
+    const isOfficialDocType = OFFICIAL_DOC_TYPES.has(normalizedTypePiece);
+    const champsError = await checkChampsObligatoiresDynamique(fields, isOfficialDocType);
+    if (champsError) return reply.code(400).send({ error: champsError });
+
+    const normalizedSignatureMode = String(fields.signature_mode ?? '').trim().toLowerCase() === 'empreinte'
+      ? 'empreinte'
+      : 'dessin';
+
+    // 1) Snapshot de l'ancien titulaire (standards + champs custom actifs)
+    //    avant écrasement — c'est notre trace d'audit.
+    const champsActifs = await listChampsActifs();
+    const ancienSnapshot: Record<string, unknown> = {};
+    for (const cle of IDENTITE_STANDARD) ancienSnapshot[cle] = (dossier as unknown as Record<string, unknown>)[cle] ?? null;
+    for (const c of champsActifs) {
+      if (!c.standard) ancienSnapshot[c.cle] = (dossier as unknown as Record<string, unknown>)[c.cle] ?? null;
+    }
+    ancienSnapshot.photo_recto = dossier.photo_recto;
+    ancienSnapshot.photo_verso = dossier.photo_verso;
+    ancienSnapshot.photo_signature = (dossier as unknown as Record<string, unknown>).photo_signature ?? null;
+    ancienSnapshot.signature_mode = (dossier as unknown as Record<string, unknown>).signature_mode ?? null;
+
+    // 2) Nouvelle pièce d'identité sur disque
+    const date = nowDate();
+    const destDir = path.join(UPLOAD_CNI, date);
+    await fsp.mkdir(destDir, { recursive: true });
+    const stamp = Date.now();
+    const photoPaths: Record<string, string> = {};
+    for (const label of ['photo_recto', 'photo_verso', 'photo_signature'] as const) {
+      if (!photos[label]) continue;
+      const ext = photos[label].mime === 'image/png' ? 'png' : photos[label].mime === 'image/webp' ? 'webp' : 'jpg';
+      const fname = `${params.id}_reattr${stamp}_${label.replace('photo_', '')}.${ext}`;
+      await fsp.writeFile(path.join(destDir, fname), photos[label].buf, { mode: 0o644 });
+      photoPaths[label] = `${date}/${fname}`;
+    }
+
+    // 3) Champs custom actifs présents dans le formulaire → fusionnés dans
+    //    la mise à jour (updateDossier() sait déjà les reconnaître).
+    const customUpdates: Record<string, unknown> = {};
+    for (const c of champsActifs) {
+      if (!c.standard && fields[c.cle] !== undefined) customUpdates[c.cle] = fields[c.cle].trim() || null;
+    }
+
+    await db.updateDossier(params.id, {
+      nom_titulaire: fields.nom_titulaire.trim(),
+      prenom_titulaire: fields.prenom_titulaire.trim(),
+      date_naissance: fields.date_naissance?.trim() || null,
+      lieu_naissance: fields.lieu_naissance?.trim() || null,
+      type_piece: normalizedTypePiece,
+      numero_cni: fields.numero_cni?.trim() || null,
+      date_expiration: fields.date_expiration?.trim() || null,
+      sexe: fields.sexe?.trim() || null,
+      nationalite: fields.nationalite?.trim() || null,
+      profession: fields.profession?.trim() || null,
+      // .trim() || null (et non fields.nom_pere.trim() sans garde) : ces deux
+      // champs peuvent désormais être absents si l'admin les a masqués — la
+      // validation "obligatoire" ci-dessus est la seule à décider s'ils sont
+      // requis, plus jamais un accès direct qui crasherait sur undefined.
+      nom_pere: fields.nom_pere?.trim() || null,
+      nom_mere: fields.nom_mere?.trim() || null,
+      adresse_complete: fields.adresse_complete?.trim() || null,
+      autre_numero: fields.autre_numero?.trim() || null,
+      photo_recto: photoPaths.photo_recto,
+      photo_verso: photoPaths.photo_verso,
+      photo_signature: photoPaths.photo_signature ?? null,
+      signature_mode: normalizedSignatureMode,
+      photo_live: null,
+      score_visage: null, visage_match: null, visage_motif: null, visage_verifie_le: null,
+      liveness_status: null, liveness_confidence: null, liveness_verifie_le: null,
+      raison_rejet: null,
+      statut: 'en_attente',
+      agent_saisie: null,
+      assigne_a: null,
+      assigne_le: null,
+      acquisition_status: 'submitted',
+      flow_step: 4,
+      reattribue: 1,
+      reattribue_le: db.nowSec(),
+      reattribue_par: req.user.matricule,
+      nb_reattributions: (dossier.nb_reattributions ?? 0) + 1,
+      ...customUpdates,
+    });
+
+    await db.insertReattribution({
+      dossier_id: params.id,
+      ancien_snapshot: ancienSnapshot,
+      motif: fields.motif.trim(),
+      agent_matricule: req.user.matricule,
+    });
+
+    db.audit(req.user.matricule, 'DOSSIER_REATTRIBUE', `id=${params.id} motif=${fields.motif.trim()}`, req.ip);
+
+    // Best-effort : l'agent qui vient de saisir le nouveau titulaire
+    // reprend directement le dossier pour enchaîner sur la vérification
+    // faciale — s'il est déjà occupé sur un autre dossier, le dossier reste
+    // simplement disponible dans la file d'attente normale.
+    let repris = false;
+    if (req.user.role === 'agent') {
+      const res = await prendreDossierSpecifique(req.user.matricule, params.id).catch(() => 'dossier_indisponible' as const);
+      repris = res === 'ok';
+    }
+
+    const updated = await db.getDossierById(params.id);
+    return reply.send({ success: true, repris, dossier: updated ? normalizeDossier(updated) : null });
+  });
+
+  // GET /api/dossiers/:id/reattributions — historique des réattributions
+  app.get('/api/dossiers/:id/reattributions', async (req: FastifyRequest, reply: FastifyReply) => {
+    const params = req.params as { id: string };
+    const { matricule, role } = req.user;
+    const dossier = await db.getDossierById(params.id);
+    if (!dossier) return reply.code(404).send({ error: 'Dossier introuvable' });
+    if (role === 'agent' && dossier.agent_saisie !== matricule && dossier.statut !== 'en_attente') {
+      return reply.code(403).send({ error: 'Accès refusé' });
+    }
+    const rows = await db.getReattributions(params.id);
+    return reply.send({
+      reattributions: rows.map(r => ({ ...r, ancien_snapshot: JSON.parse(r.ancien_snapshot || '{}') })),
+    });
+  });
+
   // POST /api/dossiers/:id/transferer (sup/admin)
   app.post('/api/dossiers/:id/transferer',
     { preHandler: requireRole(['superviseur','admin']) },
@@ -443,6 +680,44 @@ export async function dossiersRoutes(app: any): Promise<void> {
       return reply.send({ success: true });
     }
   );
+
+  // GET /api/dossiers/numero/:numero/historique — traçabilité complète d'un
+  // numéro GSM : tous les dossiers qui l'ont porté + toutes les
+  // réattributions de chacun, en ordre chronologique. Réservé sup/admin.
+  app.get('/api/dossiers/numero/:numero/historique', {
+    preHandler: requireRole(['superviseur', 'admin']),
+  }, async (req: FastifyRequest, reply: FastifyReply) => {
+    const { numero } = req.params as { numero: string };
+    const clean = String(numero || '').replace(/\D/g, '');
+    if (!clean) return reply.code(400).send({ error: 'Numéro invalide' });
+
+    const dossiers = await db.getDossiersByNumero(clean);
+    if (!dossiers.length) {
+      return reply.send({ numero: clean, nb_dossiers: 0, nb_reattributions: 0, historique: [] });
+    }
+
+    const dossierIds = dossiers.map(d => d.id);
+    const reattributionsRows = await db.getReattributionsForDossiers(dossierIds);
+    const byDossier = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of reattributionsRows) {
+      const dossierId = row.dossier_id;
+      const list = byDossier.get(dossierId) ?? [];
+      list.push({ ...row, ancien_snapshot: JSON.parse(row.ancien_snapshot || '{}') });
+      byDossier.set(dossierId, list);
+    }
+
+    const historique = dossiers.slice(0, 50).map(d => ({
+      dossier: normalizeDossier(d),
+      reattributions: (byDossier.get(d.id) ?? []) as Array<{ id: number; motif: string | null; agent_matricule: string; created_at: number; ancien_snapshot: Record<string, unknown> }>,
+    }));
+
+    return reply.send({
+      numero: clean,
+      nb_dossiers: dossiers.length,
+      nb_reattributions: reattributionsRows.length,
+      historique,
+    });
+  });
 
   // GET /api/dossiers/historique (admin)
   app.get('/api/dossiers/historique',

@@ -10,7 +10,7 @@ import { AcquisitionPage } from './pages/AcquisitionPage';
 import { FaceLivenessCheck } from './pages/FaceLivenessCheck';
 
 // ── Agent pages ───────────────────────────────────────────────────────────────
-import { AgentDashboard, AgentFileAttente, AgentMesDossiers, AgentAcquisition } from './pages/agent/DossierPages';
+import { AgentDashboard, AgentFileAttente, AgentMesDossiers } from './pages/agent/DossierPages';
 import { AgentVideoCallPage } from './pages/agent/VideoCallPage';
 import { GsmMonTableau, GsmSaisie, GsmHistorique, GsmPerfs } from './pages/agent/GsmPages';
 import { AgentPlanning, AgentNotesQualite } from './pages/agent/AutresPages';
@@ -24,6 +24,7 @@ import {
 import { SupCommandCenter } from './pages/sup/SupCommandCenter';
 import { SupReferentielsGsm } from './pages/sup/ReferentielsGsmPage';
 import { SupCapturesPage } from './pages/sup/CapturesPage';
+import { SupHistoriqueNumero } from './pages/sup/SupHistoriqueNumeroPage';
 import { SupPlanningManagersPage } from './pages/sup/PlanningManagersPage';
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ import {
 } from './pages/admin/AdminPages';
 import { AdminCapturesPage } from './pages/admin/CapturesPage';
 import { AdminParametresPage } from './pages/admin/ParametresPage';
+import AdminChampsDossierPage from './pages/admin/AdminChampsDossierPage';
 
 function getRoute(): string {
   const p = window.location.pathname.replace(/\/$/, '') || '/';
@@ -54,6 +56,7 @@ const PAGE_PATHS: Record<string, string> = {
   qualite: '/qualite',
   acquisition: '/acquisition',
   historique: '/historique',
+  'historique-numero': '/historique-numero',
   presence: '/presence',
   performance: '/performance',
   distribution: '/distribution',
@@ -72,6 +75,7 @@ const PAGE_PATHS: Record<string, string> = {
   stockage: '/stockage',
   purge: '/purge',
   parametres: '/parametres',
+  'champs-dossier': '/champs-dossier',
 };
 
 function getPageForRoute(pathname: string): string | null {
@@ -108,7 +112,7 @@ function AgentApp({ page }: { page: string }) {
     case 'gsm-perfs':       return <GsmPerfs />;
     case 'planning':        return <AgentPlanning />;
     case 'qualite':         return <AgentNotesQualite />;
-    case 'acquisition':     return <AgentAcquisition />;
+    case 'acquisition':     return <AcquisitionPage />;
     default:                return <AgentDashboard />;
   }
 }
@@ -119,6 +123,7 @@ function SupApp({ page }: { page: string }) {
     case 'file-attente':      return <SupFileAttente />;
     case 'command-center':    return <SupCommandCenter />;
     case 'historique':        return <SupHistorique />;
+    case 'historique-numero': return <SupHistoriqueNumero />;
     case 'presence':          return <SupPresence />;
     case 'performance':       return <SupPerformance />;
     case 'distribution':      return <SupDistribution />;
@@ -149,6 +154,7 @@ function AdminApp({ page }: { page: string }) {
     case 'reporting':      return <AdminReporting />;
     case 'captures':       return <AdminCapturesPage />;
     case 'parametres':     return <AdminParametresPage />;
+    case 'champs-dossier': return <AdminChampsDossierPage />;
     default:               return <AdminDashboard />;
   }
 }

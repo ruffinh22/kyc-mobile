@@ -86,7 +86,7 @@ export function AdminCapturesPage() {
           const verso = c.verso_url ?? c.photo_verso ?? null;
           const live = c.live_url ?? c.photo_live ?? null;
           const numero_mtn = c.numero_mtn ?? c.numero ?? c.numero_mtn;
-          const dossierId = c.dossier_id ?? c.dossierId ?? undefined;
+          const dossierId = c.dossier_id ?? c.dossierId ?? c.id ?? undefined;
           const dateVal = c.date ?? c.created_at ?? c.date;
           let typeVal = c.type ?? c.type_name ?? undefined;
           if (!typeVal) {

@@ -64,7 +64,36 @@ export function AdminCapturesPage() {
 
       const data = await apiFetch<{ success: boolean; captures: Capture[]; error?: string }>(`/api/captures/search?${params.toString()}`);
       if (data.success) {
-        setCaptures(data.captures || []);
+        // Normaliser les captures renvoyées par le backend :
+        // - certains champs attendus côté UI peuvent porter d'autres noms
+        //   (ex: created_at -> date, id -> dossier_id pour les CNI),
+        // - fournir un 'type' dérivé si absent.
+        const normalized: Capture[] = (data.captures || []).map((c: any) => {
+          const recto = c.recto_url ?? c.photo_recto ?? null;
+          const verso = c.verso_url ?? c.photo_verso ?? null;
+          const live = c.live_url ?? c.photo_live ?? null;
+          const numero_mtn = c.numero_mtn ?? c.numero ?? c.numero_mtn;
+          const dossierId = c.dossier_id ?? c.dossierId ?? c.id ?? undefined;
+          const dateVal = c.date ?? c.created_at ?? c.date;
+          let typeVal = c.type ?? c.type_name ?? undefined;
+          if (!typeVal) {
+            if (live) typeVal = 'live';
+            else if (recto || verso) typeVal = 'cni';
+            else if (c.capture_a || c.capture_p || c.capture_aa || c.numero) typeVal = 'gsm';
+          }
+          return {
+            id: String(c.id ?? ''),
+            dossier_id: dossierId ? String(dossierId) : undefined,
+            numero_mtn: numero_mtn ?? undefined,
+            numero: c.numero ?? undefined,
+            recto_url: recto || null,
+            verso_url: verso || null,
+            live_url: live || null,
+            date: dateVal ? String(dateVal) : undefined,
+            type: typeVal ?? undefined,
+          } as Capture;
+        });
+        setCaptures(normalized);
       } else {
         setError(data.error || 'Erreur lors de la recherche');
       }

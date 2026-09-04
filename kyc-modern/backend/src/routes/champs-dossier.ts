@@ -61,6 +61,7 @@ export async function champsDossierRoutes(app: any): Promise<void> {
         ordre: typeof body.ordre === 'number' ? body.ordre : undefined,
         options: Array.isArray(body.options) ? (body.options as string[]) : undefined,
         placeholder: typeof body.placeholder === 'string' ? body.placeholder : undefined,
+        nullable: typeof body.nullable === 'boolean' ? body.nullable : undefined,
         matricule,
       });
       return reply.send({ champ });

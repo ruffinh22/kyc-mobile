@@ -110,6 +110,7 @@ function EditChampModal({ champ, onClose, onUpdated }: { champ: ChampDossier; on
   const [options, setOptions] = useState((champ.options || []).join('\n'));
   const [obligatoire, setObligatoire] = useState(!!champ.obligatoire);
   const [actif, setActif] = useState(!!champ.actif);
+  const [nullable, setNullable] = useState(champ.nullable === undefined ? true : !!champ.nullable);
   const [placeholder, setPlaceholder] = useState(champ.placeholder || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -124,10 +125,11 @@ function EditChampModal({ champ, onClose, onUpdated }: { champ: ChampDossier; on
       if (champ.type === 'liste') {
         opts = options.split('\n').map(o => o.trim()).filter(Boolean);
       }
-      const payload: { label: string; options?: string[] | null; obligatoire?: boolean; actif?: boolean; placeholder?: string | null } = {
+      const payload: { label: string; options?: string[] | null; obligatoire?: boolean; actif?: boolean; placeholder?: string | null; nullable?: boolean } = {
         label: label.trim(),
         obligatoire,
         actif,
+        nullable,
       };
       if (champ.type === 'liste') {
         payload.options = opts && opts.length ? opts : null;
@@ -151,6 +153,7 @@ function EditChampModal({ champ, onClose, onUpdated }: { champ: ChampDossier; on
     setOptions((champ.options || []).join('\n'));
     setObligatoire(!!champ.obligatoire);
     setActif(!!champ.actif);
+    setNullable(champ.nullable === undefined ? true : !!champ.nullable);
     setPlaceholder(champ.placeholder || '');
   }, [champ]);
 
@@ -188,6 +191,14 @@ function EditChampModal({ champ, onClose, onUpdated }: { champ: ChampDossier; on
       )}
       <div className="form-group">
         <label><input type="checkbox" checked={obligatoire} onChange={e => setObligatoire(e.target.checked)} />{' '}Champ obligatoire pour l'agent</label>
+      </div>
+      <div className="form-group">
+        <label><input type="checkbox" checked={nullable} onChange={e => setNullable(e.target.checked)} />{' '}Nullable</label>
+        {!nullable && (
+          <div style={{ fontSize: 13, color: '#b00', marginTop: 6 }}>
+            Attention : rendre ce champ <strong>NOT NULL</strong> remplacera les valeurs NULL existantes par une valeur par défaut sûre.
+          </div>
+        )}
       </div>
       <div className="form-group">
         <label><input type="checkbox" checked={actif} onChange={e => setActif(e.target.checked)} />{' '}Actif</label>

@@ -118,7 +118,7 @@ async function ensureMigrationLogTable(pool: ReturnType<typeof getPool>): Promis
 /** Trace chaque ALTER TABLE réel déclenché par ce module — l'équivalent
  *  "fichier de migration" du second système (dynamicFields.ts), mais stocké
  *  en base pour rester dans une seule source de vérité auditable. */
-async function logMigration(champId: number, cle: string, action: 'ADD_COLUMN' | 'DROP_COLUMN', sqlExecuted: string, checksum: string, matricule: string): Promise<void> {
+async function logMigration(champId: number, cle: string, action: 'ADD_COLUMN' | 'DROP_COLUMN' | 'MODIFY_COLUMN', sqlExecuted: string, checksum: string, matricule: string): Promise<void> {
   const pool = getPool();
   await ensureMigrationLogTable(pool);
   await pool.execute(
@@ -258,7 +258,7 @@ export async function createChampCustom(data: {
 
 export async function updateChamp(id: number, patch: {
   label?: string; obligatoire?: boolean; actif?: boolean; ordre?: number;
-  options?: string[] | null; placeholder?: string | null; matricule: string;
+  options?: string[] | null; placeholder?: string | null; nullable?: boolean; matricule: string;
 }): Promise<ChampDossier> {
   const pool = getPool();
   await ensurePlaceholderColumn(pool);
@@ -286,6 +286,33 @@ export async function updateChamp(id: number, patch: {
     vals.push(PLACEHOLDER_CAPABLE_TYPES.has(current.type)
       ? ((patch.placeholder ?? '').trim().slice(0, MAX_PLACEHOLDER_LEN) || null)
       : null);
+  }
+  // Gestion sûre du changement de nullabilité pour un champ custom uniquement.
+  if (patch.nullable !== undefined && patch.nullable !== current.nullable) {
+    if (current.standard) throw new Error('Impossible de modifier la nullabilité d\'un champ standard');
+    await ensureNullableColumn(pool);
+    // Si on rend NOT NULL, il faut d'abord remplacer les NULL existants par
+    // une valeur par défaut sûre, puis modifier la colonne.
+    const targetNullable = !!patch.nullable;
+    const sqlType = sqlTypeFor(current.type);
+    const baseType = sqlType.replace(/\s+DEFAULT\s+NULL$/i, '');
+    let alterSql = '';
+    if (!targetNullable) {
+      let defaultValLiteral = "''";
+      if (current.type === 'nombre') defaultValLiteral = '0';
+      if (current.type === 'case') defaultValLiteral = '0';
+      // Remplacer les NULLs existants
+      await pool.execute(`UPDATE dossiers SET \`${current.cle}\` = ${defaultValLiteral} WHERE \`${current.cle}\` IS NULL`);
+      alterSql = `ALTER TABLE dossiers MODIFY COLUMN \`${current.cle}\` ${baseType} NOT NULL DEFAULT ${defaultValLiteral}`;
+    } else {
+      // Rendre la colonne nullable (DEFAULT NULL)
+      alterSql = `ALTER TABLE dossiers MODIFY COLUMN \`${current.cle}\` ${sqlType}`;
+    }
+    await pool.execute(alterSql);
+    // enregistrer la migration
+    await logMigration(current.id, current.cle, 'MODIFY_COLUMN', alterSql, computeChecksum(current.cle, current.type, sqlType), patch.matricule);
+    sets.push('nullable=?');
+    vals.push(targetNullable ? 1 : 0);
   }
   vals.push(id);
   await pool.execute(`UPDATE dossier_champs SET ${sets.join(',')} WHERE id=?`, vals);

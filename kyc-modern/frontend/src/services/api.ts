@@ -221,7 +221,7 @@ export async function getChampsDossierAdmin() { return apiFetch<{ champs: ChampD
 export async function createChampDossier(data: { label: string; type: ChampType; options?: string[] | null; obligatoire?: boolean; placeholder?: string | null; nullable?: boolean }) {
   return apiFetch<{ champ: ChampDossier }>('/api/admin/champs-dossier', { method: 'POST', json: data });
 }
-export async function updateChampDossier(id: number, patch: { label?: string; obligatoire?: boolean; actif?: boolean; ordre?: number; options?: string[] | null; placeholder?: string | null }) {
+export async function updateChampDossier(id: number, patch: { label?: string; obligatoire?: boolean; actif?: boolean; ordre?: number; options?: string[] | null; placeholder?: string | null; nullable?: boolean }) {
   return apiFetch<{ champ: ChampDossier }>(`/api/admin/champs-dossier/${id}`, { method: 'PATCH', json: patch });
 }
 export async function deleteChampDossier(id: number) {

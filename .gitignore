@@ -3,6 +3,8 @@ node_modules/
 .pnp
 .pnp.js
 yarn.lock
+!kyc-modern/frontend/yarn.lock
+!kyc-modern/backend/yarn.lock
 package-lock.json
 .git/
 # Build outputs (large files)
@@ -32,6 +34,7 @@ ios/DerivedData/
 java_pid*.hprof
 *.trace
 *.prof
+.yarn/install-state.gz
 
 # Metro and build cache
 .haste_cache/

@@ -30,10 +30,18 @@
 //        ignorée) — retirée pour éviter toute confusion.
 // ============================================================================
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createWorker, OEM, PSM } from 'tesseract.js';
+import Select, { components as RSComponents, type SingleValue, type StylesConfig } from 'react-select';
+import isoCountries from 'i18n-iso-countries';
+import isoCountriesFr from 'i18n-iso-countries/langs/fr.json';
+import { useAuth } from '../context/AuthContext';
 import { getPublicDossiers, getChampsDossierPublic } from '../services/api';
-import { AFRICAN_COUNTRIES } from '../utils/phoneValidator';
+
+// Nationalité : la liste complète des ~250 pays reconnus ISO-3166 vient de la
+// librairie `i18n-iso-countries` (noms en français) — aucun pays n'est saisi
+// à la main ici, la source de vérité est la librairie elle-même.
+isoCountries.registerLocale(isoCountriesFr);
 
 const API_BASE = (() => {
   const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
@@ -609,9 +617,116 @@ async function extractRectoTextWithTesseract(imageData: string | Blob, onProgres
   }
 }
 
+// ── Sélecteur de pays (monde entier, via librairie) ─────────────────────────────
+//
+// Toutes les données (codes + noms de pays) viennent de `i18n-iso-countries`
+// (norme ISO 3166-1, ~250 entrées, noms en français). On ne code aucun pays
+// en dur : la liste est dérivée à 100% de la librairie. Le drapeau est calculé
+// à partir du code ISO2 (astuce des "regional indicator symbols" Unicode),
+// donc lui non plus n'est pas une table codée en dur.
+
+interface CountryOption { value: string; label: string; flag: string }
+
+function isoToFlagEmoji(iso2: string): string {
+  return iso2
+    .toUpperCase()
+    .replace(/./g, (char) => String.fromCodePoint(char.charCodeAt(0) + 127397));
+}
+
+function useWorldCountryOptions(): CountryOption[] {
+  return useMemo(() => {
+    const names = isoCountries.getNames('fr', { select: 'official' });
+    return Object.entries(names)
+      .map(([code, label]) => ({ value: code, label, flag: isoToFlagEmoji(code) }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'fr'));
+  }, []);
+}
+
+const countrySelectStyles: StylesConfig<CountryOption, false> = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: state.isFocused ? '#003087' : 'rgba(0,48,135,.18)',
+    boxShadow: state.isFocused ? '0 0 0 3px rgba(0,48,135,.12)' : 'none',
+    background: '#F6F8FC',
+    fontSize: 14,
+    ':hover': { borderColor: '#003087' },
+  }),
+  valueContainer: (base) => ({ ...base, padding: '2px 10px' }),
+  input: (base) => ({ ...base, color: '#0F172A' }),
+  placeholder: (base) => ({ ...base, color: '#94A3B8' }),
+  singleValue: (base) => ({ ...base, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }),
+  menu: (base) => ({ ...base, borderRadius: 12, overflow: 'hidden', boxShadow: '0 12px 32px rgba(0,48,135,.18)', zIndex: 60 }),
+  menuList: (base) => ({ ...base, maxHeight: 260, padding: 4 }),
+  option: (base, state) => ({
+    ...base,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 8,
+    fontSize: 13.5,
+    padding: '9px 10px',
+    background: state.isSelected ? '#003087' : state.isFocused ? 'rgba(0,48,135,.08)' : 'transparent',
+    color: state.isSelected ? '#fff' : '#0F172A',
+    cursor: 'pointer',
+  }),
+  dropdownIndicator: (base) => ({ ...base, color: '#94A3B8' }),
+  indicatorSeparator: () => ({ display: 'none' }),
+};
+
+const CountryOptionRow = (props: any) => (
+  <RSComponents.Option {...props}>
+    <span style={{ fontSize: 16, lineHeight: 1 }}>{props.data.flag}</span>
+    <span>{props.data.label}</span>
+  </RSComponents.Option>
+);
+
+const CountrySingleValueRow = (props: any) => (
+  <RSComponents.SingleValue {...props}>
+    <span style={{ fontSize: 16, lineHeight: 1 }}>{props.data.flag}</span>
+    <span>{props.data.label}</span>
+  </RSComponents.SingleValue>
+);
+
+function CountrySelect({
+  value,
+  onChange,
+  placeholder = 'Rechercher un pays…',
+}: {
+  value: string;
+  onChange: (countryName: string) => void;
+  placeholder?: string;
+}) {
+  const options = useWorldCountryOptions();
+  // form.nationalite stocke le NOM du pays (compat avec les dossiers déjà
+  // enregistrés) ; on retrouve l'option correspondante par son label.
+  const selected = useMemo(
+    () => options.find((o) => o.label.toLowerCase() === value?.toLowerCase()) ?? null,
+    [options, value]
+  );
+
+  return (
+    <Select<CountryOption, false>
+      classNamePrefix="acq-country"
+      options={options}
+      value={selected}
+      onChange={(opt: SingleValue<CountryOption>) => onChange(opt?.label ?? '')}
+      placeholder={placeholder}
+      noOptionsMessage={() => 'Aucun pays trouvé'}
+      isClearable
+      isSearchable
+      styles={countrySelectStyles}
+      components={{ Option: CountryOptionRow, SingleValue: CountrySingleValueRow }}
+    />
+  );
+}
+
 // ── Composant principal ────────────────────────────────────────────────────────
 
 export function AcquisitionPage() {
+  const { user } = useAuth();
   const [tab, setTab]           = useState<Tab>('form');
   const [agent, setAgent]       = useState<AgentInfo | null>(null);
   const [editAgent, setEditAgent] = useState(false);
@@ -1319,10 +1434,69 @@ export function AcquisitionPage() {
   // ── Rendu ──────────────────────────────────────────────────────────────────
   return (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", background: '#F0F4FA', minHeight: '100vh', WebkitFontSmoothing: 'antialiased', color: '#0F172A' }}>
+      {/* Feuille de style responsive : le conteneur principal et les grilles
+          de champs s'adaptent intelligemment à la largeur d'écran réelle
+          (mobile → tablette → desktop → grand écran), au lieu d'un
+          max-width fixe de 480px pensé uniquement pour smartphone. */}
+      <style>{`
+        .acq-container {
+          width: 100%;
+          max-width: 480px;
+          margin: 0 auto;
+          padding: 0 0 24px;
+          box-sizing: border-box;
+          transition: max-width .2s ease;
+        }
+        @media (min-width: 640px) {
+          .acq-container { max-width: 640px; padding: 0 16px 32px; }
+        }
+        @media (min-width: 900px) {
+          .acq-container { max-width: 820px; padding: 0 24px 40px; }
+        }
+        @media (min-width: 1280px) {
+          .acq-container { max-width: 1040px; padding: 0 24px 48px; }
+        }
+        @media (min-width: 1600px) {
+          .acq-container { max-width: 1180px; }
+        }
+
+        /* Grilles de champs : une colonne sur mobile, deux dès que l'écran
+           a la place, en laissant certains champs (adresse…) occuper toute
+           la largeur via .acq-field-full. */
+        .acq-field-grid {
+          display: block;
+        }
+        @media (min-width: 620px) {
+          .acq-field-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            column-gap: 16px;
+            align-items: start;
+          }
+          .acq-field-grid > .acq-field-full {
+            grid-column: 1 / -1;
+          }
+        }
+
+        /* Champs texte/select : légère animation de focus pour une sensation
+           plus moderne, sans toucher au thème bleu/or existant. */
+        .acq-input, .acq-select {
+          transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        .acq-input:focus, .acq-select:focus {
+          border-color: #003087 !important;
+          box-shadow: 0 0 0 3px rgba(0,48,135,.12);
+        }
+
+        /* Le sélecteur de pays (react-select) doit respirer comme le reste
+           des champs sur mobile étroit. */
+        .acq-country__control { min-width: 0; }
+      `}</style>
       <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-      {/* Topbar */}
-      <div style={{ background: 'linear-gradient(135deg,#003087 0%,#0057A8 100%)', borderBottom: '3px solid #FFCC00', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,48,135,.25)' }}>
+      {/* Topbar (only show when not authenticated to avoid duplicate header) */}
+      {!user && (
+        <div style={{ background: 'linear-gradient(135deg,#003087 0%,#0057A8 100%)', borderBottom: '3px solid #FFCC00', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,48,135,.25)' }}>
         <a href="/" style={{ color: '#fff', fontSize: 18, textDecoration: 'none', padding: '6px 8px', borderRadius: 8, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </a>
@@ -1335,10 +1509,11 @@ export function AcquisitionPage() {
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16A34A' }} />
           En ligne
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Tabs */}
-      <div style={{ background: '#fff', borderBottom: '1px solid rgba(0,48,135,.1)', padding: '0 16px', display: 'flex', position: 'sticky', top: 59, zIndex: 40 }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid rgba(0,48,135,.1)', padding: '0 16px', display: 'flex', position: 'sticky', top: user ? 0 : 59, zIndex: 40 }}>
         {(['form', 'dash'] as Tab[]).map(t => (
           <button key={t} onClick={() => t === 'dash' ? (setTab('dash'), chargerDash()) : setTab('form')} style={{ flex: 1, padding: '12px 8px 10px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', border: 'none', borderBottom: `2px solid ${tab === t ? '#FFCC00' : 'transparent'}`, color: tab === t ? '#003087' : '#94A3B8', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             {t === 'form' ? '📄 Enregistrer' : '📊 Mes dossiers'}
@@ -1346,7 +1521,7 @@ export function AcquisitionPage() {
         ))}
       </div>
 
-      <div style={{ maxWidth: 480, margin: '0 auto', paddingBottom: 24 }}>
+      <div className="acq-container">
 
         {/* ══ ONGLET FORM ══ */}
         {tab === 'form' && (
@@ -1382,9 +1557,9 @@ export function AcquisitionPage() {
                       <button onClick={() => setEditAgent(true)} style={{ background: '#fff', border: '1.5px solid rgba(0,48,135,.18)', color: '#475569', fontSize: 12, fontWeight: 600, borderRadius: 8, padding: '7px 13px', cursor: 'pointer' }}>Modifier</button>
                     </div>
                   ) : (
-                    <div>
+                    <div className="acq-field-grid">
                       <Fld label="Pays" req>
-                        <select value={form.country} onChange={e => setForm(f => ({ ...f, country: e.target.value, numero_mtn: '' }))} style={inpSt}>
+                        <select value={form.country} onChange={e => setForm(f => ({ ...f, country: e.target.value, numero_mtn: '' }))} className="acq-input" style={inpSt}>
                           <option value="">— Sélectionnez —</option>
                           <option value="CG">Congo</option>
                           <option value="BJ">Bénin</option>
@@ -1411,9 +1586,9 @@ export function AcquisitionPage() {
                           );
                         })()}
                       </Fld>
-                      <Fld label="Username" req><input value={form.username_agent} onChange={e => setForm(f => ({ ...f, username_agent: e.target.value }))} placeholder="ex : dav_centre" style={inpSt} /></Fld>
+                      <Fld label="Username" req><input value={form.username_agent} onChange={e => setForm(f => ({ ...f, username_agent: e.target.value }))} placeholder="ex : dav_centre" className="acq-input" style={inpSt} /></Fld>
                       <Fld label="Fonction" req>
-                        <select value={form.fonction_agent} onChange={e => setForm(f => ({ ...f, fonction_agent: e.target.value }))} style={inpSt}>
+                        <select value={form.fonction_agent} onChange={e => setForm(f => ({ ...f, fonction_agent: e.target.value }))} className="acq-input" style={inpSt}>
                           <option value="">— Sélectionnez —</option>
                           <option>Agent Acquisition</option>
                           <option>Agent EBU</option>
@@ -1422,7 +1597,7 @@ export function AcquisitionPage() {
                         </select>
                       </Fld>
                       <Fld label="Zone" req>
-                        <select value={form.zone_agent} onChange={e => setForm(f => ({ ...f, zone_agent: e.target.value }))} style={inpSt}>
+                        <select value={form.zone_agent} onChange={e => setForm(f => ({ ...f, zone_agent: e.target.value }))} className="acq-input" style={inpSt}>
                           <option value="">— Sélectionnez —</option>
                           <option>Brazzaville</option>
                           <option>Pointe-Noire</option>
@@ -1466,7 +1641,7 @@ export function AcquisitionPage() {
                               return { ...f, type_piece: value, profession };
                             });
                           }}
-                          style={inpSt}
+                          className="acq-input" style={inpSt}
                         >
                           <option value="">— Sélectionnez —</option>
                           {DOCUMENT_TYPES.map(dt => (
@@ -1522,34 +1697,35 @@ export function AcquisitionPage() {
                 ) : (
                 <Card>
                   <StepHeader num="04" title="Titulaire" sub="Informations obligatoires" />
+                  <div className="acq-field-grid">
                   {visible('nom_titulaire') && (
                     <Fld label={libelleStandard('nom_titulaire', 'Nom titulaire')} req={requis('nom_titulaire', true)}>
-                      <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder={placeholderStandard('nom_titulaire', 'Nom du titulaire')} style={inpSt} />
+                      <input value={form.nom_titulaire} onChange={e => setForm(f => ({ ...f, nom_titulaire: e.target.value }))} placeholder={placeholderStandard('nom_titulaire', 'Nom du titulaire')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('prenom_titulaire') && (
                     <Fld label={libelleStandard('prenom_titulaire', 'Prénom titulaire')} req={requis('prenom_titulaire', true)}>
-                      <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder={placeholderStandard('prenom_titulaire', 'Prénom du titulaire')} style={inpSt} />
+                      <input value={form.prenom_titulaire} onChange={e => setForm(f => ({ ...f, prenom_titulaire: e.target.value }))} placeholder={placeholderStandard('prenom_titulaire', 'Prénom du titulaire')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('date_naissance') && (
                     <Fld label={libelleStandard('date_naissance', 'Date de naissance')} req={requis('date_naissance', isOfficialDoc(form.type_piece))}>
-                      <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} style={inpSt} />
+                      <input type="date" value={form.date_naissance} onChange={e => setForm(f => ({ ...f, date_naissance: e.target.value }))} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('lieu_naissance') && (
                     <Fld label={libelleStandard('lieu_naissance', 'Lieu de naissance')} req={requis('lieu_naissance', isOfficialDoc(form.type_piece))}>
-                      <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder={placeholderStandard('lieu_naissance', 'Lieu de naissance')} style={inpSt} />
+                      <input value={form.lieu_naissance} onChange={e => setForm(f => ({ ...f, lieu_naissance: e.target.value }))} placeholder={placeholderStandard('lieu_naissance', 'Lieu de naissance')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('nom_pere') && (
                     <Fld label={libelleStandard('nom_pere', 'Nom du père')} req={requis('nom_pere', true)}>
-                      <input value={form.nom_pere} onChange={e => setForm(f => ({ ...f, nom_pere: e.target.value }))} placeholder={placeholderStandard('nom_pere', 'Nom du père')} style={inpSt} />
+                      <input value={form.nom_pere} onChange={e => setForm(f => ({ ...f, nom_pere: e.target.value }))} placeholder={placeholderStandard('nom_pere', 'Nom du père')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('nom_mere') && (
                     <Fld label={libelleStandard('nom_mere', 'Nom de la mère')} req={requis('nom_mere', true)}>
-                      <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder={placeholderStandard('nom_mere', 'Nom de la mère')} style={inpSt} />
+                      <input value={form.nom_mere} onChange={e => setForm(f => ({ ...f, nom_mere: e.target.value }))} placeholder={placeholderStandard('nom_mere', 'Nom de la mère')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {/* Adresse et nationalité : une pièce non officielle (carte
@@ -1557,23 +1733,23 @@ export function AcquisitionPage() {
                       façon fiable — champs proposés mais jamais bloquants
                       dans ce cas, contrairement à une pièce officielle. */}
                   {visible('adresse_complete') && (
-                    <Fld label={libelleStandard('adresse_complete', 'Adresse complète')} hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
-                      <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder={placeholderStandard('adresse_complete', 'Adresse complète')} style={inpSt} />
+                    <Fld label={libelleStandard('adresse_complete', 'Adresse complète')} hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'} full>
+                      <input value={form.adresse_complete} onChange={e => setForm(f => ({ ...f, adresse_complete: e.target.value }))} placeholder={placeholderStandard('adresse_complete', 'Adresse complète')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('numero_cni') && (
                     <Fld label={libelleStandard('numero_cni', 'Numéro CNI')} req={requis('numero_cni', isOfficialDoc(form.type_piece))}>
-                      <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder={placeholderStandard('numero_cni', 'Numéro CNI')} style={inpSt} />
+                      <input value={form.numero_cni} onChange={e => setForm(f => ({ ...f, numero_cni: e.target.value }))} placeholder={placeholderStandard('numero_cni', 'Numéro CNI')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('date_expiration') && isOfficialDoc(form.type_piece) && (
                     <Fld label={libelleStandard('date_expiration', 'Date d\'expiration')} req={requis('date_expiration', true)}>
-                      <input type="date" value={form.date_expiration} onChange={e => setForm(f => ({ ...f, date_expiration: e.target.value }))} style={inpSt} />
+                      <input type="date" value={form.date_expiration} onChange={e => setForm(f => ({ ...f, date_expiration: e.target.value }))} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('sexe') && (
                     <Fld label={libelleStandard('sexe', 'Sexe')}>
-                      <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} style={inpSt}>
+                      <select value={form.sexe} onChange={e => setForm(f => ({ ...f, sexe: e.target.value }))} className="acq-input" style={inpSt}>
                         <option value="">— Sélectionnez —</option>
                         <option value="M">Masculin</option>
                         <option value="F">Féminin</option>
@@ -1582,28 +1758,20 @@ export function AcquisitionPage() {
                   )}
                   {visible('nationalite') && (
                     <Fld label={libelleStandard('nationalite', 'Nationalité')} hint={isOfficialDoc(form.type_piece) ? undefined : 'si connue'}>
-                      <select
+                      <CountrySelect
                         value={form.nationalite}
-                        onChange={e => setForm(f => ({ ...f, nationalite: e.target.value }))}
-                        style={inpSt}
-                      >
-                        <option value="">— Sélectionnez —</option>
-                        {(Object.values(AFRICAN_COUNTRIES) as Array<{ code: string; name: string }>).map(country => (
-                          <option key={country.code} value={country.name}>
-                            {country.name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(name) => setForm(f => ({ ...f, nationalite: name }))}
+                      />
                     </Fld>
                   )}
                   {visible('profession') && (
                     <Fld label={libelleStandard('profession', 'Profession')}>
-                      <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder={placeholderStandard('profession', 'Profession')} style={inpSt} />
+                      <input value={form.profession} onChange={e => setForm(f => ({ ...f, profession: e.target.value }))} placeholder={placeholderStandard('profession', 'Profession')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {visible('autre_numero') && (
                     <Fld label={libelleStandard('autre_numero', 'Autre numéro')}>
-                      <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder={placeholderStandard('autre_numero', 'Autre numéro')} style={inpSt} />
+                      <input value={form.autre_numero} onChange={e => setForm(f => ({ ...f, autre_numero: e.target.value }))} placeholder={placeholderStandard('autre_numero', 'Autre numéro')} className="acq-input" style={inpSt} />
                     </Fld>
                   )}
                   {champsPerso.map(c => (
@@ -1612,7 +1780,7 @@ export function AcquisitionPage() {
                         <select
                           value={valeursPerso[c.cle] || ''}
                           onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
-                          style={inpSt}
+                          className="acq-input" style={inpSt}
                         >
                           <option value="">Sélectionner…</option>
                           {(c.options || []).map(o => <option key={o} value={o}>{o}</option>)}
@@ -1629,11 +1797,12 @@ export function AcquisitionPage() {
                           value={valeursPerso[c.cle] || ''}
                           onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
                           placeholder={c.placeholder || c.label}
-                          style={inpSt}
+                          className="acq-input" style={inpSt}
                         />
                       )}
                     </Fld>
                   ))}
+                  </div>
                   <div style={{ height: 5, background: '#EDF1F8', borderRadius: 99, overflow: 'hidden' }}>
                     <div style={{ height: '100%', background: 'linear-gradient(90deg,#003087,#0057A8)', borderRadius: 99, width: `${pct()}%`, transition: 'width .3s' }} />
                   </div>
@@ -1911,9 +2080,9 @@ function StepHeader({ num, title, sub, gold }: { num: string; title: string; sub
   );
 }
 
-function Fld({ label, req, hint, children }: { label: string; req?: boolean; hint?: string; children: React.ReactNode }) {
+function Fld({ label, req, hint, full, children }: { label: string; req?: boolean; hint?: string; full?: boolean; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div className={full ? 'acq-field-full' : undefined} style={{ marginBottom: 14 }}>
       <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 7, letterSpacing: .7, textTransform: 'uppercase' }}>
         {label}{req && <span style={{ color: '#FFCC00', marginLeft: 2 }}>*</span>}
       </label>

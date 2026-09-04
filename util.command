@@ -23,12 +23,12 @@ yarn migrate:force --name=20260815_add_unknown_referentiel_gsm
 curl -X POST -H "Authorization: Bearer $TOKEN" "http://localhost:3001/api/admin/unknown-referentiels/123/ignore"
 
 
-
+/home/kyc/kyc-modern/switch.sh benin-prod
 
 export DB_HOST=127.0.0.1
 export DB_PORT=3306
 export DB_USER=kyc_user
-export DB_PASS='Genereux@55'
+export DB_PASS='
 export DB_NAME=kyc_prod
 export FORCE_MIGRATIONS_CONFIRM=1
 yarn migrate:force --name=20260814_add_dispo_seq

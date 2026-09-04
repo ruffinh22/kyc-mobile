@@ -28,20 +28,6 @@ import { validatePhoneNumber, getPhoneRule } from '../config/CountryPhoneRules';
 import { C, R, T } from '../theme/tokens'; // Design tokens
 import { AppHeader } from '../components/AppHeader';
 
-// Type local pour les champs dynamiques retournés par le serveur
-interface ChampDossier {
-  id: number;
-  cle: string;
-  label: string;
-  type: 'texte' | 'nombre' | 'date' | 'liste' | 'case';
-  options: string[] | null;
-  obligatoire: boolean;
-  actif: boolean;
-  standard: boolean;
-  ordre: number;
-  placeholder: string | null;
-}
-
 interface Photo { uri: string; type: 'recto' | 'verso'; }
 
 // ── Étapes formulaire ──────────────────────────────────────────────────────
@@ -662,52 +648,6 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
     return () => { cancelled = true; };
   }, [signatureInteracting, signatureData]);
 
-  // ── Champs dynamiques (fetch depuis /api/public/champs-dossier) ───────
-  const [champsActifs, setChampsActifs] = useState<ChampDossier[]>([]);
-  const [champsConfigCharge, setChampsConfigCharge] = useState(false);
-  const [valeursPerso, setValeursPerso] = useState<Record<string, any>>({});
-  const [dynamicOptionPicker, setDynamicOptionPicker] = useState<{ cle: string; label: string; options: { label: string; value: string }[] } | null>(null);
-
-  const snakeToCamel = (s: string) => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-
-  useEffect(() => {
-    if (!agent?.serverUrl) return;
-    let cancelled = false;
-    const base = normalizeServerBase(agent.serverUrl);
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 8000);
-    (async () => {
-      try {
-        const res = await fetch(`${base}/api/public/champs-dossier`, { signal: controller.signal });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        if (!cancelled) setChampsActifs(data.champs || []);
-      } catch (e) {
-        // fallback: empty list but mark as loaded
-        if (!cancelled) setChampsActifs([]);
-      } finally {
-        clearTimeout(tid);
-        if (!cancelled) setChampsConfigCharge(true);
-      }
-    })();
-    return () => { cancelled = true; controller.abort(); clearTimeout(tid); };
-  }, [agent?.serverUrl]);
-
-  const champsMap = useMemo(() => {
-    const m: Record<string, { obligatoire: boolean; label: string; placeholder: string | null }> = {};
-    for (const c of champsActifs) if (c.standard) m[c.cle] = { obligatoire: c.obligatoire, label: c.label, placeholder: c.placeholder ?? null };
-    return m;
-  }, [champsActifs]);
-
-  const visible = (cle: string) => !champsConfigCharge || !!champsMap[cle];
-  const requis = (cle: string, fallback: boolean) => champsMap[cle] ? champsMap[cle].obligatoire : fallback;
-  const libelleStandard = (cle: string, fallback: string) => champsMap[cle]?.label ?? fallback;
-  // Même logique que côté web : le placeholder configuré par l'admin prime,
-  // sinon on retombe sur le placeholder codé en dur existant.
-  const placeholderStandard = (cle: string, fallback: string) => champsMap[cle]?.placeholder || fallback;
-
-  const setValeurPerso = (cle: string, value: any) => setValeursPerso(prev => ({ ...prev, [cle]: value }));
-
   const handleSubmit = async () => {
     const err = validate();
     if (err) { setError(err); shake(); return; }
@@ -747,12 +687,6 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
       fd.append('sexe', idInfo.sexe.trim());
       fd.append('nationalite', idInfo.nationalite.trim());
       fd.append('profession', idInfo.profession.trim());
-      // Valeurs des champs dynamiques custom
-      if (Object.keys(valeursPerso).length) {
-        try {
-          fd.append('champs_personnalises', JSON.stringify(valeursPerso));
-        } catch (e) { /* ignore */ }
-      }
       // Audit anti-fraude : liste des champs OCR corrigés manuellement par l'agent
       const overriddenFields = OCR_LOCKED_FIELDS.filter(k => manualOverride[k]);
       if (overriddenFields.length) fd.append('ocr_overrides', overriddenFields.join(','));
@@ -1373,19 +1307,25 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
                 n'affiche que le spinner ci-dessus, pas un formulaire vide. */}
             {(ocrStatus === 'success' || ocrStatus === 'failed') && (
               <>
-                {visible('nom_titulaire') && renderVerifiableField('nomTitulaire', libelleStandard('nom_titulaire', 'Nom'), placeholderStandard('nom_titulaire', "Nom tel qu'il figure sur la CNI"), { autoCapitalize: 'characters' })}
-                {visible('prenom_titulaire') && renderVerifiableField('prenomTitulaire', libelleStandard('prenom_titulaire', 'Prénom(s)'), placeholderStandard('prenom_titulaire', 'Prénom(s)'), { autoCapitalize: 'words' })}
+                {renderVerifiableField('nomTitulaire', 'Nom', "Nom tel qu'il figure sur la CNI", { autoCapitalize: 'characters' })}
+                {renderVerifiableField('prenomTitulaire', 'Prénom(s)', 'Prénom(s)', { autoCapitalize: 'words' })}
 
+                {/* Naissance, numéro de pièce et expiration : exigés pour une
+                    pièce officielle (format d'État structuré), simplement
+                    proposés (et non bloquants) pour une carte scolaire ou un
+                    justificatif "autre" — voir DOCUMENT_TYPES/isOfficialDoc. */}
                 <View style={{ flexDirection: 'row', gap: 12 }}>
-                  <View style={{ flex: 1 }}>{visible('date_naissance') && renderDateField('dateNaissance', libelleStandard('date_naissance', 'Date de naissance'), isOfficialDoc(typePiece))}</View>
-                  <View style={{ flex: 1 }}>{visible('lieu_naissance') && renderVerifiableField('lieuNaissance', libelleStandard('lieu_naissance', `Lieu de naissance${isOfficialDoc(typePiece) ? '' : ' (si connu)'}`), placeholderStandard('lieu_naissance', 'Ville'), {}, isOfficialDoc(typePiece))}</View>
+                  <View style={{ flex: 1 }}>{renderDateField('dateNaissance', 'Date de naissance', isOfficialDoc(typePiece))}</View>
+                  <View style={{ flex: 1 }}>{renderVerifiableField('lieuNaissance', `Lieu de naissance${isOfficialDoc(typePiece) ? '' : ' (si connu)'}`, 'Ville', {}, isOfficialDoc(typePiece))}</View>
                 </View>
 
-                {visible('numero_cni') && renderVerifiableField('numeroCni', libelleStandard('numero_cni', `Numéro de pièce${isOfficialDoc(typePiece) ? '' : ' (si disponible)'}`), placeholderStandard('numero_cni', "Numéro de pièce d’identité"), {}, isOfficialDoc(typePiece))}
-                {isOfficialDoc(typePiece) && visible('date_expiration') && renderDateField('dateExpiration', libelleStandard('date_expiration', "Date d'expiration"))}
+                {renderVerifiableField('numeroCni', `Numéro de pièce${isOfficialDoc(typePiece) ? '' : ' (si disponible)'}`, 'Numéro de pièce d’identité', {}, isOfficialDoc(typePiece))}
+                {isOfficialDoc(typePiece) && renderDateField('dateExpiration', "Date d'expiration")}
                 <View style={{ flexDirection: 'row', gap: 12 }}>
-                  <View style={{ flex: 1 }}>{visible('sexe') && renderSelectField('sexe', libelleStandard('sexe', 'Sexe'), SEXE_OPTIONS)}</View>
-                  <View style={{ flex: 1 }}>{visible('nationalite') && renderNationalityField(isOfficialDoc(typePiece))}</View>
+                  <View style={{ flex: 1 }}>{renderSelectField('sexe', 'Sexe', SEXE_OPTIONS)}</View>
+                  {/* Nationalité : lue automatiquement sur une pièce
+                      officielle, saisie manuelle sinon (voir ocr.ts). */}
+                  <View style={{ flex: 1 }}>{renderNationalityField(isOfficialDoc(typePiece))}</View>
                 </View>
               </>
             )}
@@ -1404,99 +1344,59 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
               <View style={s.requiredPill}><Text style={s.requiredPillTxt}>Obligatoire</Text></View>
             </View>
 
-            {visible('nom_pere') && (
             <View style={s.field}>
-              <Text style={s.fieldLabel}>{libelleStandard('nom_pere', 'Nom du père')} {requis('nom_pere', true) && <Text style={s.req}>*</Text>}</Text>
+              <Text style={s.fieldLabel}>Nom du père <Text style={s.req}>*</Text></Text>
               <TextInput
                 style={s.input}
                 value={idInfo.nomPere}
                 onChangeText={(v) => setIdField('nomPere', v)}
-                placeholder={placeholderStandard('nom_pere', 'Nom complet du père')}
+                placeholder="Nom complet du père"
                 placeholderTextColor={C.ink3}
                 autoCapitalize="words"
                 editable={!loading}
               />
             </View>
-            )}
 
-            {visible('nom_mere') && (
             <View style={s.field}>
-              <Text style={s.fieldLabel}>{libelleStandard('nom_mere', 'Nom de la mère')} {requis('nom_mere', true) && <Text style={s.req}>*</Text>}</Text>
+              <Text style={s.fieldLabel}>Nom de la mère <Text style={s.req}>*</Text></Text>
               <TextInput
                 style={s.input}
                 value={idInfo.nomMere}
                 onChangeText={(v) => setIdField('nomMere', v)}
-                placeholder={placeholderStandard('nom_mere', 'Nom complet de la mère')}
+                placeholder="Nom complet de la mère"
                 placeholderTextColor={C.ink3}
                 autoCapitalize="words"
                 editable={!loading}
               />
             </View>
-            )}
 
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              {visible('autre_numero') && (
               <View style={[s.field, { flex: 1 }]}>
-                <Text style={s.fieldLabel}>{libelleStandard('autre_numero', 'Autres contact')} {requis('autre_numero', true) && <Text style={s.req}>*</Text>}</Text>
+                <Text style={s.fieldLabel}>Autres contact <Text style={s.req}>*</Text></Text>
                 <TextInput
                   style={s.input}
                   value={idInfo.autreNumero}
                   onChangeText={(v) => setIdField('autreNumero', v.replace(/\D/g, ''))}
-                  placeholder={placeholderStandard('autre_numero', 'Numéro secondaire')}
+                  placeholder="Numéro secondaire"
                   placeholderTextColor={C.ink3}
                   keyboardType="numeric"
                   editable={!loading}
                 />
               </View>
-              )}
 
-              {visible('profession') && (
               <View style={[s.field, { flex: 1 }]}>
-                <Text style={s.fieldLabel}>{libelleStandard('profession', 'Profession')} {requis('profession', true) && <Text style={s.req}>*</Text>}</Text>
+                <Text style={s.fieldLabel}>Profession <Text style={s.req}>*</Text></Text>
                 <TextInput
                   style={s.input}
                   value={idInfo.profession}
                   onChangeText={(v) => setIdField('profession', v)}
-                  placeholder={placeholderStandard('profession', 'Profession')}
+                  placeholder="Profession"
                   placeholderTextColor={C.ink3}
                   autoCapitalize="words"
                   editable={!loading}
                 />
               </View>
-              )}
             </View>
-
-            {/* Champs personnalisés créés par l'admin (rendus dynamiquement) */}
-            {champsActifs.filter(c => !c.standard).map(c => (
-              c.actif ? (
-                <View key={c.cle} style={s.field}>
-                  <Text style={s.fieldLabel}>{c.label} {c.obligatoire && <Text style={s.req}>*</Text>}</Text>
-                  {c.type === 'texte' && (
-                    <TextInput style={s.input} value={String(valeursPerso[c.cle] ?? '')} onChangeText={v => setValeurPerso(c.cle, v)} placeholder={c.placeholder ?? undefined} placeholderTextColor={C.ink3} editable={!loading} />
-                  )}
-                  {c.type === 'nombre' && (
-                    <TextInput style={s.input} value={String(valeursPerso[c.cle] ?? '')} onChangeText={v => setValeurPerso(c.cle, v.replace(/[^0-9.,-]/g, ''))} placeholder={c.placeholder ?? undefined} placeholderTextColor={C.ink3} keyboardType="numeric" editable={!loading} />
-                  )}
-                  {c.type === 'date' && (
-                    <TouchableOpacity style={[s.input, s.selectInput]} onPress={() => {/* could open date picker and setValeurPerso */}}>
-                      <Text style={[s.selectInputText, !valeursPerso[c.cle] && s.selectInputPlaceholder]}>{valeursPerso[c.cle] || c.placeholder || 'Sélectionner'}</Text>
-                    </TouchableOpacity>
-                  )}
-                  {c.type === 'liste' && (
-                    <TouchableOpacity style={[s.input, s.selectInput, s.selectInputRow]} onPress={() => setDynamicOptionPicker({ cle: c.cle, label: c.label, options: (c.options||[]).map(o => ({ label: o, value: o })) })}>
-                      <Text style={[s.selectInputText, !valeursPerso[c.cle] && s.selectInputPlaceholder]}>{(c.options||[]).find(o => o === valeursPerso[c.cle]) || 'Sélectionner'}</Text>
-                      <Text style={s.selectInputIcon}>▾</Text>
-                    </TouchableOpacity>
-                  )}
-                  {c.type === 'case' && (
-                    <TouchableOpacity style={[s.checkboxRow]} onPress={() => setValeurPerso(c.cle, !valeursPerso[c.cle])}>
-                      <Text style={s.checkbox}>{valeursPerso[c.cle] ? '☑' : '☐'}</Text>
-                      <Text style={s.checkboxLabel}>{c.label}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              ) : null
-            ))}
 
             <View style={s.field}>
               <Text style={s.fieldLabel}>Adresse complète {isOfficialDoc(typePiece) && <Text style={s.req}>*</Text>}</Text>
@@ -1504,7 +1404,7 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
                 style={[s.input, { minHeight: 84, textAlignVertical: 'top' }]}
                 value={idInfo.adresseComplete}
                 onChangeText={(v) => setIdField('adresseComplete', v)}
-                placeholder={placeholderStandard('adresse_complete', isOfficialDoc(typePiece) ? 'Adresse complète du titulaire' : 'Adresse complète du titulaire (si connue)')}
+                placeholder={isOfficialDoc(typePiece) ? 'Adresse complète du titulaire' : 'Adresse complète du titulaire (si connue)'}
                 placeholderTextColor={C.ink3}
                 multiline
                 editable={!loading}
@@ -1739,46 +1639,6 @@ export function AcquisitionScreenPro({ navigation }: AcquisitionScreenProProps) 
         </View>
       </Modal>
 
-      {/* Modal pour options dynamiques des champs personnalisés */}
-      <Modal
-        visible={!!dynamicOptionPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDynamicOptionPicker(null)}
-      >
-        <View style={s.modalBackdrop}>
-          <View style={s.modalCard}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>{dynamicOptionPicker?.label || 'Sélectionner'}</Text>
-              <TouchableOpacity style={s.closeBtnModal} onPress={() => setDynamicOptionPicker(null)}>
-                <Text style={s.closeBtnText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={dynamicOptionPicker?.options || []}
-              keyExtractor={(item) => item.value}
-              style={s.optionList}
-              contentContainerStyle={s.optionListContent}
-              renderItem={({ item }) => {
-                const active = dynamicOptionPicker ? valeursPerso[dynamicOptionPicker.cle] === item.value : false;
-                return (
-                  <TouchableOpacity
-                    style={[s.optionItem, active && s.optionItemActive]}
-                    onPress={() => {
-                      if (!dynamicOptionPicker) return;
-                      setValeurPerso(dynamicOptionPicker.cle, item.value);
-                      setDynamicOptionPicker(null);
-                    }}
-                  >
-                    <Text style={[s.optionText, active && s.optionTextActive]}>{item.label}</Text>
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          </View>
-        </View>
-      </Modal>
-
       {/* ── Sélecteur de date natif ─────────────────────────────────────────
           Android : dialogue système, se ferme tout seul, résultat automatique.
           iOS : roue dans une modale, confirmée par le bouton "Valider". ──── */}
@@ -1993,9 +1853,6 @@ const s = StyleSheet.create({
   selectInputText: { color: C.ink, fontSize: T.sm, fontWeight: '600' },
   selectInputPlaceholder: { color: C.ink3 },
   selectInputIcon: { fontSize: T.sm, color: C.ink3, marginLeft: 8 },
-  checkboxRow: { flexDirection: 'row', alignItems: 'center' },
-  checkbox: { fontSize: 18, marginRight: 8 },
-  checkboxLabel: { fontSize: T.sm, color: C.ink },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.58)', justifyContent: 'center', padding: 16 },
   modalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, maxHeight: '70%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },

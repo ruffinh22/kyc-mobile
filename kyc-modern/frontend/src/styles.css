@@ -1005,14 +1005,21 @@ tbody td {
 
 /* ── FORMULAIRES ──────────────────────────────────────────────────────────── */
 .form-grid { display: flex; flex-direction: column; gap: .875rem; }
-.form-row  { display: grid; grid-template-columns: 1fr 1fr; gap: .875rem; }
 
-/* Grilles responsives : s'élargissent sur grands écrans */
-@media (min-width: 1100px) {
-  .form-row { grid-template-columns: repeat(3, 1fr); }
-}
-@media (min-width: 1500px) {
-  .form-row { grid-template-columns: repeat(4, 1fr); }
+/* Grille adaptative : le nombre de colonnes dépend de la largeur RÉELLEMENT
+   disponible (celle du conteneur, pas de la fenêtre). Avant, le nombre de
+   colonnes était fixé par des media queries basées sur la largeur de l'écran,
+   alors que la plupart des lignes de formulaire n'ont que 1 ou 2 champs :
+   résultat, sur grand écran, des lignes à 2 champs s'affichaient dans une
+   grille à 3 ou 4 colonnes, laissant des colonnes vides et des champs
+   disproportionnés — d'où l'aspect étroit/désordonné. `auto-fit` fait en
+   sorte que les colonnes vides se réduisent à zéro : les champs présents se
+   partagent toujours toute la largeur disponible, qu'il y en ait 1, 2 ou 4. */
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: .875rem;
+  align-items: start;
 }
 
 .field {
@@ -1243,16 +1250,18 @@ textarea { resize: vertical; min-height: 80px; }
   border-top: 4px solid var(--mtn-yellow);
 }
 
-/* Modale large : utiliser pour formulaires riches (réattribution, imports) */
+/* Modale large : utiliser pour formulaires riches (réattribution, imports).
+   `min(…, 92vw)` : elle s'élargit sur grand écran au lieu de rester bloquée
+   à 980px, tout en gardant une marge de respiration sur les écrans moyens. */
 .modal.modal-wide {
-  max-width: 980px;
+  max-width: min(1180px, 92vw);
 }
 
 /* Centrer le contenu des grosses modales et donner de l'air */
 .modal.modal-wide .modal-body {
-  max-width: 920px;
+  max-width: 100%;
   margin: 0 auto;
-  padding: 1.25rem 1.5rem;
+  padding: 1.25rem 1.75rem;
 }
 
 /* Champs qui doivent occuper toute la ligne (utiliser className="field full") */

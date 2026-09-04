@@ -1248,6 +1248,26 @@ textarea { resize: vertical; min-height: 80px; }
   max-width: 980px;
 }
 
+/* Centrer le contenu des grosses modales et donner de l'air */
+.modal.modal-wide .modal-body {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem;
+}
+
+/* Champs qui doivent occuper toute la ligne (utiliser className="field full") */
+.field.full { grid-column: 1 / -1; }
+
+/* Utilitaires de span pour les formulaires riches */
+@media (min-width: 1100px) {
+  .field.span-2 { grid-column: span 2; }
+  .field.span-3 { grid-column: span 3; }
+}
+
+/* Améliorer l'aération générale des formulaires dans les grandes modales */
+.modal.modal-wide .form-grid { gap: 1rem; }
+.modal.modal-wide .form-row { gap: 1rem; }
+
 .modal-header {
   padding: 1.25rem 1.5rem 0;
   display: flex;

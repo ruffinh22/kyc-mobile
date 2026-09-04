@@ -658,10 +658,16 @@ body {
 }
 
 /* ── Stats cards ──────────────────────────────────────────────────────────── */
+.stats-row,
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: 1rem;
+}
+
+.stats-row > *,
+.stats-grid > * {
+  min-width: 0;
 }
 
 .stat-card {

@@ -218,7 +218,7 @@ export async function getReferentiels() { return apiFetch<{ success: boolean; re
 // ── Champs dynamiques du dossier (admin) ────────────────────────────────────
 export async function getChampsDossierActifs() { return apiFetch<{ champs: ChampDossier[] }>('/api/champs-dossier/actifs'); }
 export async function getChampsDossierAdmin() { return apiFetch<{ champs: ChampDossier[] }>('/api/admin/champs-dossier'); }
-export async function createChampDossier(data: { label: string; type: ChampType; options?: string[] | null; obligatoire?: boolean; placeholder?: string | null }) {
+export async function createChampDossier(data: { label: string; type: ChampType; options?: string[] | null; obligatoire?: boolean; placeholder?: string | null; nullable?: boolean }) {
   return apiFetch<{ champ: ChampDossier }>('/api/admin/champs-dossier', { method: 'POST', json: data });
 }
 export async function updateChampDossier(id: number, patch: { label?: string; obligatoire?: boolean; actif?: boolean; ordre?: number; options?: string[] | null; placeholder?: string | null }) {

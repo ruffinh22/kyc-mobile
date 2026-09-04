@@ -17,6 +17,7 @@ export type ChampType = 'texte' | 'nombre' | 'date' | 'liste' | 'case';
 
 export interface ChampDossier {
   id: number;
+  nullable?: boolean;
   cle: string;
   label: string;
   type: ChampType;
@@ -74,6 +75,7 @@ export function computeChecksum(cle: string, type: ChampType, sqlType: string): 
 // supposer qu'une migration externe a déjà tourné — évite un déploiement
 // cassé si le fichier de migration historique n'a pas été mis à jour.
 let placeholderColumnEnsured = false;
+let nullableColumnEnsured = false;
 async function ensurePlaceholderColumn(pool: ReturnType<typeof getPool>): Promise<void> {
   if (placeholderColumnEnsured) return;
   const [rows] = await pool.execute<RowDataPacket[]>(
@@ -85,6 +87,19 @@ async function ensurePlaceholderColumn(pool: ReturnType<typeof getPool>): Promis
     await pool.execute(`ALTER TABLE dossier_champs ADD COLUMN placeholder VARCHAR(${MAX_PLACEHOLDER_LEN}) DEFAULT NULL`);
   }
   placeholderColumnEnsured = true;
+}
+
+async function ensureNullableColumn(pool: ReturnType<typeof getPool>): Promise<void> {
+  if (nullableColumnEnsured) return;
+  const [rows] = await pool.execute<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'dossier_champs' AND column_name = 'nullable'`
+  );
+  const exists = ((rows[0] as RowDataPacket)?.n as number) > 0;
+  if (!exists) {
+    await pool.execute(`ALTER TABLE dossier_champs ADD COLUMN nullable TINYINT(1) DEFAULT 1`);
+  }
+  nullableColumnEnsured = true;
 }
 
 async function ensureMigrationLogTable(pool: ReturnType<typeof getPool>): Promise<void> {
@@ -157,6 +172,7 @@ function rowToChamp(r: RowDataPacket): ChampDossier {
     id: r.id, cle: r.cle, label: r.label, type: r.type as ChampType, options,
     obligatoire: !!r.obligatoire, actif: !!r.actif, standard: !!r.standard,
     ordre: r.ordre, placeholder: r.placeholder ?? null, cree_par: r.cree_par ?? null,
+    nullable: r.nullable === undefined ? true : !!r.nullable,
     created_at: r.created_at, updated_at: r.updated_at,
   };
 }
@@ -164,6 +180,7 @@ function rowToChamp(r: RowDataPacket): ChampDossier {
 export async function listChamps(): Promise<ChampDossier[]> {
   const pool = getPool();
   await ensurePlaceholderColumn(pool);
+  await ensureNullableColumn(pool);
   const [rows] = await pool.execute<RowDataPacket[]>(
     'SELECT * FROM dossier_champs ORDER BY ordre ASC, id ASC'
   );
@@ -182,7 +199,7 @@ export async function listActiveCustomColumnKeys(): Promise<string[]> {
 
 export async function createChampCustom(data: {
   label: string; type: ChampType; options?: string[] | null;
-  obligatoire?: boolean; placeholder?: string | null; matricule: string;
+  obligatoire?: boolean; placeholder?: string | null; nullable?: boolean; matricule: string;
 }): Promise<ChampDossier> {
   const label = data.label.trim().slice(0, MAX_LABEL_LEN);
   if (!label) throw new Error('Le libellé du champ est obligatoire');
@@ -194,10 +211,23 @@ export async function createChampCustom(data: {
   const cle = await generateUniqueColumnName(label);
   const pool = getPool();
   await ensurePlaceholderColumn(pool);
+  await ensureNullableColumn(pool);
 
   // 1) Vraie migration : on ajoute réellement la colonne à `dossiers`.
   const sqlType = sqlTypeFor(data.type);
-  const alterSql = `ALTER TABLE dossiers ADD COLUMN \`${cle}\` ${sqlType}`;
+  const isNullable = data.nullable !== false; // default true
+  let alterSql: string;
+  if (isNullable) {
+    // sqlType already contains DEFAULT NULL in current helpers
+    alterSql = `ALTER TABLE dossiers ADD COLUMN \`${cle}\` ${sqlType}`;
+  } else {
+    // create NOT NULL with a safe default depending on type
+    const base = sqlType.replace(/\s+DEFAULT\s+NULL$/i, '');
+    let defaultVal = "''";
+    if (data.type === 'nombre') defaultVal = '0';
+    if (data.type === 'case') defaultVal = '0';
+    alterSql = `ALTER TABLE dossiers ADD COLUMN \`${cle}\` ${base} NOT NULL DEFAULT ${defaultVal}`;
+  }
   await pool.execute(alterSql);
 
   // 2) Métadonnée du champ (label affiché, type, options, ordre, placeholder...).
@@ -213,9 +243,9 @@ export async function createChampCustom(data: {
     : null;
 
   const [res] = await pool.execute<ResultSetHeader>(
-    `INSERT INTO dossier_champs (cle, label, type, options, obligatoire, actif, standard, ordre, placeholder, cree_par, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?)`,
-    [cle, label, data.type, options, data.obligatoire ? 1 : 0, ordre, placeholder, data.matricule, now, now]
+    `INSERT INTO dossier_champs (cle, label, type, options, obligatoire, actif, standard, ordre, placeholder, nullable, cree_par, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?)`,
+    [cle, label, data.type, options, data.obligatoire ? 1 : 0, ordre, placeholder, isNullable ? 1 : 0, data.matricule, now, now]
   );
 
   audit(data.matricule, 'CHAMP_DOSSIER_CREE', `cle=${cle} label=${label} type=${data.type}`);

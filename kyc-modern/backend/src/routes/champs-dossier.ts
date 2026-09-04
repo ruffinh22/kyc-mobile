@@ -35,6 +35,7 @@ export async function champsDossierRoutes(app: any): Promise<void> {
         options: Array.isArray(body.options) ? (body.options as string[]) : null,
         obligatoire: !!body.obligatoire,
         placeholder: typeof body.placeholder === 'string' ? body.placeholder : null,
+        nullable: body.nullable === undefined ? true : !!body.nullable,
         matricule,
       });
       return reply.code(201).send({ champ });

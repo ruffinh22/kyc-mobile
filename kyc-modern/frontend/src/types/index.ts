@@ -35,7 +35,7 @@ export type ChampType = 'texte' | 'nombre' | 'date' | 'liste' | 'case';
 export interface ChampDossier {
   id: number; cle: string; label: string; type: ChampType;
   options: string[] | null; obligatoire: boolean; actif: boolean; standard: boolean;
-  ordre: number; placeholder?: string | null; cree_par: string | null; created_at: number; updated_at: number;
+  ordre: number; placeholder?: string | null; nullable?: boolean; cree_par: string | null; created_at: number; updated_at: number;
 }
 
 export interface DossierReattribution {

@@ -25,6 +25,7 @@ function NouveauChampModal({ onClose, onCreated }: { onClose(): void; onCreated(
   const [type, setType] = useState<ChampType>('texte');
   const [options, setOptions] = useState('');
   const [obligatoire, setObligatoire] = useState(false);
+  const [nullable, setNullable] = useState(true);
   const [placeholder, setPlaceholder] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -40,6 +41,7 @@ function NouveauChampModal({ onClose, onCreated }: { onClose(): void; onCreated(
       const { champ } = await api.createChampDossier({
         label: label.trim(), type, options: type === 'liste' ? opts : null, obligatoire,
         placeholder: placeholderCapable ? (placeholder.trim() || null) : null,
+        nullable,
       });
       onCreated(champ);
       onClose();
@@ -87,6 +89,9 @@ function NouveauChampModal({ onClose, onCreated }: { onClose(): void; onCreated(
           </div>
         </div>
       )}
+      <div className="form-group">
+        <label><input type="checkbox" checked={nullable} onChange={e => setNullable(e.target.checked)} />{' '}Nullable (autorise NULL en base)</label>
+      </div>
       <div className="form-group">
         <label>
           <input type="checkbox" checked={obligatoire} onChange={e => setObligatoire(e.target.checked)} />
@@ -139,6 +144,15 @@ function EditChampModal({ champ, onClose, onUpdated }: { champ: ChampDossier; on
       setBusy(false);
     }
   }
+
+  // Si le champ parent change (ex: on a masqué/démasqué ailleurs), resynchroniser
+  useEffect(() => {
+    setLabel(champ.label);
+    setOptions((champ.options || []).join('\n'));
+    setObligatoire(!!champ.obligatoire);
+    setActif(!!champ.actif);
+    setPlaceholder(champ.placeholder || '');
+  }, [champ]);
 
   return (
     <Modal title={`Éditer le champ — ${champ.cle}`} onClose={onClose} footer={
@@ -240,6 +254,7 @@ export default function AdminChampsDossierPage() {
         {c.placeholder && <div style={{ fontSize: 12, color: '#aab', fontStyle: 'italic' }}>Placeholder : « {c.placeholder} »</div>}
       </td>
       <td>{TYPE_LABELS[c.type]}</td>
+      <td style={{ textAlign: 'center' }}>{c.nullable ? 'Oui' : 'Non'}</td>
       <td>
         <label className="switch">
           <input type="checkbox" checked={c.obligatoire} disabled={busyId === c.id}
@@ -303,7 +318,7 @@ export default function AdminChampsDossierPage() {
 
       <h3>Champs standards</h3>
       <table className="table">
-        <thead><tr><th>Champ</th><th>Type</th><th>Obligatoire</th><th>Actif</th><th></th></tr></thead>
+        <thead><tr><th>Champ</th><th>Type</th><th>Nullable</th><th>Obligatoire</th><th>Actif</th><th></th></tr></thead>
         <tbody>{standards.map(renderRow)}</tbody>
       </table>
 
@@ -312,7 +327,7 @@ export default function AdminChampsDossierPage() {
         <p style={{ color: '#889' }}>Aucun champ personnalisé pour le moment.</p>
       ) : (
         <table className="table">
-          <thead><tr><th>Champ</th><th>Type</th><th>Obligatoire</th><th>Actif</th><th></th></tr></thead>
+          <thead><tr><th>Champ</th><th>Type</th><th>Nullable</th><th>Obligatoire</th><th>Actif</th><th></th></tr></thead>
           <tbody>{customs.map(renderRow)}</tbody>
         </table>
       )}

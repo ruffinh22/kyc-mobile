@@ -750,7 +750,7 @@ function SignaturePad({ mode, resetKey, onChange }: {
         onPointerUp={end}
         onPointerLeave={end}
       />
-      <button type="button" className="btn btn-ghost btn-sm" onClick={clear} style={{ marginTop: 6 }}>Effacer</button>
+      <button type="button" className="btn btn-cta-danger btn-sm" onClick={clear} style={{ marginTop: 12 }}>Effacer</button>
     </div>
   );
 }
@@ -786,6 +786,7 @@ export function ReattributionModal({ dossier, onClose, onDone }: {
     autre_numero: '', motif: '',
   });
   const [champsActifs, setChampsActifs] = useState<Array<{ id: number; cle: string; label: string; type: string; options: string[] | null; obligatoire: boolean; standard: boolean; placeholder?: string | null }>>([]);
+  const [valeursPerso, setValeursPerso] = useState<Record<string, string>>({});
   const [recto, setRecto] = useState<File | null>(null);
   const [verso, setVerso] = useState<File | null>(null);
   const [signatureMode, setSignatureMode] = useState<SignatureMode>('dessin');
@@ -803,6 +804,7 @@ export function ReattributionModal({ dossier, onClose, onDone }: {
   const champsMap: Record<string, { obligatoire: boolean; label: string; placeholder: string | null }> = {};
   for (const c of champsActifs) if (c.standard) champsMap[c.cle] = { obligatoire: c.obligatoire, label: c.label, placeholder: c.placeholder ?? null };
   const champsConfigCharge = champsActifs.length > 0;
+  const champsPerso = champsActifs.filter(c => !c.standard);
   const visible = (cle: string) => !champsConfigCharge || !!champsMap[cle];
   const requis = (cle: string, fallback: boolean) => champsMap[cle] ? champsMap[cle].obligatoire : fallback;
   const libelleStandard = (cle: string, fallback: string) => champsMap[cle]?.label ?? fallback;
@@ -863,10 +865,20 @@ export function ReattributionModal({ dossier, onClose, onDone }: {
     }
     if (!form.motif.trim()) { setErr('Indiquez le motif de la réattribution'); return; }
 
+    // Validation des champs personnalisés (créés par l'admin)
+    for (const c of champsPerso) {
+      if (c.obligatoire && !(valeursPerso[c.cle] || '').trim()) {
+        setErr(`${c.label} requis`);
+        return;
+      }
+    }
+
     setBusy(true);
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+      // Joindre les valeurs des champs personnalisés
+      Object.entries(valeursPerso).forEach(([k, v]) => fd.append(k, v));
       fd.append('signature_mode', signatureMode);
       fd.append('photo_recto', recto);
       fd.append('photo_verso', verso);
@@ -901,6 +913,42 @@ export function ReattributionModal({ dossier, onClose, onDone }: {
           <CameraCapture label="Photo recto" file={recto} onChange={setRecto} />
           <CameraCapture label="Photo verso" file={verso} onChange={setVerso} />
         </div>
+
+        {/* Champs personnalisés (admin) */}
+        {champsPerso.length > 0 && (
+          <>
+            <hr className="divider" />
+            {champsPerso.map(c => (
+              <div key={c.id} className="field">
+                <label>{c.label}{c.obligatoire && <span className="req">*</span>}</label>
+                {c.type === 'liste' ? (
+                  <select
+                    value={valeursPerso[c.cle] || ''}
+                    onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
+                    className="acq-input"
+                  >
+                    <option value="">Sélectionner…</option>
+                    {(c.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : c.type === 'case' ? (
+                  <input
+                    type="checkbox"
+                    checked={valeursPerso[c.cle] === '1'}
+                    onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.checked ? '1' : '' }))}
+                  />
+                ) : (
+                  <input
+                    type={c.type === 'date' ? 'date' : c.type === 'nombre' ? 'number' : 'text'}
+                    value={valeursPerso[c.cle] || ''}
+                    onChange={e => setValeursPerso(v => ({ ...v, [c.cle]: e.target.value }))}
+                    placeholder={c.placeholder || c.label}
+                    className="acq-input"
+                  />
+                )}
+              </div>
+            ))}
+          </>
+        )}
 
         <hr className="divider" />
         <SectionLabel accent="#94A3B8">Signature du nouveau titulaire</SectionLabel>

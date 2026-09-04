@@ -881,7 +881,7 @@ export function ReattributionModal({ dossier, onClose, onDone }: {
   }
 
   return (
-    <Modal title={`Réattribuer le dossier ${dossier.numero_mtn}`} onClose={onClose} footer={
+    <Modal title={`Réattribuer le dossier ${dossier.numero_mtn}`} onClose={onClose} className="modal-wide" footer={
       <>
         <button className="btn" onClick={onClose} disabled={busy}>Annuler</button>
         <button className="btn btn-cta" onClick={submit} disabled={busy} style={{ minWidth: 180 }}>

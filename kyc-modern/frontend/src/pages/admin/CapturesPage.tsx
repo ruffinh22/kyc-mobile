@@ -22,10 +22,23 @@ function captureUrlWithToken(baseUrl: string): string {
   return `${baseUrl}${separator}token=${encodeURIComponent(token)}`;
 }
 
-// Formate une date de capture, qu'elle arrive en "YYYY-MM-DD" ou en horodatage
-// ISO complet ("YYYY-MM-DDTHH:mm:ss.sssZ") — jamais l'heure "00:00:00" brute à l'écran.
-function formatCaptureDate(raw?: string): string {
-  if (!raw) return '—';
+// Formate une date de capture. Gère :
+// - chaînes ISO / YYYY-MM-DD
+// - timestamps numériques en secondes (10 chiffres) ou millisecondes (13 chiffres)
+// Retourne '—' si absent ou invalide.
+function formatCaptureDate(raw?: string | number): string {
+  if (raw === undefined || raw === null || raw === '') return '—';
+  // Nombre pur (timestamp en secondes ou millisecondes)
+  if (typeof raw === 'number' || /^\d+$/.test(String(raw).trim())) {
+    const s = String(raw).trim();
+    let ms = Number(s);
+    if (isNaN(ms)) return '—';
+    if (s.length === 10) ms = ms * 1000; // secondes -> ms
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) return d.toLocaleDateString('fr-FR');
+    return '—';
+  }
+
   const str = String(raw).trim();
   const dateOnly = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
@@ -73,7 +86,7 @@ export function AdminCapturesPage() {
           const verso = c.verso_url ?? c.photo_verso ?? null;
           const live = c.live_url ?? c.photo_live ?? null;
           const numero_mtn = c.numero_mtn ?? c.numero ?? c.numero_mtn;
-          const dossierId = c.dossier_id ?? c.dossierId ?? c.id ?? undefined;
+          const dossierId = c.dossier_id ?? c.dossierId ?? undefined;
           const dateVal = c.date ?? c.created_at ?? c.date;
           let typeVal = c.type ?? c.type_name ?? undefined;
           if (!typeVal) {
@@ -269,7 +282,6 @@ export function AdminCapturesPage() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID</th>
                     <th>Dossier ID</th>
                     <th>Numéro</th>
                     <th>Type</th>
@@ -283,7 +295,6 @@ export function AdminCapturesPage() {
                 <tbody>
                   {sortedCaptures.map((capture) => (
                     <tr key={capture.id}>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{capture.id}</td>
                       <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{capture.dossier_id || '—'}</td>
                       <td style={{ fontFamily: 'monospace' }}>{capture.numero_mtn || capture.numero || '—'}</td>
                       <td>

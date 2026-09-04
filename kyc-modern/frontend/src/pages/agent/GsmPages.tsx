@@ -1398,7 +1398,7 @@ export function GsmSaisie({ dossierId: propDossierId, defaultValues, onComplete,
           La décision et la saisie GSM #{pendingCapturesId} sont déjà enregistrées — seul l'envoi des captures écran reste à finaliser.
         </Alert>
       )}
-      <div className="card" style={{ maxWidth: 760, border: '1px solid var(--border, #E2E8F0)', borderTop: `3px solid ${MTN_BLUE}`, overflow: 'hidden' }}>
+      <div className="card" style={{ maxWidth: 'min(1100px, 94vw)', border: '1px solid var(--border, #E2E8F0)', borderTop: `3px solid ${MTN_BLUE}`, overflow: 'hidden' }}>
         <form onSubmit={submit} className="form-grid">
           <SectionLabel>Informations obligatoires</SectionLabel>
           <p style={{ margin: '-6px 0 4px', fontSize: 12, color: MTN_MUTED }}>

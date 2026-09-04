@@ -2053,7 +2053,7 @@ textarea { resize: vertical; min-height: 80px; }
 }
 
 .dossier-detail-modal {
-  max-width: 760px;
+  max-width: min(1040px, 92vw);
 }
 
 .photo-grid {

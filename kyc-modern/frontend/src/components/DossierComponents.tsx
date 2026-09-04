@@ -223,7 +223,7 @@ export function DossierDetailModal({ dossier, onClose, actions }: {
     || (dossier.agent_saisie === user?.matricule && ['en_cours', 'accepte', 'rejete'].includes(dossier.statut));
 
   return (
-    <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions} className="dossier-detail-modal" style={{ maxWidth: 760 }}>
+    <Modal title={`Dossier ${dossier.id}`} onClose={onClose} footer={actions} className="dossier-detail-modal">
       <div className="dossier-detail-shell">
         <div className="dossier-detail-header">
           <div className="dossier-detail-summary">

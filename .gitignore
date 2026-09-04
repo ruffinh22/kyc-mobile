@@ -34,6 +34,7 @@ ios/DerivedData/
 java_pid*.hprof
 *.trace
 *.prof
+.yarn/install-state.gz
 
 # Metro and build cache
 .haste_cache/
